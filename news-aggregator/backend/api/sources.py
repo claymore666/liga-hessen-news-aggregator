@@ -129,8 +129,10 @@ async def validate_source(
 async def trigger_fetch(
     source_id: int,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+) -> dict[str, str | int]:
     """Manually trigger a fetch for a source."""
+    from services.scheduler import fetch_source
+
     query = select(Source).where(Source.id == source_id)
     result = await db.execute(query)
     source = result.scalar_one_or_none()
@@ -138,7 +140,20 @@ async def trigger_fetch(
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    # TODO: Trigger async fetch job
-    # await scheduler.trigger_source_fetch(source_id)
+    try:
+        new_count = await fetch_source(source_id)
+        return {"status": "completed", "new_items": new_count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return {"status": "fetch_queued"}
+
+@router.post("/sources/fetch-all")
+async def trigger_fetch_all() -> dict[str, str]:
+    """Manually trigger a fetch for all enabled sources."""
+    from services.scheduler import fetch_all_sources
+
+    try:
+        await fetch_all_sources()
+        return {"status": "completed"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -43,6 +43,9 @@ async def fetch_source(source_id: int) -> int:
     Returns:
         Number of new items fetched.
     """
+    from connectors import ConnectorRegistry
+    from services.pipeline import Pipeline
+
     logger.info(f"Fetching source {source_id}")
 
     async with async_session_maker() as db:
@@ -59,24 +62,32 @@ async def fetch_source(source_id: int) -> int:
             return 0
 
         try:
-            # TODO: Get connector and fetch items
-            # connector_class = ConnectorRegistry.get(source.connector_type)
-            # connector = connector_class()
-            # raw_items = await connector.fetch(source.config)
-            #
-            # # Process through normalization pipeline
-            # new_items = await pipeline.process(raw_items, source)
+            # Get connector and fetch items
+            connector_class = ConnectorRegistry.get(source.connector_type)
+            if connector_class is None:
+                raise ValueError(f"Unknown connector type: {source.connector_type}")
+
+            connector = connector_class()
+            # Build config dict and convert to Pydantic model
+            config_dict = {"url": source.config.get("url", ""), **source.config}
+            config_model = connector_class.config_schema(**config_dict)
+            raw_items = await connector.fetch(config_model)
+
+            logger.info(f"Connector returned {len(raw_items)} raw items from source {source_id}")
+
+            # Process through pipeline
+            pipeline = Pipeline(db)
+            new_items = await pipeline.process(raw_items, source)
 
             source.last_fetch_at = datetime.utcnow()
             source.last_error = None
             await db.commit()
 
-            # Placeholder until connector system is implemented
-            new_count = 0
-            logger.info(f"Fetched {new_count} new items from source {source_id}")
-            return new_count
+            logger.info(f"Fetched {len(new_items)} new items from source {source_id}")
+            return len(new_items)
 
         except Exception as e:
+            logger.error(f"Error fetching source {source_id}: {e}")
             source.last_error = str(e)
             await db.commit()
             raise
