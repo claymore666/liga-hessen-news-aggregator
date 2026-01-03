@@ -21,7 +21,7 @@ RUN mkdir -p /app/data
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV DATABASE_URL=sqlite:///./data/liga_news.db
+ENV DATABASE_URL=sqlite+aiosqlite:///./data/liga_news.db
 
 # Expose port
 EXPOSE 8000
