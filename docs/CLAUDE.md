@@ -2,6 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Branching Workflow
+
+**IMPORTANT**: Always follow this branching strategy:
+
+```
+main (production-ready)
+  └── dev (integration branch)
+        └── milestone/X-name (feature work)
+```
+
+### Workflow Rules
+1. **Never commit directly to `main` or `dev`**
+2. **Always work on a milestone branch** (e.g., `milestone/1-core-backend`)
+3. When milestone work is complete:
+   - Create PR: `milestone/X` → `dev`
+   - Review and merge
+4. When ready for release:
+   - Create PR: `dev` → `main`
+   - Review and merge
+
+### Current Branches
+- `main` - Production branch
+- `dev` - Integration/staging branch
+- `milestone/1-core-backend` - Current work (Core Backend issues #1-5)
+
 ## Projektbeschreibung
 
 Dieses Repository enthält die Dokumentation für das **Daily-Briefing-System** der **Liga der Freien Wohlfahrtspflege Hessen** – ein automatisiertes System zur Erfassung, Filterung und Analyse politischer Nachrichten für den hessischen Wohlfahrtsverband.
