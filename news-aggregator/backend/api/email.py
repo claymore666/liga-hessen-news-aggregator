@@ -59,8 +59,7 @@ async def send_briefing(
     query = (
         select(Item)
         .options(selectinload(Item.source))
-        .where(Item.created_at >= since)
-        .where(Item.is_archived == False)
+        .where(Item.fetched_at >= since)
     )
 
     if not request.include_read:
@@ -77,7 +76,7 @@ async def send_briefing(
     valid_priorities = [p for p, v in priority_values.items() if v >= min_priority_value]
     query = query.where(Item.priority.in_(valid_priorities))
 
-    query = query.order_by(Item.priority_score.desc(), Item.created_at.desc())
+    query = query.order_by(Item.priority_score.desc(), Item.fetched_at.desc())
 
     result = await db.execute(query)
     items = result.scalars().all()
@@ -117,8 +116,7 @@ async def preview_briefing(
     query = (
         select(Item)
         .options(selectinload(Item.source))
-        .where(Item.created_at >= since)
-        .where(Item.is_archived == False)
+        .where(Item.fetched_at >= since)
     )
 
     if not request.include_read:
@@ -135,7 +133,7 @@ async def preview_briefing(
     valid_priorities = [p for p, v in priority_values.items() if v >= min_priority_value]
     query = query.where(Item.priority.in_(valid_priorities))
 
-    query = query.order_by(Item.priority_score.desc(), Item.created_at.desc())
+    query = query.order_by(Item.priority_score.desc(), Item.fetched_at.desc())
 
     result = await db.execute(query)
     items = result.scalars().all()
