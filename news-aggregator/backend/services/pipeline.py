@@ -1,16 +1,21 @@
 """Item normalization and processing pipeline."""
 
+from __future__ import annotations
+
 import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from datetime import datetime, UTC
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Item, Priority, Rule, RuleType, Source
+
+if TYPE_CHECKING:
+    from services.processor import ItemProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +36,15 @@ class RawItem:
 class Pipeline:
     """Processing pipeline for raw items."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, processor: ItemProcessor | None = None):
+        """Initialize pipeline.
+
+        Args:
+            db: Database session
+            processor: Optional LLM processor for summarization and semantic rules
+        """
         self.db = db
+        self.processor = processor
 
     async def process(self, raw_items: list[RawItem], source: Source) -> list[Item]:
         """Process raw items through the pipeline.
@@ -79,7 +91,16 @@ class Pipeline:
             # 4. Apply rules and calculate priority
             await self._apply_rules(item)
 
-            # 5. Add to database
+            # 5. Generate summary if LLM processor available
+            if self.processor:
+                try:
+                    summary = await self.processor.summarize(item)
+                    if summary:
+                        item.summary = summary
+                except Exception as e:
+                    logger.warning(f"Summarization failed for item: {e}")
+
+            # 6. Add to database
             self.db.add(item)
             new_items.append(item)
 
@@ -151,7 +172,13 @@ class Pipeline:
         target_priority = None
 
         for rule in rules:
-            matched = self._match_rule(rule, item)
+            # Check non-semantic rules synchronously
+            if rule.rule_type != RuleType.SEMANTIC:
+                matched = self._match_rule(rule, item)
+            else:
+                # Check semantic rules using LLM
+                matched = await self._match_semantic_rule(rule, item)
+
             if matched:
                 total_boost += rule.priority_boost
                 if rule.target_priority:
@@ -160,9 +187,15 @@ class Pipeline:
                 # Record match (TODO: create ItemRuleMatch)
                 logger.debug(f"Rule '{rule.name}' matched item: {item.title[:50]}")
 
+        # Calculate keyword-based score if processor available
+        keyword_score = 0
+        if self.processor:
+            keyword_score, _ = self.processor.calculate_keyword_score(item)
+            keyword_score = keyword_score - 50  # Convert to boost (base is 50)
+
         # Calculate final priority score (0-100)
         base_score = 50
-        item.priority_score = max(0, min(100, base_score + total_boost))
+        item.priority_score = max(0, min(100, base_score + total_boost + keyword_score))
 
         # Set priority level
         if target_priority:
@@ -189,11 +222,30 @@ class Pipeline:
                 return False
 
         elif rule.rule_type == RuleType.SEMANTIC:
-            # TODO: Implement LLM-based semantic matching
-            # This requires the LLM service to be available
+            # LLM-based semantic matching (handled async separately)
+            # This is checked in _apply_rules_async
             return False
 
         return False
+
+    async def _match_semantic_rule(self, rule: Rule, item: Item) -> bool:
+        """Check if item matches a semantic rule using LLM.
+
+        Args:
+            rule: Semantic rule to check
+            item: Item to match against
+
+        Returns:
+            True if rule matches, False otherwise
+        """
+        if not self.processor:
+            return False
+
+        try:
+            return await self.processor.check_semantic_rule(item, rule)
+        except Exception as e:
+            logger.warning(f"Semantic rule check failed: {e}")
+            return False
 
     def _score_to_priority(self, score: int) -> Priority:
         """Convert numeric score to priority level."""
@@ -208,8 +260,21 @@ class Pipeline:
 
 
 async def process_items(
-    db: AsyncSession, raw_items: list[RawItem], source: Source
+    db: AsyncSession,
+    raw_items: list[RawItem],
+    source: Source,
+    processor: ItemProcessor | None = None,
 ) -> list[Item]:
-    """Convenience function to process items through the pipeline."""
-    pipeline = Pipeline(db)
+    """Convenience function to process items through the pipeline.
+
+    Args:
+        db: Database session
+        raw_items: List of raw items from connector
+        source: Source the items came from
+        processor: Optional LLM processor for summarization and semantic rules
+
+    Returns:
+        List of newly created Item objects
+    """
+    pipeline = Pipeline(db, processor=processor)
     return await pipeline.process(raw_items, source)
