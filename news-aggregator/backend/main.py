@@ -45,10 +45,11 @@ async def health_check() -> dict[str, str]:
 
 
 # Import and include routers
-from api import items, sources, connectors, rules, stats  # noqa: E402
+from api import items, sources, connectors, rules, stats, email  # noqa: E402
 
 app.include_router(items.router, prefix=settings.api_prefix, tags=["items"])
 app.include_router(sources.router, prefix=settings.api_prefix, tags=["sources"])
 app.include_router(connectors.router, prefix=settings.api_prefix, tags=["connectors"])
 app.include_router(rules.router, prefix=settings.api_prefix, tags=["rules"])
 app.include_router(stats.router, prefix=settings.api_prefix, tags=["stats"])
+app.include_router(email.router, prefix=settings.api_prefix, tags=["email"])

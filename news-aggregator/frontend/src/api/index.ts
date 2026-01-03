@@ -47,3 +47,33 @@ export const connectorsApi = {
   validate: (type: string, config: Record<string, unknown>) =>
     api.post(`/connectors/${type}/validate`, config)
 }
+
+export interface SendBriefingRequest {
+  recipients: string[]
+  min_priority: string
+  hours_back: number
+  include_read: boolean
+}
+
+export interface SendBriefingResponse {
+  success: boolean
+  message: string
+  items_count: number
+}
+
+export interface PreviewBriefingResponse {
+  subject: string
+  text_body: string
+  html_body: string
+  items_count: number
+  items_by_priority: Record<string, number>
+}
+
+export const emailApi = {
+  sendBriefing: (data: SendBriefingRequest) =>
+    api.post<SendBriefingResponse>('/email/send-briefing', data),
+  previewBriefing: (data: Omit<SendBriefingRequest, 'recipients'>) =>
+    api.post<PreviewBriefingResponse>('/email/preview-briefing', data),
+  testEmail: (recipient: string) =>
+    api.post<{ success: boolean; message: string }>(`/email/test?recipient=${encodeURIComponent(recipient)}`)
+}
