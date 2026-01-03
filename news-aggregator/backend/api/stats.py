@@ -1,0 +1,117 @@
+"""API endpoints for dashboard statistics."""
+
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import get_db
+from models import Item, Priority, Rule, Source
+from schemas import StatsResponse
+
+router = APIRouter()
+
+
+@router.get("/stats", response_model=StatsResponse)
+async def get_stats(
+    db: AsyncSession = Depends(get_db),
+) -> StatsResponse:
+    """Get dashboard statistics."""
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+
+    # Item counts
+    total_items = await db.scalar(select(func.count(Item.id))) or 0
+    unread_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.is_read == False)  # noqa: E712
+    ) or 0
+    starred_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
+    ) or 0
+    critical_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.CRITICAL)
+    ) or 0
+    high_priority_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.HIGH)
+    ) or 0
+
+    # Source counts
+    sources_count = await db.scalar(select(func.count(Source.id))) or 0
+    enabled_sources = await db.scalar(
+        select(func.count(Source.id)).where(Source.enabled == True)  # noqa: E712
+    ) or 0
+
+    # Rule count
+    rules_count = await db.scalar(select(func.count(Rule.id))) or 0
+
+    # Time-based counts
+    items_today = await db.scalar(
+        select(func.count(Item.id)).where(Item.fetched_at >= today_start)
+    ) or 0
+    items_this_week = await db.scalar(
+        select(func.count(Item.id)).where(Item.fetched_at >= week_start)
+    ) or 0
+
+    return StatsResponse(
+        total_items=total_items,
+        unread_items=unread_items,
+        starred_items=starred_items,
+        critical_items=critical_items,
+        high_priority_items=high_priority_items,
+        sources_count=sources_count,
+        enabled_sources=enabled_sources,
+        rules_count=rules_count,
+        items_today=items_today,
+        items_this_week=items_this_week,
+    )
+
+
+@router.get("/stats/by-source")
+async def get_stats_by_source(
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Get item counts grouped by source."""
+    query = (
+        select(
+            Source.id,
+            Source.name,
+            Source.connector_type,
+            func.count(Item.id).label("item_count"),
+            func.sum(func.cast(Item.is_read == False, int)).label("unread_count"),  # noqa: E712
+        )
+        .outerjoin(Item, Source.id == Item.source_id)
+        .group_by(Source.id)
+        .order_by(Source.name)
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "source_id": row.id,
+            "name": row.name,
+            "connector_type": row.connector_type,
+            "item_count": row.item_count or 0,
+            "unread_count": row.unread_count or 0,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/stats/by-priority")
+async def get_stats_by_priority(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Get item counts grouped by priority."""
+    result = {}
+
+    for priority in Priority:
+        count = await db.scalar(
+            select(func.count(Item.id)).where(Item.priority == priority)
+        ) or 0
+        result[priority.value] = count
+
+    return result

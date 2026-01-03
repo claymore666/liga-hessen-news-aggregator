@@ -34,7 +34,7 @@ This repository contains documentation for building a **News Aggregator** system
 |----------|-------------|
 | **[NewsAggregatorArchitecture.md](NewsAggregatorArchitecture.md)** | Main technical architecture: connectors, data model, API, Vue frontend, LLM integration, deployment |
 | **[FREE_LLMS.md](FREE_LLMS.md)** | LLM provider comparison: OpenRouter, Groq, Mistral, Ollama - free tiers and costs |
-| **[CLAUDE.md](CLAUDE.md)** | Claude Code guidance: project overview, key concepts, file structure |
+| **[../CLAUDE.md](../CLAUDE.md)** | Claude Code guidance: project overview, key concepts, file structure (root level) |
 
 ### Liga Hessen Use Case
 
@@ -110,8 +110,6 @@ This repository contains documentation for building a **News Aggregator** system
 ```
 docs/
 ├── INDEX.md                          # This file
-├── CLAUDE.md                         # Claude Code guidance
-│
 ├── NewsAggregatorArchitecture.md     # Generic system architecture
 ├── FREE_LLMS.md                      # LLM provider comparison
 │
@@ -122,6 +120,8 @@ docs/
 ├── liga_hessen_recherche.md          # Liga research notes
 │
 └── Hessen.md                         # (placeholder)
+
+../CLAUDE.md                          # Claude Code guidance (root level)
 ```
 
 ---
@@ -136,7 +136,13 @@ docs/
 | API Specification | ✅ Defined |
 | Frontend Design | ✅ Defined |
 | Liga Configuration | ✅ Complete |
-| Implementation | ⏳ Not started |
+| **Backend Core** | ✅ Implemented |
+| **Database Layer** | ✅ Implemented |
+| **REST API** | ✅ Implemented |
+| **Pipeline/Scheduler** | ✅ Implemented |
+| **Test Suite** | ✅ Implemented |
+| Connectors | ⏳ In progress |
+| Frontend | ⏳ Not started |
 
 ---
 
