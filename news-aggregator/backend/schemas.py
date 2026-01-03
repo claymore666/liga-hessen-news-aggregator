@@ -71,6 +71,8 @@ class ItemBase(BaseModel):
 class ItemResponse(ItemBase, BaseSchema):
     """Schema for item response."""
 
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: int
     source_id: int
     external_id: str
@@ -81,7 +83,7 @@ class ItemResponse(ItemBase, BaseSchema):
     is_read: bool
     is_starred: bool
     notes: str | None
-    metadata_: dict[str, Any] = Field(alias="metadata")
+    metadata_: dict[str, Any] = Field(default_factory=dict, serialization_alias="metadata")
 
 
 class ItemUpdate(BaseModel):

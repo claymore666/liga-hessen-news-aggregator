@@ -43,6 +43,15 @@ main (production-ready)
 | Database | SQLite |
 | LLM | Ollama (gpu1) + OpenRouter (fallback) |
 
+## Testing Requirements
+
+**IMPORTANT**: Always create tests for each feature.
+
+- Backend: pytest + pytest-asyncio
+- Run tests before committing: `pytest tests/`
+- Test files mirror source structure: `tests/test_<module>.py`
+- Minimum coverage for new features
+
 ## GitHub Repository
 
 https://github.com/claymore666/liga-hessen-news-aggregator

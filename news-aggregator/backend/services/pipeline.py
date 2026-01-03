@@ -91,7 +91,7 @@ class Pipeline:
 
     def _normalize_content(self, raw: RawItem) -> RawItem:
         """Normalize content (strip HTML, fix encoding, etc.)."""
-        # Strip HTML tags
+        # Strip HTML tags from content
         content = re.sub(r"<[^>]+>", "", raw.content)
 
         # Normalize whitespace
@@ -104,8 +104,9 @@ class Pipeline:
         content = content.replace("&quot;", '"')
         content = content.replace("&#39;", "'")
 
-        # Normalize title
-        title = re.sub(r"\s+", " ", raw.title).strip()
+        # Strip HTML tags from title and normalize whitespace
+        title = re.sub(r"<[^>]+>", "", raw.title)
+        title = re.sub(r"\s+", " ", title).strip()
 
         return RawItem(
             external_id=raw.external_id,
