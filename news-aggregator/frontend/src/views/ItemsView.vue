@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { onMounted, ref, watch, computed } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 import { useItemsStore, useSourcesStore } from '@/stores'
 import {
   ArrowPathIcon,
@@ -12,7 +12,9 @@ import PriorityBadge from '@/components/PriorityBadge.vue'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 import type { Priority } from '@/types'
+import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 
+const router = useRouter()
 const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
 
@@ -20,6 +22,66 @@ const showFilters = ref(false)
 const page = ref(0)
 const pageSize = 20
 const selectedItems = ref<number[]>([])
+const focusedIndex = ref(-1)
+
+const focusedItem = computed(() =>
+  focusedIndex.value >= 0 ? itemsStore.items[focusedIndex.value] : null
+)
+
+useKeyboardShortcuts([
+  {
+    key: 'j',
+    description: 'Nächster Eintrag',
+    action: () => {
+      if (focusedIndex.value < itemsStore.items.length - 1) {
+        focusedIndex.value++
+      }
+    }
+  },
+  {
+    key: 'k',
+    description: 'Vorheriger Eintrag',
+    action: () => {
+      if (focusedIndex.value > 0) {
+        focusedIndex.value--
+      } else if (focusedIndex.value === -1 && itemsStore.items.length > 0) {
+        focusedIndex.value = 0
+      }
+    }
+  },
+  {
+    key: 'Enter',
+    description: 'Eintrag öffnen',
+    action: () => {
+      if (focusedItem.value) {
+        router.push(`/items/${focusedItem.value.id}`)
+      }
+    }
+  },
+  {
+    key: 'm',
+    description: 'Als gelesen markieren',
+    action: () => {
+      if (focusedItem.value && !focusedItem.value.is_read) {
+        itemsStore.markAsRead(focusedItem.value.id)
+      }
+    }
+  },
+  {
+    key: 'x',
+    description: 'Auswählen/Abwählen',
+    action: () => {
+      if (focusedItem.value) {
+        const id = focusedItem.value.id
+        if (selectedItems.value.includes(id)) {
+          selectedItems.value = selectedItems.value.filter(i => i !== id)
+        } else {
+          selectedItems.value.push(id)
+        }
+      }
+    }
+  }
+])
 
 const priorities: { value: Priority | null; label: string }[] = [
   { value: null, label: 'Alle Prioritäten' },
@@ -214,10 +276,14 @@ onMounted(async () => {
         </thead>
         <tbody class="divide-y divide-gray-100">
           <tr
-            v-for="item in itemsStore.items"
+            v-for="(item, index) in itemsStore.items"
             :key="item.id"
-            class="hover:bg-gray-50"
-            :class="{ 'bg-gray-50': item.is_read }"
+            class="hover:bg-gray-50 cursor-pointer"
+            :class="{
+              'bg-gray-50': item.is_read,
+              'ring-2 ring-inset ring-liga-500': focusedIndex === index
+            }"
+            @click="focusedIndex = index"
           >
             <td class="px-4 py-3">
               <input
