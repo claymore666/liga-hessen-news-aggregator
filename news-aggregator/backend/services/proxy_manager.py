@@ -35,13 +35,14 @@ class ProxyManager:
 
     # Validation settings
     VALIDATION_TIMEOUT = 2.0  # seconds - strict timeout for fast proxies
+    # Use HTTPS URLs to ensure proxies support CONNECT tunneling
     VALIDATION_URLS = [
-        "http://icanhazip.com",
-        "http://api.ipify.org",
-        "http://checkip.amazonaws.com",
-        "http://ipinfo.io/ip",
+        "https://icanhazip.com",
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://ipinfo.io/ip",
     ]
-    MAX_LATENCY_MS = 500  # Only accept proxies faster than this
+    MAX_LATENCY_MS = 1500  # Accept proxies under 1.5 seconds for HTTPS
     MIN_WORKING_PROXIES = 10  # Minimum pool size to maintain
     MAX_WORKING_PROXIES = 15  # Keep a few extra as buffer
     BATCH_SIZE = 100  # Test this many proxies per batch

@@ -88,6 +88,27 @@ class XScraperConnector(BaseConnector):
             except Exception as e:
                 logger.warning(f"Failed to get proxy: {e}, continuing without proxy")
 
+        # Try with proxy first, fallback to direct if proxy fails
+        try:
+            return await self._fetch_with_browser(config, proxy_server)
+        except Exception as e:
+            if proxy_server:
+                logger.warning(f"Proxy failed: {e}. Retrying without proxy...")
+                return await self._fetch_with_browser(config, None)
+            raise
+
+    async def _fetch_with_browser(
+        self, config: XScraperConfig, proxy_server: str | None
+    ) -> list[RawItem]:
+        """Fetch tweets using Playwright browser.
+
+        Args:
+            config: Scraper configuration
+            proxy_server: Optional proxy server URL
+
+        Returns:
+            List of RawItem objects containing tweets
+        """
         # Random fingerprint
         user_agent = random.choice(self.USER_AGENTS)
         viewport = random.choice(self.VIEWPORTS)
@@ -127,7 +148,7 @@ class XScraperConnector(BaseConnector):
 
                 # Navigate to profile
                 url = f"https://x.com/{config.username}"
-                logger.info(f"Fetching X.com profile: {url}")
+                logger.info(f"Fetching X.com profile: {url}" + (f" via proxy" if proxy_server else ""))
 
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
