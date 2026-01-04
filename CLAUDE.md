@@ -97,10 +97,25 @@ Dieses Repository enthält das **Daily-Briefing-System** der **Liga der Freien W
 
 Das Daily-Briefing-System folgt einer dreistufigen Pipeline:
 
-1. **Datenerfassung**: RSS-Feeds (inkl. Google Alerts), HTML-Scraping, Social Media (Mastodon, Twitter via Nitter, Bluesky), Landtag-PDF-Dokumente
+1. **Datenerfassung**: RSS-Feeds (inkl. Google Alerts), HTML-Scraping, Social Media (Mastodon, X/Twitter via Playwright, Bluesky), Landtag-PDF-Dokumente
 2. **Duplikat-Erkennung**: Dreistufig (GUID → Titel-Ähnlichkeit → Content-Hash)
 3. **Keyword-Filter (Stufe 1)**: Trigger-Kategorien mit Gewichtung (finanz_kritisch=10, struktur=8, reform=6, etc.)
-4. **LLM-Verarbeitung (Stufe 2)**: Multi-Provider-Fallback (OpenRouter → Groq → Mistral)
+4. **LLM-Verarbeitung (Stufe 2)**: Multi-Provider-Fallback (Ollama → OpenRouter)
+
+### Verfügbare Connectors
+
+| Connector | Typ | Beschreibung | Status |
+|-----------|-----|--------------|--------|
+| `rss` | RSS/Atom | Standard-Feeds, Google Alerts | ✅ Stabil |
+| `html` | Web Scraping | CSS-Selektor-basiert | ✅ Stabil |
+| `x_scraper` | Playwright | X.com/Twitter Profile (Stealth-Modus) | ✅ Stabil |
+| `twitter` | Nitter RSS | Via Nitter-Instanzen | ⚠️ Instabil (Instanzen oft down) |
+| `bluesky` | RSS | Native Bluesky-Feeds | ✅ Stabil |
+| `mastodon` | RSS + API | Mastodon-Profile | ✅ Stabil |
+| `pdf` | PyMuPDF | Landtag-Dokumente | ✅ Stabil |
+| `instagram` | Playwright | Instagram-Profile | 🚧 In Entwicklung |
+
+**Hinweis**: Für X/Twitter wird `x_scraper` empfohlen, da Nitter-Instanzen unzuverlässig sind.
 
 ### Hybridansatz: Eigenes System + Google Alerts
 
@@ -119,11 +134,10 @@ Google Alerts werden als RSS-Feeds eingebunden (keine offizielle API).
 
 ### LLM-Provider-Strategie
 
-| Priorität | Anbieter | Modell | Tägliches Limit |
-|-----------|----------|--------|-----------------|
-| Primär | OpenRouter | Llama 3.3 70B | 1.000 Requests |
-| Backup | Groq | Llama 3.1 8B | 14.400 Requests |
-| Fallback | Mistral | Devstral 2 | ~33 Mio. Tokens |
+| Priorität | Anbieter | Modell | Beschreibung |
+|-----------|----------|--------|--------------|
+| Primär | Ollama (lokal) | Qwen3 14B (Q8) | GPU-Server gpu1, unbegrenzt |
+| Fallback | OpenRouter | meta-llama/llama-3.3-70b | Cloud-API, bei Ollama-Ausfall |
 
 ## Wichtige Trigger-Keywords
 
