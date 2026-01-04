@@ -28,6 +28,7 @@ from .bluesky import BlueskyConnector
 from .twitter import TwitterConnector
 from .pdf import PDFConnector
 from .mastodon import MastodonConnector
+from .x_scraper import XScraperConnector
 
 __all__ = [
     # Base classes
@@ -41,4 +42,5 @@ __all__ = [
     "TwitterConnector",
     "PDFConnector",
     "MastodonConnector",
+    "XScraperConnector",
 ]

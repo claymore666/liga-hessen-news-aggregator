@@ -125,6 +125,8 @@ async def cleanup_old_items() -> int:
 
 def start_scheduler() -> None:
     """Start the background scheduler."""
+    from services.proxy_manager import proxy_manager
+
     # Main fetch job
     scheduler.add_job(
         fetch_all_sources,
@@ -142,6 +144,15 @@ def start_scheduler() -> None:
         minute=0,
         id="cleanup_old_items",
         name="Clean up old items",
+        replace_existing=True,
+    )
+
+    # Proxy refresh job (every 30 minutes)
+    scheduler.add_job(
+        proxy_manager.refresh_proxy_list,
+        trigger=IntervalTrigger(minutes=30),
+        id="refresh_proxies",
+        name="Refresh proxy list",
         replace_existing=True,
     )
 

@@ -20,6 +20,7 @@ class ConnectorType(str, Enum):
     MASTODON = "mastodon"
     LINKEDIN = "linkedin"
     PDF = "pdf"
+    X_SCRAPER = "x_scraper"
 
 
 class Priority(str, Enum):
