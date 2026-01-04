@@ -75,7 +75,7 @@ class ProxyManager:
 
         try:
             async with httpx.AsyncClient(
-                proxies={"http://": proxy_url, "https://": proxy_url},
+                proxy=proxy_url,
                 timeout=self.VALIDATION_TIMEOUT,
             ) as client:
                 response = await client.get(self.VALIDATION_URL)
