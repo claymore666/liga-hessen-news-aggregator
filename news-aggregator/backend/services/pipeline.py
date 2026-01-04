@@ -6,7 +6,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -36,6 +36,9 @@ class RawItem:
 class Pipeline:
     """Processing pipeline for raw items."""
 
+    # Maximum age of items to store (days)
+    MAX_AGE_DAYS = 7
+
     def __init__(self, db: AsyncSession, processor: ItemProcessor | None = None):
         """Initialize pipeline.
 
@@ -45,16 +48,19 @@ class Pipeline:
         """
         self.db = db
         self.processor = processor
+        self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], source: Source) -> list[Item]:
         """Process raw items through the pipeline.
 
         Steps:
-        1. Normalize content
-        2. Check for duplicates
-        3. Apply rules
-        4. Calculate priority
-        5. Store in database
+        1. Skip items older than MAX_AGE_DAYS
+        2. Normalize content
+        3. Check for duplicates
+        4. Apply rules
+        5. Skip irrelevant items (no keyword matches)
+        6. Calculate priority
+        7. Store in database
 
         Returns:
             List of newly created items.
@@ -62,10 +68,15 @@ class Pipeline:
         new_items = []
 
         for raw in raw_items:
-            # 1. Normalize content
+            # 1. Skip old items (older than MAX_AGE_DAYS)
+            if raw.published_at.replace(tzinfo=UTC) < self.cutoff_date:
+                logger.debug(f"Skipping old item: {raw.title[:50]} ({raw.published_at})")
+                continue
+
+            # 2. Normalize content
             normalized = self._normalize_content(raw)
 
-            # 2. Check for duplicates
+            # 3. Check for duplicates
             content_hash = self._compute_hash(normalized.content)
             is_duplicate = await self._is_duplicate(
                 source.id, normalized.external_id, content_hash
@@ -88,19 +99,60 @@ class Pipeline:
                 metadata_=normalized.metadata,
             )
 
-            # 4. Apply rules and calculate priority
+            # 4. Apply rules and calculate priority (keyword-based first pass)
             await self._apply_rules(item)
 
-            # 5. Generate summary if LLM processor available
+            # 5. Skip obviously irrelevant items (no keyword matches at all)
+            if item.priority_score <= 50:
+                logger.debug(f"Skipping irrelevant (no keywords): {normalized.title[:50]}")
+                continue
+
+            # 6. LLM-based relevance evaluation and summarization
             if self.processor:
                 try:
-                    summary = await self.processor.summarize(item)
-                    if summary:
-                        item.summary = summary
-                except Exception as e:
-                    logger.warning(f"Summarization failed for item: {e}")
+                    # Get full LLM analysis (relevance + summary + priority suggestion)
+                    analysis = await self.processor.analyze(item)
 
-            # 6. Add to database
+                    # Apply LLM's relevance assessment
+                    relevance_score = analysis.get("relevance_score", 0.5)
+                    if relevance_score < 0.3:
+                        logger.debug(f"Skipping irrelevant (LLM score {relevance_score:.2f}): {normalized.title[:50]}")
+                        continue
+
+                    # Update priority based on LLM suggestion (can upgrade OR downgrade)
+                    llm_priority = analysis.get("priority_suggestion", "medium")
+                    if llm_priority == "critical":
+                        item.priority = Priority.CRITICAL
+                        item.priority_score = max(item.priority_score, 90)
+                    elif llm_priority == "high":
+                        item.priority = Priority.HIGH
+                        item.priority_score = max(item.priority_score, 70)
+                    elif llm_priority == "low":
+                        item.priority = Priority.LOW
+                        item.priority_score = min(item.priority_score, 40)
+                    elif llm_priority == "medium":
+                        item.priority = Priority.MEDIUM
+                        # Keep keyword-based score for medium
+
+                    # Set summary from analysis
+                    if analysis.get("summary"):
+                        item.summary = analysis["summary"]
+
+                    # Store analysis metadata
+                    item.metadata_["llm_analysis"] = {
+                        "relevance_score": relevance_score,
+                        "priority_suggestion": llm_priority,
+                        "assigned_ak": analysis.get("assigned_ak"),
+                        "tags": analysis.get("tags", []),
+                        "reasoning": analysis.get("reasoning"),
+                    }
+
+                    logger.info(f"LLM analysis: {normalized.title[:40]} -> relevance={relevance_score:.2f}, priority={llm_priority}")
+
+                except Exception as e:
+                    logger.warning(f"LLM analysis failed for item: {e}")
+
+            # 7. Add to database
             self.db.add(item)
             new_items.append(item)
 
@@ -248,12 +300,19 @@ class Pipeline:
             return False
 
     def _score_to_priority(self, score: int) -> Priority:
-        """Convert numeric score to priority level."""
+        """Convert numeric score to priority level.
+
+        Base score is 50. Items must have keyword matches to be relevant.
+        - >= 90: CRITICAL (major budget/structural issues)
+        - >= 70: HIGH (legislation, reforms)
+        - > 50: MEDIUM (has some Liga-relevant keywords)
+        - <= 50: LOW (no relevant keyword matches - not Liga-relevant)
+        """
         if score >= 90:
             return Priority.CRITICAL
         elif score >= 70:
             return Priority.HIGH
-        elif score >= 40:
+        elif score > 50:
             return Priority.MEDIUM
         else:
             return Priority.LOW
