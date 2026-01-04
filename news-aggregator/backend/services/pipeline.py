@@ -39,27 +39,35 @@ class Pipeline:
     # Maximum age of items to store (days)
     MAX_AGE_DAYS = 7
 
-    def __init__(self, db: AsyncSession, processor: ItemProcessor | None = None):
+    def __init__(
+        self,
+        db: AsyncSession,
+        processor: ItemProcessor | None = None,
+        training_mode: bool = False,
+    ):
         """Initialize pipeline.
 
         Args:
             db: Database session
             processor: Optional LLM processor for summarization and semantic rules
+            training_mode: If True, disables filtering (age, keyword, LLM relevance)
+                          for training data collection. Only deduplication remains.
         """
         self.db = db
         self.processor = processor
+        self.training_mode = training_mode
         self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], source: Source) -> list[Item]:
         """Process raw items through the pipeline.
 
         Steps:
-        1. Skip items older than MAX_AGE_DAYS
+        1. Skip items older than MAX_AGE_DAYS (disabled in training_mode)
         2. Normalize content
         3. Check for duplicates
         4. Apply rules
-        5. Skip irrelevant items (no keyword matches)
-        6. Calculate priority
+        5. Skip irrelevant items (disabled in training_mode)
+        6. LLM analysis with relevance filter (disabled in training_mode)
         7. Store in database
 
         Returns:
@@ -68,8 +76,8 @@ class Pipeline:
         new_items = []
 
         for raw in raw_items:
-            # 1. Skip old items (older than MAX_AGE_DAYS)
-            if raw.published_at.replace(tzinfo=UTC) < self.cutoff_date:
+            # 1. Skip old items (older than MAX_AGE_DAYS) - disabled in training_mode
+            if not self.training_mode and raw.published_at.replace(tzinfo=UTC) < self.cutoff_date:
                 logger.debug(f"Skipping old item: {raw.title[:50]} ({raw.published_at})")
                 continue
 
@@ -102,18 +110,18 @@ class Pipeline:
             # 4. Apply rules and calculate priority (keyword-based first pass)
             await self._apply_rules(item)
 
-            # 5. Skip obviously irrelevant items (no keyword matches at all)
-            if item.priority_score <= 50:
+            # 5. Skip obviously irrelevant items (no keyword matches) - disabled in training_mode
+            if not self.training_mode and item.priority_score <= 50:
                 logger.debug(f"Skipping irrelevant (no keywords): {normalized.title[:50]}")
                 continue
 
             # 6. LLM-based relevance evaluation and summarization
-            if self.processor:
+            if self.processor and not self.training_mode:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
                     analysis = await self.processor.analyze(item)
 
-                    # Apply LLM's relevance assessment
+                    # Apply LLM's relevance assessment - disabled in training_mode
                     relevance_score = analysis.get("relevance_score", 0.5)
                     if relevance_score < 0.3:
                         logger.debug(f"Skipping irrelevant (LLM score {relevance_score:.2f}): {normalized.title[:50]}")
@@ -323,6 +331,7 @@ async def process_items(
     raw_items: list[RawItem],
     source: Source,
     processor: ItemProcessor | None = None,
+    training_mode: bool = False,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
 
@@ -331,9 +340,10 @@ async def process_items(
         raw_items: List of raw items from connector
         source: Source the items came from
         processor: Optional LLM processor for summarization and semantic rules
+        training_mode: If True, disables filtering for training data collection
 
     Returns:
         List of newly created Item objects
     """
-    pipeline = Pipeline(db, processor=processor)
+    pipeline = Pipeline(db, processor=processor, training_mode=training_mode)
     return await pipeline.process(raw_items, source)

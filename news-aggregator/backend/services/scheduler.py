@@ -16,9 +16,20 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 
-async def fetch_all_sources() -> None:
-    """Fetch items from all enabled sources."""
-    logger.info("Starting scheduled fetch for all sources")
+async def fetch_all_sources(training_mode: bool = False) -> dict:
+    """Fetch items from all enabled sources.
+
+    Args:
+        training_mode: If True, disables filtering for training data collection.
+
+    Returns:
+        Dict with fetch statistics.
+    """
+    mode_str = " (TRAINING MODE)" if training_mode else ""
+    logger.info(f"Starting scheduled fetch for all sources{mode_str}")
+
+    total_items = 0
+    errors = 0
 
     async with async_session_maker() as db:
         query = select(Source).where(Source.enabled == True)  # noqa: E712
@@ -27,18 +38,30 @@ async def fetch_all_sources() -> None:
 
         for source in sources:
             try:
-                await fetch_source(source.id)
+                count = await fetch_source(source.id, training_mode=training_mode)
+                total_items += count
             except Exception as e:
                 logger.error(f"Error fetching source {source.id}: {e}")
                 source.last_error = str(e)
+                errors += 1
 
         await db.commit()
 
-    logger.info(f"Completed fetch for {len(sources)} sources")
+    logger.info(f"Completed fetch for {len(sources)} sources{mode_str}: {total_items} items, {errors} errors")
+    return {
+        "sources_fetched": len(sources),
+        "items_collected": total_items,
+        "errors": errors,
+        "training_mode": training_mode,
+    }
 
 
-async def fetch_source(source_id: int) -> int:
+async def fetch_source(source_id: int, training_mode: bool = False) -> int:
     """Fetch items from a single source.
+
+    Args:
+        source_id: ID of source to fetch
+        training_mode: If True, disables filtering for training data collection
 
     Returns:
         Number of new items fetched.
@@ -47,15 +70,17 @@ async def fetch_source(source_id: int) -> int:
     from services.pipeline import Pipeline
     from services.processor import ItemProcessor, create_processor_from_settings
 
-    logger.info(f"Fetching source {source_id}")
+    mode_str = " (training)" if training_mode else ""
+    logger.info(f"Fetching source {source_id}{mode_str}")
 
-    # Try to create LLM processor (optional, for summarization and semantic rules)
+    # Try to create LLM processor (optional, skip in training mode for speed)
     processor: ItemProcessor | None = None
-    try:
-        processor = await create_processor_from_settings()
-        logger.debug("LLM processor initialized")
-    except Exception as e:
-        logger.warning(f"LLM processor not available: {e}")
+    if not training_mode:
+        try:
+            processor = await create_processor_from_settings()
+            logger.debug("LLM processor initialized")
+        except Exception as e:
+            logger.warning(f"LLM processor not available: {e}")
 
     async with async_session_maker() as db:
         query = select(Source).where(Source.id == source_id)
@@ -85,14 +110,14 @@ async def fetch_source(source_id: int) -> int:
             logger.info(f"Connector returned {len(raw_items)} raw items from source {source_id}")
 
             # Process through pipeline (with optional LLM processor)
-            pipeline = Pipeline(db, processor=processor)
+            pipeline = Pipeline(db, processor=processor, training_mode=training_mode)
             new_items = await pipeline.process(raw_items, source)
 
             source.last_fetch_at = datetime.utcnow()
             source.last_error = None
             await db.commit()
 
-            logger.info(f"Fetched {len(new_items)} new items from source {source_id}")
+            logger.info(f"Fetched {len(new_items)} new items from source {source_id}{mode_str}")
             return len(new_items)
 
         except Exception as e:

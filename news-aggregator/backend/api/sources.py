@@ -187,9 +187,16 @@ async def validate_source(
 @router.post("/sources/{source_id}/fetch")
 async def trigger_fetch(
     source_id: int,
+    training_mode: bool = False,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str | int]:
-    """Manually trigger a fetch for a source."""
+) -> dict[str, str | int | bool]:
+    """Manually trigger a fetch for a source.
+
+    Args:
+        source_id: ID of source to fetch
+        training_mode: If True, disables all filters (age, keyword, LLM relevance)
+                      for training data collection. Only deduplication remains.
+    """
     from services.scheduler import fetch_source
 
     query = select(Source).where(Source.id == source_id)
@@ -200,20 +207,30 @@ async def trigger_fetch(
         raise HTTPException(status_code=404, detail="Source not found")
 
     try:
-        new_count = await fetch_source(source_id)
-        return {"status": "completed", "new_items": new_count}
+        new_count = await fetch_source(source_id, training_mode=training_mode)
+        return {
+            "status": "completed",
+            "new_items": new_count,
+            "training_mode": training_mode,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/sources/fetch-all")
-async def trigger_fetch_all() -> dict[str, str]:
-    """Manually trigger a fetch for all enabled sources."""
+async def trigger_fetch_all(training_mode: bool = False) -> dict:
+    """Manually trigger a fetch for all enabled sources.
+
+    Args:
+        training_mode: If True, disables all filters (age, keyword, LLM relevance)
+                      for training data collection. Only deduplication remains.
+                      Also skips LLM analysis for speed.
+    """
     from services.scheduler import fetch_all_sources
 
     try:
-        await fetch_all_sources()
-        return {"status": "completed"}
+        result = await fetch_all_sources(training_mode=training_mode)
+        return {"status": "completed", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
