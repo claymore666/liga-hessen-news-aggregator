@@ -1,14 +1,22 @@
 """Main FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
 from config import settings
 from database import init_db
 from services.scheduler import start_scheduler, stop_scheduler
+from services.proxy_manager import proxy_manager
 
 
 @asynccontextmanager
@@ -17,8 +25,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup
     await init_db()
     start_scheduler()
+    proxy_manager.start_background_search()
     yield
     # Shutdown
+    proxy_manager.stop_background_search()
     stop_scheduler()
 
 

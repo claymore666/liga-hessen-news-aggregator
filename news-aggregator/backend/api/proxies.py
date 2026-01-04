@@ -18,9 +18,15 @@ class ProxyStatus(BaseModel):
     """Proxy pool status response."""
 
     working_count: int
+    min_required: int
+    max_latency_ms: int
     proxies: list[dict]
     last_refresh: str | None
     current_index: int
+    background_running: bool
+    initial_fill_complete: bool
+    tested_count: int
+    total_available: int
 
 
 class RefreshResponse(BaseModel):
