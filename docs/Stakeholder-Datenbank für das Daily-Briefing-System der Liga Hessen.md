@@ -10,11 +10,11 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 |-------------|---------|------------------------|-----------|-----------|----------|----------|---------|
 | **Liga der Freien Wohlfahrtspflege Hessen** | liga-hessen.de | Tel: 0611/3081434, Presse: Alina Loeb (0611/4504166-21), Janina Adelmann | ❌ | @wohlfahrtspflegehessen | @LigaFreieWohlfahrtspflegeHessen | ✅ Liga Hessen | ❌ |
 | **AWO Bezirksverband Nordhessen** | awo-nordhessen.de | Sigrid Wieder (sigrid.wieder@awo-nordhessen.de), GF: Michael Schmidt | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **AWO Bezirksverband Hessen-Süd** | awo-hs.org | Susanne Magnus (s-magnus@awo-hessensued.de), GF: Thomas Przibilla | ❌ | ❌ | ✅ (erwähnt) | AWO Hessen-Süd | ❌ |
+| **AWO Bezirksverband Hessen-Süd** | awo-hs.org | Susanne Magnus (s-magnus@awo-hessensued.de), GF: Thomas Przibilla | @awohessensued | ❌ | ✅ (erwähnt) | AWO Hessen-Süd | ❌ |
 | **Caritasverband Diözese Fulda** | dicvfulda.caritas.de | Dr. Christian Scharf (Presse), Ann-Katrin Jehn (Social Media) | ❌ | @caritas.bistum.fulda | @Caritas.im.Bistum.Fulda | ❌ | ❌ |
-| **Caritasverband Diözese Limburg** | dicv-limburg.de | Direktor: Jörg Klärner, Dr. Karl Weber | ✅ (erwähnt) | @caritasbezirklimburg | ✅ | ❌ | ✅ |
+| **Caritasverband Diözese Limburg** | dicv-limburg.de | Direktor: Jörg Klärner, Dr. Karl Weber | @DiCV_Limburg | @caritasbezirklimburg | ✅ | ❌ | ✅ |
 | **Caritasverband Diözese Mainz** | caritas-bistum-mainz.de | t.greitens@caritas-mainz.de | ❌ | ✅ (erwähnt) | ✅ (erwähnt) | ❌ | ❌ |
-| **Diakonie Hessen** | diakonie-hessen.de | Arno F. Kehrer (069/7947-6404), Viola Werner (Social Media) | ❌ | @diakoniehessen (2.980 Follower) | ✅ | ✅ | ✅ |
+| **Diakonie Hessen** | diakonie-hessen.de | Arno F. Kehrer (069/7947-6404), Viola Werner (Social Media) | @DiakonieHessen | @diakoniehessen (2.980 Follower) | ✅ | ✅ | ✅ |
 | **DRK Landesverband Hessen** | drk-hessen.de | Gisela Prellwitz (0611-7909 527), LGF: Nils Möller | @DrkHessen | @drklvhessen (3.410 Follower) | ❌ | ❌ | ❌ |
 | **Der Paritätische Hessen** | paritaet-hessen.org | Barbara Helfrich (Pressesprecherin), LGF: Dr. Yasmin Alinaghi | @ParitaetHessen | @paritaethessen (1.892 Follower) | @ParitaetHessen | ❌ | ❌ |
 | **Landesverband Jüdische Gemeinden Hessen** | lvjgh.de | Direktor: Daniel Neumann | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -179,18 +179,18 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 
 | Institution | Website | Führung | Pressekontakt | Social Media |
 |-------------|---------|---------|---------------|--------------|
-| **DGB Hessen-Thüringen** | hessen-thueringen.dgb.de | Michael Rudolph (Vorsitzender) | Lisa Merz (069-273005-52), Anja Peschke | Podcast verfügbar |
-| **VhU** | vhu.de | Präsident: Wolf Matthias Mang, HGF: Dirk Pollert | Patrick Schulze | LinkedIn, Twitter, Facebook |
-| **IHK Frankfurt** | frankfurt-main.ihk.de | Präsident: Ulrich Caspar, HGF: Dr. Clemens Christmann | Patricia C. Borna (069-2197-1201) | LinkedIn |
+| **DGB Hessen-Thüringen** | hessen-thueringen.dgb.de | Michael Rudolph (Vorsitzender) | Lisa Merz (069-273005-52), Anja Peschke | @DGBHeTh, Podcast verfügbar |
+| **VhU** | vhu.de | Präsident: Wolf Matthias Mang, HGF: Dirk Pollert | Patrick Schulze | @vhuhessen, LinkedIn, Facebook |
+| **IHK Frankfurt** | frankfurt-main.ihk.de | Präsident: Ulrich Caspar, HGF: Dr. Clemens Christmann | Patricia C. Borna (069-2197-1201) | @IHK_FFM, LinkedIn |
 
 ### Kirchen
 
 | Institution | Website | Leitung | Pressestelle | Social Media |
 |-------------|---------|---------|--------------|--------------|
-| **EKHN** | ekhn.de | Kirchenpräsidentin: Prof. Dr. Christiane Tietz (seit 02/2025) | Darmstadt | Instagram, Facebook, YouTube, TikTok |
+| **EKHN** | ekhn.de | Kirchenpräsidentin: Prof. Dr. Christiane Tietz (seit 02/2025) | Darmstadt | @ekhn_de, Instagram, Facebook, YouTube, TikTok |
 | **EKKW** | ekkw.de | Bischöfin: Prof. Dr. Beate Hofmann | medio! Medienhaus | über medio! |
 | **Bistum Limburg** | bistumlimburg.de | Bischof: Dr. Georg Bätzing (DBK-Vorsitzender) | Stephan Schnelle | @bistumlimburg, Facebook, Instagram, YouTube |
-| **Bistum Mainz** | bistummainz.de | Bischof: Peter Kohlgraf | Pressestelle | Facebook, YouTube, Instagram |
+| **Bistum Mainz** | bistummainz.de | Bischof: Peter Kohlgraf | Pressestelle | @BistumMainz (pausiert), Facebook, YouTube, Instagram |
 | **Bistum Fulda** | bistum-fulda.de | Bischof: Michael Gerber | 0661/87-355 | - |
 
 ### Menschenrechtsorganisationen
@@ -229,17 +229,17 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 
 ### Behindertenhilfe
 
-| Institution | Website | Vorsitz/GF | Instagram | LinkedIn | Facebook |
-|-------------|---------|------------|-----------|----------|----------|
-| **Landesbehindertenrat Hessen** | lbrhessen.com | Naxina Wienstroer | ❌ | ❌ | ❌ |
-| **Lebenshilfe Landesverband Hessen** | lebenshilfe-hessen.de | - | @lebenshilfehessen | ✅ | ✅ |
-| **Blinden- und Sehbehindertenbund Hessen (BSBH)** | bsbh.org | GF: F. Schneider | ❌ | ✅ | ❌ |
+| Institution | Website | Vorsitz/GF | Twitter/X | Instagram | LinkedIn | Facebook |
+|-------------|---------|------------|-----------|-----------|----------|----------|
+| **Landesbehindertenrat Hessen** | lbrhessen.com | Naxina Wienstroer | ❌ | ❌ | ❌ | ❌ |
+| **Lebenshilfe Landesverband Hessen** | lebenshilfe-hessen.de | - | @LHHessen | @lebenshilfehessen | ✅ | ✅ |
+| **Blinden- und Sehbehindertenbund Hessen (BSBH)** | bsbh.org | GF: F. Schneider | ❌ | ❌ | ✅ | ❌ |
 
 ### Migration/Flucht
 
-| Institution | Website | Kontakt | Facebook |
-|-------------|---------|---------|----------|
-| **Hessischer Flüchtlingsrat** | fr-hessen.de | 069-976 987 10, hfr@fr-hessen.de | @fr.hessen |
+| Institution | Website | Kontakt | Twitter/X | Facebook |
+|-------------|---------|---------|-----------|----------|
+| **Hessischer Flüchtlingsrat** | fr-hessen.de | 069-976 987 10, hfr@fr-hessen.de | @FR_Hessen | @fr.hessen |
 
 ### Kinder/Jugend/Familie
 
