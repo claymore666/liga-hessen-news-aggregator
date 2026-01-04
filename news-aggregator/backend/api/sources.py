@@ -28,6 +28,22 @@ async def list_sources(
     return [SourceResponse.model_validate(source) for source in sources]
 
 
+@router.get("/sources/errors", response_model=list[SourceResponse])
+async def list_sources_with_errors(
+    db: AsyncSession = Depends(get_db),
+) -> list[SourceResponse]:
+    """List all sources that have errors."""
+    query = (
+        select(Source)
+        .where(Source.last_error.isnot(None))
+        .order_by(Source.updated_at.desc())
+    )
+    result = await db.execute(query)
+    sources = result.scalars().all()
+
+    return [SourceResponse.model_validate(source) for source in sources]
+
+
 @router.get("/sources/{source_id}", response_model=SourceResponse)
 async def get_source(
     source_id: int,
@@ -200,3 +216,43 @@ async def trigger_fetch_all() -> dict[str, str]:
         return {"status": "completed"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sources/{source_id}/enable", response_model=SourceResponse)
+async def enable_source(
+    source_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> SourceResponse:
+    """Enable a source."""
+    query = select(Source).where(Source.id == source_id)
+    result = await db.execute(query)
+    source = result.scalar_one_or_none()
+
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    source.enabled = True
+    await db.flush()
+    await db.refresh(source)
+
+    return SourceResponse.model_validate(source)
+
+
+@router.post("/sources/{source_id}/disable", response_model=SourceResponse)
+async def disable_source(
+    source_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> SourceResponse:
+    """Disable a source."""
+    query = select(Source).where(Source.id == source_id)
+    result = await db.execute(query)
+    source = result.scalar_one_or_none()
+
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    source.enabled = False
+    await db.flush()
+    await db.refresh(source)
+
+    return SourceResponse.model_validate(source)

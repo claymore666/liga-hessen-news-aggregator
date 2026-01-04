@@ -1,5 +1,16 @@
 """API routers package."""
 
-from api import connectors, items, rules, sources, stats
+from api import admin, connectors, email, items, llm, proxies, rules, scheduler, sources, stats
 
-__all__ = ["connectors", "items", "rules", "sources", "stats"]
+__all__ = [
+    "admin",
+    "connectors",
+    "email",
+    "items",
+    "llm",
+    "proxies",
+    "rules",
+    "scheduler",
+    "sources",
+    "stats",
+]
