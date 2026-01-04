@@ -21,6 +21,7 @@ class ConnectorType(str, Enum):
     LINKEDIN = "linkedin"
     PDF = "pdf"
     X_SCRAPER = "x_scraper"
+    INSTAGRAM = "instagram"
 
 
 class Priority(str, Enum):
@@ -75,7 +76,7 @@ class Source(Base):
     @staticmethod
     def extract_identifier(connector_type: str, config: dict[str, Any]) -> str | None:
         """Extract the unique identifier from config based on connector type."""
-        if connector_type in ("x_scraper", "twitter"):
+        if connector_type in ("x_scraper", "twitter", "instagram"):
             return config.get("username", "").lower()
         elif connector_type in ("mastodon", "bluesky"):
             return config.get("handle", "").lower()

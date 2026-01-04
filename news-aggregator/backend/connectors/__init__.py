@@ -29,6 +29,7 @@ from .twitter import TwitterConnector
 from .pdf import PDFConnector
 from .mastodon import MastodonConnector
 from .x_scraper import XScraperConnector
+from .instagram import InstagramConnector
 
 __all__ = [
     # Base classes
@@ -43,4 +44,5 @@ __all__ = [
     "PDFConnector",
     "MastodonConnector",
     "XScraperConnector",
+    "InstagramConnector",
 ]

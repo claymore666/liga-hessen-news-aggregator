@@ -10,6 +10,7 @@ import {
   EnvelopeIcon
 } from '@heroicons/vue/24/outline'
 import PriorityBadge from '@/components/PriorityBadge.vue'
+import SourceIcon from '@/components/SourceIcon.vue'
 import { format } from 'date-fns'
 import { de } from 'date-fns/locale'
 
@@ -110,8 +111,9 @@ onMounted(async () => {
 
         <!-- Source Info -->
         <div class="mt-4 rounded-lg bg-gray-50 p-3">
-          <p class="text-sm">
+          <p class="flex items-center gap-2 text-sm">
             <span class="font-medium text-gray-700">Quelle:</span>
+            <SourceIcon v-if="itemsStore.currentItem.source" :connector-type="itemsStore.currentItem.source.connector_type" size="sm" />
             <span class="text-gray-600">
               {{ itemsStore.currentItem.source?.name ?? 'Unbekannt' }}
             </span>

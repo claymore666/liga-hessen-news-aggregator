@@ -10,6 +10,7 @@ import {
   ArrowPathIcon
 } from '@heroicons/vue/24/outline'
 import PriorityBadge from '@/components/PriorityBadge.vue'
+import SourceIcon from '@/components/SourceIcon.vue'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 
@@ -164,7 +165,8 @@ onMounted(async () => {
                 >
                   {{ item.title }}
                 </p>
-                <p class="mt-1 truncate text-xs text-gray-500">
+                <p class="mt-1 flex items-center gap-1 truncate text-xs text-gray-500">
+                  <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
                   {{ item.source?.name ?? 'Unbekannte Quelle' }} &middot;
                   {{ formatTime(item.published_at) }}
                 </p>

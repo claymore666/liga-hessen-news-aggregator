@@ -7,9 +7,12 @@ import {
   PaperAirplaneIcon,
   ExclamationCircleIcon
 } from '@heroicons/vue/24/outline'
-import { emailApi, type PreviewBriefingResponse } from '@/api'
+import { emailApi, llmApi, type PreviewBriefingResponse, type OllamaModel } from '@/api'
 
 const saved = ref(false)
+const loadingModels = ref(false)
+const ollamaAvailable = ref(false)
+const ollamaModels = ref<OllamaModel[]>([])
 
 const settings = ref({
   llm: {
@@ -142,8 +145,24 @@ const sendTestEmail = async () => {
   }
 }
 
+const loadOllamaModels = async () => {
+  loadingModels.value = true
+  try {
+    const response = await llmApi.getModels()
+    ollamaAvailable.value = response.data.available
+    ollamaModels.value = response.data.models
+    settings.value.llm.ollama_url = response.data.base_url
+    settings.value.llm.ollama_model = response.data.current_model
+  } catch (e) {
+    console.error('Failed to load Ollama models:', e)
+    ollamaAvailable.value = false
+  } finally {
+    loadingModels.value = false
+  }
+}
+
 onMounted(() => {
-  // TODO: Load settings from API
+  loadOllamaModels()
 })
 </script>
 
@@ -344,18 +363,38 @@ onMounted(() => {
               type="url"
               class="input mt-1"
               placeholder="http://localhost:11434"
+              disabled
             />
+            <p class="mt-1 text-xs text-gray-500">
+              {{ ollamaAvailable ? '✓ Verbunden' : '✗ Nicht erreichbar' }}
+            </p>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700">
               Modell
             </label>
+            <div v-if="loadingModels" class="mt-1 text-sm text-gray-500">
+              Lade Modelle...
+            </div>
+            <select
+              v-else-if="ollamaModels.length > 0"
+              v-model="settings.llm.ollama_model"
+              class="input mt-1"
+            >
+              <option v-for="model in ollamaModels" :key="model.name" :value="model.name">
+                {{ model.name }}{{ model.is_current ? ' (aktuell)' : '' }}
+              </option>
+            </select>
             <input
+              v-else
               v-model="settings.llm.ollama_model"
               type="text"
               class="input mt-1"
               placeholder="llama3.2"
             />
+            <p v-if="ollamaModels.length > 0" class="mt-1 text-xs text-gray-500">
+              {{ ollamaModels.length }} Modelle verfügbar
+            </p>
           </div>
         </div>
 

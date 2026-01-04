@@ -14,6 +14,7 @@ from connectors import (
     TwitterConnector,
     PDFConnector,
     MastodonConnector,
+    InstagramConnector,
 )
 from connectors.rss import RSSConfig
 from connectors.html import HTMLConfig
@@ -21,6 +22,7 @@ from connectors.bluesky import BlueskyConfig
 from connectors.twitter import TwitterConfig
 from connectors.pdf import PDFConfig
 from connectors.mastodon import MastodonConfig
+from connectors.instagram import InstagramConfig
 
 
 # === Registry Tests ===
@@ -32,7 +34,7 @@ class TestConnectorRegistry:
     def test_list_all_returns_registered_connectors(self):
         """Registry should list all registered connectors."""
         connectors = ConnectorRegistry.list_all()
-        assert len(connectors) >= 6  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon
+        assert len(connectors) >= 7  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon, Instagram
 
         connector_types = [c["type"] for c in connectors]
         assert "rss" in connector_types
@@ -41,6 +43,7 @@ class TestConnectorRegistry:
         assert "twitter" in connector_types
         assert "pdf" in connector_types
         assert "mastodon" in connector_types
+        assert "instagram" in connector_types
 
     def test_get_returns_correct_connector(self):
         """Registry should return correct connector class."""
@@ -197,6 +200,33 @@ class TestMastodonConfig:
             MastodonConfig(handle="user")
 
 
+class TestInstagramConfig:
+    """Tests for Instagram connector configuration."""
+
+    def test_username_normalization(self):
+        """Username should be normalized (@ removed, lowercased)."""
+        config = InstagramConfig(username="@TestUser")
+        assert config.username == "testuser"
+
+    def test_default_values(self):
+        """Default values should be set."""
+        config = InstagramConfig(username="testuser")
+        assert config.include_reels is True
+        assert config.max_posts == 20
+        assert config.proxy_instance == "picuki.com"
+
+    def test_max_posts_bounds(self):
+        """Max posts should be within valid range."""
+        config = InstagramConfig(username="testuser", max_posts=50)
+        assert config.max_posts == 50
+
+        with pytest.raises(ValueError):
+            InstagramConfig(username="testuser", max_posts=0)
+
+        with pytest.raises(ValueError):
+            InstagramConfig(username="testuser", max_posts=100)
+
+
 # === Connector Attribute Tests ===
 
 
@@ -212,6 +242,7 @@ class TestConnectorAttributes:
             (TwitterConnector, "twitter"),
             (PDFConnector, "pdf"),
             (MastodonConnector, "mastodon"),
+            (InstagramConnector, "instagram"),
         ],
     )
     def test_connector_type(self, connector_cls, expected_type):
@@ -220,7 +251,7 @@ class TestConnectorAttributes:
 
     @pytest.mark.parametrize(
         "connector_cls",
-        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector],
+        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector, InstagramConnector],
     )
     def test_connector_has_required_attributes(self, connector_cls):
         """Each connector should have required class attributes."""
@@ -233,7 +264,7 @@ class TestConnectorAttributes:
 
     @pytest.mark.parametrize(
         "connector_cls",
-        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector],
+        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector, InstagramConnector],
     )
     def test_connector_is_subclass(self, connector_cls):
         """Each connector should be a BaseConnector subclass."""
@@ -349,7 +380,7 @@ class TestConnectorSchemaJson:
 
     @pytest.mark.parametrize(
         "connector_cls",
-        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector],
+        [RSSConnector, HTMLConnector, BlueskyConnector, TwitterConnector, PDFConnector, MastodonConnector, InstagramConnector],
     )
     def test_get_config_schema_json(self, connector_cls):
         """Each connector should generate valid JSON schema."""
@@ -359,3 +390,164 @@ class TestConnectorSchemaJson:
         assert "properties" in schema
         assert "type" in schema
         assert schema["type"] == "object"
+
+
+# === Instagram Connector Tests ===
+
+
+class TestInstagramConnectorFetch:
+    """Tests for Instagram connector fetch functionality."""
+
+    @pytest.fixture
+    def picuki_html_content(self):
+        """Sample Picuki profile page HTML."""
+        return """<!DOCTYPE html>
+        <html>
+        <body>
+            <div class="box-photos">
+                <div class="box-photo">
+                    <a href="/media/ABC123xyz">
+                        <img src="https://picuki.com/img/123.jpg" alt="Post image">
+                    </a>
+                    <div class="photo-description">Test Instagram post content</div>
+                    <div class="time">2 hours ago</div>
+                </div>
+                <div class="box-photo">
+                    <a href="/media/DEF456abc">
+                        <img src="https://picuki.com/img/456.jpg" alt="Another post">
+                    </a>
+                    <div class="photo-description">Another test post</div>
+                    <div class="time">1 day ago</div>
+                </div>
+            </div>
+        </body>
+        </html>"""
+
+    @pytest.mark.asyncio
+    async def test_fetch_parses_picuki_page(self, picuki_html_content):
+        """Instagram connector should parse Picuki page correctly."""
+        connector = InstagramConnector()
+        config = InstagramConfig(username="testuser")
+
+        with patch("connectors.instagram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = picuki_html_content
+            mock_response.status_code = 200
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            items = await connector.fetch(config)
+
+        assert len(items) == 2
+        assert items[0].external_id == "ABC123xyz"
+        assert "Test Instagram post" in items[0].content
+        assert items[0].url == "https://www.instagram.com/p/ABC123xyz/"
+        assert items[0].author == "@testuser"
+        assert items[0].metadata["platform"] == "instagram"
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_empty_profile(self):
+        """Instagram connector should handle profile with no posts."""
+        connector = InstagramConnector()
+        config = InstagramConfig(username="emptyuser")
+
+        empty_html = """<!DOCTYPE html><html><body><div class="box-photos"></div></body></html>"""
+
+        with patch("connectors.instagram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = empty_html
+            mock_response.status_code = 200
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            items = await connector.fetch(config)
+
+        assert len(items) == 0
+
+
+class TestInstagramConnectorValidate:
+    """Tests for Instagram connector validation."""
+
+    @pytest.mark.asyncio
+    async def test_validate_valid_profile(self):
+        """Validation should pass for valid profile."""
+        connector = InstagramConnector()
+        config = InstagramConfig(username="testuser")
+
+        profile_html = """<!DOCTYPE html>
+        <html><body>
+            <div class="box-photos">
+                <div class="box-photo"><a href="/media/123"></a></div>
+            </div>
+        </body></html>"""
+
+        with patch("connectors.instagram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = profile_html
+            mock_response.status_code = 200
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            valid, message = await connector.validate(config)
+
+        assert valid is True
+        assert "Found" in message or "posts" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_validate_not_found_profile(self):
+        """Validation should fail for non-existent profile."""
+        connector = InstagramConnector()
+        config = InstagramConfig(username="nonexistent_user_12345")
+
+        not_found_html = """<!DOCTYPE html>
+        <html><body>
+            <p>User not found</p>
+            <p>This page doesn't exist</p>
+        </body></html>"""
+
+        with patch("connectors.instagram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = not_found_html
+            mock_response.status_code = 200
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            valid, message = await connector.validate(config)
+
+        assert valid is False
+        assert "not found" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_validate_private_profile(self):
+        """Validation should fail for private profile."""
+        connector = InstagramConnector()
+        config = InstagramConfig(username="privateuser")
+
+        private_html = """<!DOCTYPE html>
+        <html><body>
+            <p>This account is private</p>
+        </body></html>"""
+
+        with patch("connectors.instagram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = private_html
+            mock_response.status_code = 200
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            valid, message = await connector.validate(config)
+
+        assert valid is False
+        assert "private" in message.lower()

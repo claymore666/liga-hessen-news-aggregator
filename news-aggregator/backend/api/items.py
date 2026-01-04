@@ -26,8 +26,13 @@ async def list_items(
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
+    relevant_only: bool = Query(True, description="Exclude LOW priority items (not Liga-relevant)"),
 ) -> ItemListResponse:
-    """List items with filtering and pagination."""
+    """List items with filtering and pagination.
+
+    By default, only shows relevant items (critical, high, medium priority).
+    Set relevant_only=false to include all items including LOW priority.
+    """
     query = select(Item).options(selectinload(Item.source))
 
     # Apply filters
@@ -35,6 +40,9 @@ async def list_items(
         query = query.where(Item.source_id == source_id)
     if priority is not None:
         query = query.where(Item.priority == priority)
+    elif relevant_only:
+        # Exclude LOW priority items (not Liga-relevant)
+        query = query.where(Item.priority != Priority.LOW)
     if is_read is not None:
         query = query.where(Item.is_read == is_read)
     if is_starred is not None:

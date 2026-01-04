@@ -142,7 +142,7 @@ Antworte mit JSON:
                 prompt,
                 system=SYSTEM_PROMPT,
                 temperature=0.3,
-                max_tokens=500,
+                max_tokens=1000,
             )
             return self._parse_analysis_response(response)
 
@@ -234,23 +234,41 @@ Antworte NUR mit JA oder NEIN."""
 
     def _parse_analysis_response(self, response: LLMResponse) -> dict[str, Any]:
         """Parse LLM analysis response."""
+        text = response.text.strip()
+
+        # Remove markdown code blocks if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove first and last lines (``` markers)
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+
         try:
             # Try direct JSON parse
-            return json.loads(response.text)
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # Try to extract JSON from response
+        # Try to find JSON object in text (handles nested braces)
         try:
-            json_match = re.search(r"\{[^{}]*\}", response.text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-        except (json.JSONDecodeError, AttributeError):
+            start = text.find("{")
+            if start != -1:
+                # Find matching closing brace
+                depth = 0
+                for i, char in enumerate(text[start:], start):
+                    if char == "{":
+                        depth += 1
+                    elif char == "}":
+                        depth -= 1
+                        if depth == 0:
+                            json_str = text[start:i+1]
+                            return json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
             pass
 
         # Fallback to default
-        logger.warning("Could not parse LLM response as JSON")
-        return self._default_analysis(response.text[:500])
+        logger.warning(f"Could not parse LLM response as JSON: {text[:100]}")
+        return self._default_analysis(text[:500])
 
     def _default_analysis(self, summary: str = "") -> dict[str, Any]:
         """Return default analysis when LLM fails."""

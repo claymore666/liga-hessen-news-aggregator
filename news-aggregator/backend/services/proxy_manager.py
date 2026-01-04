@@ -2,17 +2,23 @@
 
 Finds and maintains a pool of fast proxies on startup.
 Only searches when pool drops below minimum threshold.
+Persists known good proxies across restarts with 3-strike removal.
 """
 
 import asyncio
+import json
 import logging
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Persistent storage for known good proxies
+KNOWN_PROXIES_FILE = Path(__file__).parent.parent / "data" / "known_proxies.json"
 
 
 class ProxyManager:
@@ -48,6 +54,11 @@ class ProxyManager:
     BATCH_SIZE = 100  # Test this many proxies per batch
     REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
 
+    # Persistence settings
+    MAX_KNOWN_PROXIES = 50  # Maximum known good proxies to store
+    MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
+    KNOWN_PROXIES_TO_TRY_FIRST = 10  # Try this many from known list first
+
     def __init__(self):
         self.working_proxies: list[dict] = []
         self.current_index: int = 0
@@ -58,6 +69,108 @@ class ProxyManager:
         self._background_task: asyncio.Task | None = None
         self._running = False
         self._initial_fill_complete = False
+        # Known good proxies with failure tracking: {proxy: {latency, failures, last_success}}
+        self._known_proxies: dict[str, dict] = {}
+        self._load_known_proxies()
+
+    def _load_known_proxies(self) -> None:
+        """Load known good proxies from persistent storage."""
+        try:
+            if KNOWN_PROXIES_FILE.exists():
+                with open(KNOWN_PROXIES_FILE, 'r') as f:
+                    data = json.load(f)
+                    self._known_proxies = data.get("proxies", {})
+                    logger.info(f"Loaded {len(self._known_proxies)} known proxies from storage")
+        except Exception as e:
+            logger.warning(f"Failed to load known proxies: {e}")
+            self._known_proxies = {}
+
+    def _save_known_proxies(self) -> None:
+        """Save known good proxies to persistent storage."""
+        try:
+            KNOWN_PROXIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(KNOWN_PROXIES_FILE, 'w') as f:
+                json.dump({
+                    "proxies": self._known_proxies,
+                    "last_updated": datetime.utcnow().isoformat(),
+                }, f, indent=2)
+            logger.debug(f"Saved {len(self._known_proxies)} known proxies to storage")
+        except Exception as e:
+            logger.warning(f"Failed to save known proxies: {e}")
+
+    def _add_known_proxy(self, proxy: str, latency: float) -> None:
+        """Add or update a known good proxy."""
+        self._known_proxies[proxy] = {
+            "latency": round(latency, 2),
+            "failures": 0,
+            "last_success": datetime.utcnow().isoformat(),
+        }
+        # Trim to max size, keeping lowest latency proxies
+        if len(self._known_proxies) > self.MAX_KNOWN_PROXIES:
+            sorted_proxies = sorted(
+                self._known_proxies.items(),
+                key=lambda x: x[1]["latency"]
+            )
+            self._known_proxies = dict(sorted_proxies[:self.MAX_KNOWN_PROXIES])
+        self._save_known_proxies()
+
+    def _record_proxy_failure(self, proxy: str) -> None:
+        """Record a failure for a known proxy. Remove after MAX_FAILURES."""
+        if proxy in self._known_proxies:
+            self._known_proxies[proxy]["failures"] += 1
+            if self._known_proxies[proxy]["failures"] >= self.MAX_FAILURES:
+                del self._known_proxies[proxy]
+                logger.info(f"Removed proxy {proxy} after {self.MAX_FAILURES} failures")
+            self._save_known_proxies()
+
+    def _record_proxy_success(self, proxy: str, latency: float) -> None:
+        """Record a successful use of a proxy, resetting failure count."""
+        if proxy in self._known_proxies:
+            self._known_proxies[proxy]["failures"] = 0
+            self._known_proxies[proxy]["latency"] = round(latency, 2)
+            self._known_proxies[proxy]["last_success"] = datetime.utcnow().isoformat()
+        else:
+            self._add_known_proxy(proxy, latency)
+
+    async def _try_known_proxies_first(self) -> int:
+        """Try known good proxies first before searching for new ones.
+
+        Returns number of working proxies found from known list.
+        """
+        if not self._known_proxies:
+            logger.info("No known proxies to try")
+            return 0
+
+        # Sort by lowest latency and take first N
+        sorted_known = sorted(
+            self._known_proxies.items(),
+            key=lambda x: x[1]["latency"]
+        )[:self.KNOWN_PROXIES_TO_TRY_FIRST]
+
+        if not sorted_known:
+            return 0
+
+        logger.info(f"Trying {len(sorted_known)} known proxies first...")
+        found = 0
+
+        for proxy, info in sorted_known:
+            success, latency = await self.validate_proxy(proxy)
+            if success:
+                self.working_proxies.append({
+                    "proxy": proxy,
+                    "latency": round(latency, 2),
+                    "last_checked": datetime.utcnow().isoformat(),
+                })
+                self._record_proxy_success(proxy, latency)
+                found += 1
+                logger.info(f"✓ Known proxy still works: {proxy} ({latency:.0f}ms)")
+            else:
+                self._record_proxy_failure(proxy)
+                logger.info(f"✗ Known proxy failed: {proxy}")
+
+        self.working_proxies.sort(key=lambda x: x["latency"])
+        logger.info(f"Found {found}/{len(sorted_known)} working proxies from known list")
+        return found
 
     async def fetch_proxy_list(self) -> list[str]:
         """Fetch proxies from all sources in parallel."""
@@ -147,6 +260,8 @@ class ProxyManager:
                     "latency": round(latency, 2),
                     "last_checked": datetime.utcnow().isoformat(),
                 })
+                # Also add to known proxies for persistence
+                self._record_proxy_success(proxy, latency)
                 new_fast += 1
                 logger.info(f"✓ Found fast proxy: {proxy} ({latency:.0f}ms)")
 
@@ -177,13 +292,18 @@ class ProxyManager:
         removed = 0
 
         for proxy_info in self.working_proxies:
-            success, latency = await self.validate_proxy(proxy_info["proxy"])
+            proxy = proxy_info["proxy"]
+            success, latency = await self.validate_proxy(proxy)
             if success:
                 proxy_info["latency"] = round(latency, 2)
                 proxy_info["last_checked"] = datetime.utcnow().isoformat()
                 still_working.append(proxy_info)
+                # Update known proxies with success
+                self._record_proxy_success(proxy, latency)
             else:
-                logger.info(f"✗ Removing dead proxy: {proxy_info['proxy']}")
+                logger.info(f"✗ Removing dead proxy: {proxy}")
+                # Track failure in known proxies (may remove after MAX_FAILURES)
+                self._record_proxy_failure(proxy)
                 removed += 1
 
         self.working_proxies = still_working
@@ -198,10 +318,17 @@ class ProxyManager:
         self._running = True
 
         try:
-            # Phase 1: Initial fill
-            logger.info(f"Phase 1: Finding {self.MIN_WORKING_PROXIES} fast proxies (<{self.MAX_LATENCY_MS}ms)...")
-            self._all_proxies = await self.fetch_proxy_list()
-            await self._fill_pool()
+            # Phase 0: Try known good proxies first
+            if self._known_proxies:
+                logger.info(f"Phase 0: Trying {len(self._known_proxies)} known proxies first...")
+                await self._try_known_proxies_first()
+                logger.info(f"Found {len(self.working_proxies)} working proxies from known list")
+
+            # Phase 1: Fill remaining slots from fresh proxy lists
+            if len(self.working_proxies) < self.MIN_WORKING_PROXIES:
+                logger.info(f"Phase 1: Finding {self.MIN_WORKING_PROXIES - len(self.working_proxies)} more fast proxies (<{self.MAX_LATENCY_MS}ms)...")
+                self._all_proxies = await self.fetch_proxy_list()
+                await self._fill_pool()
 
             self._initial_fill_complete = True
             logger.info(f"✅ Initial fill complete: {len(self.working_proxies)} proxies ready")
@@ -268,6 +395,9 @@ class ProxyManager:
             "initial_fill_complete": self._initial_fill_complete,
             "tested_count": len(self._tested_proxies),
             "total_available": len(self._all_proxies),
+            "known_proxies_count": len(self._known_proxies),
+            "known_proxies_max": self.MAX_KNOWN_PROXIES,
+            "max_failures_before_removal": self.MAX_FAILURES,
         }
 
 

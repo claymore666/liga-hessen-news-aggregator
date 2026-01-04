@@ -55,6 +55,14 @@ class SourceResponse(SourceBase, BaseSchema):
     updated_at: datetime
 
 
+class SourceBrief(BaseSchema):
+    """Minimal source info for embedding in item responses."""
+
+    id: int
+    name: str
+    connector_type: ConnectorType
+
+
 # === Item schemas ===
 
 
@@ -75,6 +83,7 @@ class ItemResponse(ItemBase, BaseSchema):
 
     id: int
     source_id: int
+    source: SourceBrief | None = None
     external_id: str
     summary: str | None
     fetched_at: datetime
@@ -165,6 +174,7 @@ class StatsResponse(BaseModel):
     """Dashboard statistics."""
 
     total_items: int
+    relevant_items: int  # Items with priority != LOW (Liga-relevant)
     unread_items: int
     starred_items: int
     critical_items: int
@@ -174,6 +184,8 @@ class StatsResponse(BaseModel):
     rules_count: int
     items_today: int
     items_this_week: int
+    items_by_priority: dict[str, int]  # For frontend compatibility
+    last_fetch_at: str | None = None
 
 
 # === Validation schemas ===

@@ -159,3 +159,94 @@ Primäre Quellen (siehe Stakeholder-Datenbank):
 ## Sprachhinweise
 
 Die Dokumentation ist durchgehend auf **Deutsch** verfasst. Code-Beispiele und Konfigurationen verwenden deutsche Bezeichner (z.B. `zustaendiger_ak`, `dringlichkeit`).
+
+---
+
+## Docker & Datenbank-Zugriff
+
+### Container-Übersicht
+
+```bash
+# Laufende Container anzeigen
+docker compose ps
+
+# Container:
+# - liga-news-backend  (FastAPI auf Port 8000)
+# - liga-news-frontend (Vue/Nginx auf Port 3000)
+```
+
+### Datenbank-Zugriff (SQLite im Container)
+
+Die Datenbank liegt im Docker-Container. **Nicht** direkt auf dem Host-System.
+
+```bash
+# Python-Code im Backend-Container ausführen
+docker exec liga-news-backend python -c "
+import asyncio
+from database import async_session_maker
+from sqlalchemy import select
+from models import Source, Item, Rule
+
+async def query():
+    async with async_session_maker() as db:
+        # Beispiel: Alle Quellen auflisten
+        sources = (await db.execute(select(Source))).scalars().all()
+        for s in sources:
+            print(f'{s.id}: {s.name} ({s.connector_type})')
+
+asyncio.run(query())
+"
+
+# Interaktive Python-Shell im Container
+docker exec -it liga-news-backend python
+
+# SQLite-Datenbank direkt abfragen
+docker exec liga-news-backend sqlite3 /app/data/news.db "SELECT * FROM sources LIMIT 5;"
+```
+
+### Logs anzeigen
+
+```bash
+# Backend-Logs
+docker logs liga-news-backend -f
+
+# Frontend-Logs
+docker logs liga-news-frontend -f
+```
+
+### Container neu starten (nach Code-Änderungen)
+
+```bash
+cd news-aggregator
+docker compose down
+docker compose up -d --build
+```
+
+### Häufige Datenbankoperationen
+
+```python
+# Im Container ausführen mit: docker exec liga-news-backend python -c "..."
+
+# Regeln auflisten
+from models import Rule
+rules = (await db.execute(select(Rule))).scalars().all()
+
+# Items nach Priorität
+from models import Item, Priority
+critical = (await db.execute(
+    select(Item).where(Item.priority == Priority.CRITICAL)
+)).scalars().all()
+
+# Neue Regel erstellen
+from models import Rule, RuleType, Priority
+rule = Rule(
+    name="Test-Regel",
+    rule_type=RuleType.KEYWORD,
+    pattern="test, beispiel",
+    priority_boost=10,
+    enabled=True,
+    order=99
+)
+db.add(rule)
+await db.commit()
+```

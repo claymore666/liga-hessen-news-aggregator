@@ -9,6 +9,7 @@ import {
   XMarkIcon
 } from '@heroicons/vue/24/outline'
 import PriorityBadge from '@/components/PriorityBadge.vue'
+import SourceIcon from '@/components/SourceIcon.vue'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 import type { Priority } from '@/types'
@@ -306,7 +307,10 @@ onMounted(async () => {
               </RouterLink>
             </td>
             <td class="hidden px-4 py-3 text-sm text-gray-500 lg:table-cell">
-              {{ item.source?.name ?? 'Unbekannt' }}
+              <span class="flex items-center gap-2">
+                <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
+                {{ item.source?.name ?? 'Unbekannt' }}
+              </span>
             </td>
             <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-500 sm:table-cell">
               {{ formatTime(item.published_at) }}

@@ -24,8 +24,15 @@ async def get_stats(
 
     # Item counts
     total_items = await db.scalar(select(func.count(Item.id))) or 0
+    # Relevant items = everything except LOW priority
+    relevant_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority != Priority.LOW)
+    ) or 0
     unread_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.is_read == False)  # noqa: E712
+        select(func.count(Item.id)).where(
+            Item.is_read == False,  # noqa: E712
+            Item.priority != Priority.LOW  # Only count unread relevant items
+        )
     ) or 0
     starred_items = await db.scalar(
         select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
@@ -54,8 +61,22 @@ async def get_stats(
         select(func.count(Item.id)).where(Item.fetched_at >= week_start)
     ) or 0
 
+    # Medium priority count for frontend
+    medium_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)
+    ) or 0
+    low_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.LOW)
+    ) or 0
+
+    # Last fetch time
+    last_fetch = await db.scalar(
+        select(func.max(Source.last_fetch_at)).where(Source.last_fetch_at.isnot(None))
+    )
+
     return StatsResponse(
         total_items=total_items,
+        relevant_items=relevant_items,
         unread_items=unread_items,
         starred_items=starred_items,
         critical_items=critical_items,
@@ -65,6 +86,13 @@ async def get_stats(
         rules_count=rules_count,
         items_today=items_today,
         items_this_week=items_this_week,
+        items_by_priority={
+            "critical": critical_items,
+            "high": high_priority_items,
+            "medium": medium_items,
+            "low": low_items,
+        },
+        last_fetch_at=last_fetch.isoformat() if last_fetch else None,
     )
 
 

@@ -45,8 +45,17 @@ async def fetch_source(source_id: int) -> int:
     """
     from connectors import ConnectorRegistry
     from services.pipeline import Pipeline
+    from services.processor import ItemProcessor, create_processor_from_settings
 
     logger.info(f"Fetching source {source_id}")
+
+    # Try to create LLM processor (optional, for summarization and semantic rules)
+    processor: ItemProcessor | None = None
+    try:
+        processor = await create_processor_from_settings()
+        logger.debug("LLM processor initialized")
+    except Exception as e:
+        logger.warning(f"LLM processor not available: {e}")
 
     async with async_session_maker() as db:
         query = select(Source).where(Source.id == source_id)
@@ -75,8 +84,8 @@ async def fetch_source(source_id: int) -> int:
 
             logger.info(f"Connector returned {len(raw_items)} raw items from source {source_id}")
 
-            # Process through pipeline
-            pipeline = Pipeline(db)
+            # Process through pipeline (with optional LLM processor)
+            pipeline = Pipeline(db, processor=processor)
             new_items = await pipeline.process(raw_items, source)
 
             source.last_fetch_at = datetime.utcnow()

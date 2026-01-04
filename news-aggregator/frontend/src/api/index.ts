@@ -77,3 +77,28 @@ export const emailApi = {
   testEmail: (recipient: string) =>
     api.post<{ success: boolean; message: string }>(`/email/test?recipient=${encodeURIComponent(recipient)}`)
 }
+
+export interface OllamaModel {
+  name: string
+  is_current: boolean
+}
+
+export interface OllamaModelsResponse {
+  available: boolean
+  models: OllamaModel[]
+  current_model: string
+  base_url: string
+}
+
+export interface LLMSettingsResponse {
+  ollama_available: boolean
+  ollama_base_url: string
+  ollama_model: string
+  openrouter_configured: boolean
+  openrouter_model: string
+}
+
+export const llmApi = {
+  getModels: () => api.get<OllamaModelsResponse>('/llm/models'),
+  getSettings: () => api.get<LLMSettingsResponse>('/llm/settings')
+}
