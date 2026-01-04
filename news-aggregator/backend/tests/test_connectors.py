@@ -15,6 +15,7 @@ from connectors import (
     PDFConnector,
     MastodonConnector,
     InstagramConnector,
+    TelegramConnector,
 )
 from connectors.rss import RSSConfig
 from connectors.html import HTMLConfig
@@ -23,6 +24,7 @@ from connectors.twitter import TwitterConfig
 from connectors.pdf import PDFConfig
 from connectors.mastodon import MastodonConfig
 from connectors.instagram import InstagramConfig
+from connectors.telegram import TelegramConfig
 
 
 # === Registry Tests ===
@@ -34,7 +36,7 @@ class TestConnectorRegistry:
     def test_list_all_returns_registered_connectors(self):
         """Registry should list all registered connectors."""
         connectors = ConnectorRegistry.list_all()
-        assert len(connectors) >= 7  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon, Instagram
+        assert len(connectors) >= 8  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon, Instagram, Telegram
 
         connector_types = [c["type"] for c in connectors]
         assert "rss" in connector_types
@@ -44,6 +46,7 @@ class TestConnectorRegistry:
         assert "pdf" in connector_types
         assert "mastodon" in connector_types
         assert "instagram" in connector_types
+        assert "telegram" in connector_types
 
     def test_get_returns_correct_connector(self):
         """Registry should return correct connector class."""
@@ -551,3 +554,211 @@ class TestInstagramConnectorValidate:
 
         assert valid is False
         assert "private" in message.lower()
+
+
+# === Telegram Connector Tests ===
+
+
+class TestTelegramConfig:
+    """Tests for Telegram configuration."""
+
+    def test_config_normalizes_channel(self):
+        """Config should normalize channel name."""
+        config = TelegramConfig(channel="@TestChannel")
+        assert config.channel == "testchannel"
+
+        config = TelegramConfig(channel="TestChannel")
+        assert config.channel == "testchannel"
+
+    def test_config_extracts_from_url(self):
+        """Config should extract channel from URL."""
+        config = TelegramConfig(channel="https://t.me/TestChannel")
+        assert config.channel == "testchannel"
+
+        config = TelegramConfig(channel="t.me/TestChannel/123")
+        assert config.channel == "testchannel"
+
+    def test_config_defaults(self):
+        """Config should have correct defaults."""
+        config = TelegramConfig(channel="test")
+        assert config.max_posts == 20
+        assert config.include_forwards is True
+
+
+class TestTelegramConnectorFetch:
+    """Tests for Telegram connector fetch functionality."""
+
+    @pytest.fixture
+    def telegram_channel_html(self):
+        """Sample Telegram channel page HTML."""
+        return """<!DOCTYPE html>
+        <html>
+        <body>
+            <div class="tgme_channel_info">
+                <div class="tgme_channel_info_header_title">Test Channel</div>
+                <div class="tgme_channel_info_counter">
+                    <span class="counter_value">10K</span> subscribers
+                </div>
+            </div>
+            <div class="tgme_widget_message_wrap">
+                <div class="tgme_widget_message" data-post="testchannel/123">
+                    <div class="tgme_widget_message_owner_name">Test Channel</div>
+                    <div class="tgme_widget_message_text">This is a test message about news.</div>
+                    <a class="tgme_widget_message_date" href="https://t.me/testchannel/123">
+                        <time datetime="2024-01-15T10:30:00+00:00">Jan 15</time>
+                    </a>
+                    <span class="tgme_widget_message_views">1.5K</span>
+                </div>
+            </div>
+            <div class="tgme_widget_message_wrap">
+                <div class="tgme_widget_message" data-post="testchannel/122">
+                    <div class="tgme_widget_message_forwarded_from">
+                        <a href="https://t.me/otherchannel">Other Channel</a>
+                    </div>
+                    <div class="tgme_widget_message_text">Forwarded message content.</div>
+                    <a class="tgme_widget_message_date" href="https://t.me/testchannel/122">
+                        <time datetime="2024-01-14T15:00:00+00:00">Jan 14</time>
+                    </a>
+                </div>
+            </div>
+        </body>
+        </html>"""
+
+    @pytest.mark.asyncio
+    async def test_fetch_parses_channel_page(self, telegram_channel_html):
+        """Telegram connector should parse channel page correctly."""
+        connector = TelegramConnector()
+        config = TelegramConfig(channel="testchannel")
+
+        with patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = telegram_channel_html
+            mock_response.status_code = 200
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            items = await connector.fetch(config)
+
+        assert len(items) == 2
+        assert items[0].external_id == "123"
+        assert "test message" in items[0].content
+        assert items[0].url == "https://t.me/testchannel/123"
+        assert items[0].metadata["platform"] == "telegram"
+        assert items[0].metadata["views"] == "1.5K"
+
+    @pytest.mark.asyncio
+    async def test_fetch_excludes_forwards_when_configured(self, telegram_channel_html):
+        """Telegram connector should exclude forwards when configured."""
+        connector = TelegramConnector()
+        config = TelegramConfig(channel="testchannel", include_forwards=False)
+
+        with patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = telegram_channel_html
+            mock_response.status_code = 200
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            items = await connector.fetch(config)
+
+        # Should only get the non-forwarded message
+        assert len(items) == 1
+        assert items[0].external_id == "123"
+        assert items[0].metadata["is_forwarded"] is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_channel_not_found(self):
+        """Telegram connector should handle non-existent channel."""
+        connector = TelegramConnector()
+        config = TelegramConfig(channel="nonexistent")
+
+        error_html = """<!DOCTYPE html>
+        <html><body>
+            <div class="tgme_page_icon_error"></div>
+            <p>Channel not found</p>
+        </body></html>"""
+
+        with patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = error_html
+            mock_response.status_code = 200
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            items = await connector.fetch(config)
+
+        assert len(items) == 0
+
+
+class TestTelegramConnectorValidate:
+    """Tests for Telegram connector validation."""
+
+    @pytest.mark.asyncio
+    async def test_validate_valid_channel(self):
+        """Validation should pass for valid channel."""
+        connector = TelegramConnector()
+        config = TelegramConfig(channel="testchannel")
+
+        channel_html = """<!DOCTYPE html>
+        <html><body>
+            <div class="tgme_channel_info">
+                <div class="tgme_channel_info_header_title">Test Channel</div>
+                <div class="tgme_channel_info_counter">
+                    <span class="counter_value">10K</span>
+                </div>
+            </div>
+            <div class="tgme_widget_message_wrap">
+                <div class="tgme_widget_message" data-post="testchannel/1">
+                    <div class="tgme_widget_message_text">Test</div>
+                </div>
+            </div>
+        </body></html>"""
+
+        with patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = channel_html
+            mock_response.status_code = 200
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            valid, message = await connector.validate(config)
+
+        assert valid is True
+        assert "Test Channel" in message
+        assert "10K" in message
+
+    @pytest.mark.asyncio
+    async def test_validate_not_found_channel(self):
+        """Validation should fail for non-existent channel."""
+        connector = TelegramConnector()
+        config = TelegramConfig(channel="nonexistent")
+
+        error_html = """<!DOCTYPE html>
+        <html><body>
+            <div class="tgme_page_icon_error"></div>
+        </body></html>"""
+
+        with patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = error_html
+            mock_response.status_code = 200
+
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            valid, message = await connector.validate(config)
+
+        assert valid is False
+        assert "not found" in message.lower() or "private" in message.lower()

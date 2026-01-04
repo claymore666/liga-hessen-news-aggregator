@@ -112,10 +112,14 @@ Das Daily-Briefing-System folgt einer dreistufigen Pipeline:
 | `twitter` | Nitter RSS | Via Nitter-Instanzen | ⚠️ Instabil (Instanzen oft down) |
 | `bluesky` | RSS | Native Bluesky-Feeds | ✅ Stabil |
 | `mastodon` | RSS + API | Mastodon-Profile | ✅ Stabil |
+| `telegram` | Web Scraping | Öffentliche Telegram-Kanäle via t.me/s/ | ✅ Stabil |
 | `pdf` | PyMuPDF | Landtag-Dokumente | ✅ Stabil |
-| `instagram` | Playwright | Instagram-Profile | 🚧 In Entwicklung |
+| `instagram` | Proxy Scraping | Instagram via Picuki/Picnob/Imginn | ⚠️ Instabil (Proxies oft blockiert) |
 
-**Hinweis**: Für X/Twitter wird `x_scraper` empfohlen, da Nitter-Instanzen unzuverlässig sind.
+**Hinweise**:
+- Für X/Twitter wird `x_scraper` empfohlen, da Nitter-Instanzen unzuverlässig sind
+- Telegram funktioniert nur für **öffentliche** Kanäle (keine privaten Gruppen)
+- Instagram-Proxies werden häufig blockiert - Zuverlässigkeit schwankt
 
 ### Hybridansatz: Eigenes System + Google Alerts
 
