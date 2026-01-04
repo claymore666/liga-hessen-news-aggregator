@@ -40,7 +40,7 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 | Ministerium | Website | Minister/in | Staatssekretäre | Twitter/X | Instagram |
 |-------------|---------|-------------|-----------------|-----------|-----------|
 | **HMAIJS (Arbeit, Integration, Jugend, Soziales)** | soziales.hessen.de | **Heike Hofmann (SPD)** | Manuela Strube, Katrin Hechler | @SozialHessen | @sozialhessen |
-| **Ministerium Familie, Gesundheit, Pflege** | familie.hessen.de | **Diana Stolz (CDU)** | Dr. Sonja Optendrenk | über @RegHessen | über @regierunghessen |
+| **Ministerium Familie, Gesundheit, Pflege** | familie.hessen.de | **Diana Stolz (CDU)** | Dr. Sonja Optendrenk | @FamilienHessen | @familienhessen |
 | **Hessisches Finanzministerium** | finanzen.hessen.de | Prof. Dr. R. Alexander Lorz | Dr. Till Kaesbach | @finanzenhessen | @finanzenhessen |
 | **Hessisches Kultusministerium** | kultusministerium.hessen.de | Armin Schwarz | Dr. Manuel Lösel | @SchuleHessen | @schulehessen |
 
@@ -112,7 +112,7 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 
 | Institution | Website | Führung/Ansprechpartner | Twitter/X | Instagram | RSS-Feed |
 |-------------|---------|-------------------------|-----------|-----------|----------|
-| **BAGFW** | bagfw.de | GF: Evelin Schulz, Präsident: Michael Groß (AWO) | ❌ | ❌ | ❌ |
+| **BAGFW** | bagfw.de | GF: Evelin Schulz, Präsident: Michael Groß (AWO) | @bagfw | ❌ | ❌ |
 | **BMAS** | bmas.de | Ministerin: Bärbel Bas (SPD) | @bmas_bund | @bmas_bund | bmas.de/Service/Newsletter/RSS/rss.html |
 | **BMBFSFJ** | bmbfsfj.de | Ministerin: Karin Prien (CDU), seit Mai 2025 | @BMBFSFJ | @bmbfsfj | ❌ |
 
@@ -135,7 +135,7 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 | **Hessischer Rundfunk** | hr.de | pressedesk@hr.de | @hrPresse | @hessischerrundfunk | hr | ❌ |
 | **hessenschau** | hessenschau.de | Kontaktformular | @hessenschaude | @hessenschau | hessenschau | **hessenschau.de/index.rss** |
 | **hr-info** | hr.de | info@hr.de | - | - | - | - |
-| **ZDF Landesstudio Hessen** | zdf.de | Peter Wagner (Studioleiter), 0611-988599-0 | über @ZDF | über @ZDF | - | - |
+| **ZDF Landesstudio Hessen** | zdf.de | Peter Wagner (Studioleiter), 0611-988599-0 | @ZDFhessen | über @ZDF | - | - |
 
 ### Tageszeitungen
 
@@ -144,10 +144,10 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 | **Frankfurter Rundschau** | fr.de | Peter Hanack (Sozialpolitik): 069/219 936 53 | @FR_de | **fr.de/?_XML=rss** |
 | **FAZ (Rhein-Main)** | faz.net | wiesbaden@faz.de, Ressortleiter: Helmut Schwan | @FAZ_NET | **faz.net/rss/aktuell/rhein-main/** |
 | **HNA** | hna.de | Service: 0800-2034567 | @HNA_online | ❌ |
-| **Wiesbadener Kurier** | wiesbadener-kurier.de | wiesbaden-lokales@vrm.de | - | ❌ |
-| **Darmstädter Echo** | echo-online.de | darmstaedter-echo@vrm.de | - | ❌ |
+| **Wiesbadener Kurier** | wiesbadener-kurier.de | wiesbaden-lokales@vrm.de | @wknachrichten | ❌ |
+| **Darmstädter Echo** | echo-online.de | darmstaedter-echo@vrm.de | @Echo_Online (pausiert) | ❌ |
 | **Fuldaer Zeitung** | fuldaerzeitung.de | redaktion@fuldaerzeitung.de | @fuldaerzeitung | ❌ |
-| **Gießener Allgemeine** | giessener-allgemeine.de | stadtredaktion@giessener-allgemeine.de | - | ❌ |
+| **Gießener Allgemeine** | giessener-allgemeine.de | stadtredaktion@giessener-allgemeine.de | @Allgemeine (inaktiv seit 2019) | ❌ |
 
 ### Fachmedien Wohlfahrtspflege
 
@@ -207,7 +207,7 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 | Institution | Website | Kontakt | Social Media |
 |-------------|---------|---------|--------------|
 | **LOTTO Hessen** | lotto-hessen.de | Presse: lotto-hessen.de/ueber-uns/presse | @LOTTOHes_Presse, Instagram, Facebook |
-| **Aktion Mensch** | aktion-mensch.de | Bonn | Facebook, Instagram, TikTok, YouTube, LinkedIn, Xing (kein Twitter mehr) |
+| **Aktion Mensch** | aktion-mensch.de | Bonn | Facebook, Instagram, TikTok, YouTube, LinkedIn, Xing (X verlassen 01/2024) |
 
 ---
 
@@ -247,7 +247,7 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 |-------------|---------|---------|----------|
 | **LAG KitaEltern Hessen** | kita-eltern-hessen.de | - | @KitaElternHessen |
 | **Kita-LEV Hessen** | kita-lev-hessen.de | - | - |
-| **Landeselternbeirat Hessen (Schulen)** | leb-hessen.de | Anne Zulauf (Vorsitzende) | ❌ |
+| **Landeselternbeirat Hessen (Schulen)** | leb-hessen.de | Anne Zulauf (Vorsitzende) | @lebhessen |
 | **Kinderschutzbund LV Hessen** | kinderschutzbund-hessen.de | GF: Jonas Thiele | ❌ |
 
 ### Armut/Soziales
@@ -279,7 +279,10 @@ Die umfassende Recherche identifiziert **über 80 relevante Stakeholder** in ach
 | @FAZ_NET | FAZ |
 | @RegHessen | Landesregierung Hessen |
 | @SozialHessen | Sozialministerium |
+| @FamilienHessen | Ministerium Familie/Gesundheit/Pflege |
 | @landtag_hessen | Hessischer Landtag |
+| @ZDFhessen | ZDF Landesstudio Hessen |
+| @bagfw | BAGFW (Bundesebene) |
 | @ProAsyl | PRO ASYL |
 | @bmas_bund | BMAS |
 | @ParitaetHessen | Paritätischer Hessen |
