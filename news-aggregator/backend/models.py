@@ -49,6 +49,7 @@ class Source(Base):
     name: Mapped[str] = mapped_column(String(255))
     connector_type: Mapped[ConnectorType] = mapped_column(String(50))
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_identifier: Mapped[str] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     fetch_interval_minutes: Mapped[int] = mapped_column(default=30)
     last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -61,7 +62,30 @@ class Source(Base):
     # Relationships
     items: Mapped[list["Item"]] = relationship(back_populates="source", cascade="all, delete-orphan")
 
-    __table_args__ = (Index("ix_sources_connector_type", "connector_type"),)
+    __table_args__ = (
+        Index("ix_sources_connector_type", "connector_type"),
+        Index(
+            "ix_sources_unique_identifier",
+            "connector_type",
+            "source_identifier",
+            unique=True,
+        ),
+    )
+
+    @staticmethod
+    def extract_identifier(connector_type: str, config: dict[str, Any]) -> str | None:
+        """Extract the unique identifier from config based on connector type."""
+        if connector_type in ("x_scraper", "twitter"):
+            return config.get("username", "").lower()
+        elif connector_type in ("mastodon", "bluesky"):
+            return config.get("handle", "").lower()
+        elif connector_type == "rss":
+            return config.get("url", "").lower()
+        elif connector_type == "html":
+            return config.get("url", "").lower()
+        elif connector_type == "pdf":
+            return config.get("url", "").lower()
+        return None
 
 
 class Item(Base):

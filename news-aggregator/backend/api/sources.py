@@ -50,10 +50,29 @@ async def create_source(
     db: AsyncSession = Depends(get_db),
 ) -> SourceResponse:
     """Create a new source."""
+    # Extract identifier for uniqueness check
+    identifier = Source.extract_identifier(
+        source_data.connector_type, source_data.config
+    )
+
+    # Check for existing source with same connector_type and identifier
+    if identifier:
+        existing_query = select(Source).where(
+            Source.connector_type == source_data.connector_type,
+            Source.source_identifier == identifier,
+        )
+        existing = await db.execute(existing_query)
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Source with identifier '{identifier}' already exists for connector type '{source_data.connector_type}'",
+            )
+
     source = Source(
         name=source_data.name,
         connector_type=source_data.connector_type,
         config=source_data.config,
+        source_identifier=identifier,
         enabled=source_data.enabled,
         fetch_interval_minutes=source_data.fetch_interval_minutes,
     )
@@ -79,6 +98,30 @@ async def update_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     update_data = update.model_dump(exclude_unset=True)
+
+    # If config or connector_type changes, recalculate identifier
+    new_config = update_data.get("config", source.config)
+    new_connector_type = update_data.get("connector_type", source.connector_type)
+
+    if "config" in update_data or "connector_type" in update_data:
+        new_identifier = Source.extract_identifier(new_connector_type, new_config)
+
+        # Check for duplicates (excluding current source)
+        if new_identifier:
+            existing_query = select(Source).where(
+                Source.connector_type == new_connector_type,
+                Source.source_identifier == new_identifier,
+                Source.id != source_id,
+            )
+            existing = await db.execute(existing_query)
+            if existing.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Source with identifier '{new_identifier}' already exists",
+                )
+
+        update_data["source_identifier"] = new_identifier
+
     for key, value in update_data.items():
         setattr(source, key, value)
 
