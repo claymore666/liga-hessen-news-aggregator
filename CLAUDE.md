@@ -114,12 +114,13 @@ Das Daily-Briefing-System folgt einer dreistufigen Pipeline:
 | `mastodon` | RSS + API | Mastodon-Profile | ✅ Stabil |
 | `telegram` | Web Scraping | Öffentliche Telegram-Kanäle via t.me/s/ | ✅ Stabil |
 | `pdf` | PyMuPDF | Landtag-Dokumente | ✅ Stabil |
+| `instagram_scraper` | Playwright | Instagram-Profile direkt (Stealth-Modus) | ✅ Empfohlen |
 | `instagram` | Proxy Scraping | Instagram via Picuki/Picnob/Imginn | ⚠️ Instabil (Proxies oft blockiert) |
 
 **Hinweise**:
 - Für X/Twitter wird `x_scraper` empfohlen, da Nitter-Instanzen unzuverlässig sind
+- Für Instagram wird `instagram_scraper` empfohlen (max ~12 Posts ohne Login)
 - Telegram funktioniert nur für **öffentliche** Kanäle (keine privaten Gruppen)
-- Instagram-Proxies werden häufig blockiert - Zuverlässigkeit schwankt
 
 ### Hybridansatz: Eigenes System + Google Alerts
 
