@@ -61,8 +61,8 @@ async def list_items(
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
 
-    # Apply pagination and ordering
-    query = query.order_by(Item.published_at.desc())
+    # Apply pagination and ordering (secondary sort by id for stable pagination)
+    query = query.order_by(Item.published_at.desc(), Item.id.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
