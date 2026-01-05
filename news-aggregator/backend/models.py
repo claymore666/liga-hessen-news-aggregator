@@ -24,6 +24,7 @@ class ConnectorType(str, Enum):
     INSTAGRAM = "instagram"
     INSTAGRAM_SCRAPER = "instagram_scraper"
     TELEGRAM = "telegram"
+    GOOGLE_ALERTS = "google_alerts"
 
 
 class Priority(str, Enum):

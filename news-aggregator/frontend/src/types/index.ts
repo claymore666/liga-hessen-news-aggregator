@@ -1,5 +1,5 @@
 export type Priority = 'critical' | 'high' | 'medium' | 'low'
-export type ConnectorType = 'rss' | 'html' | 'bluesky' | 'twitter' | 'pdf' | 'mastodon'
+export type ConnectorType = 'rss' | 'html' | 'bluesky' | 'twitter' | 'pdf' | 'mastodon' | 'x_scraper' | 'telegram' | 'instagram' | 'instagram_scraper' | 'google_alerts'
 export type RuleType = 'keyword' | 'regex' | 'semantic'
 
 export interface Source {

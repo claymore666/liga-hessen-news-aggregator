@@ -30,8 +30,13 @@ const connectorLabels: Record<string, string> = {
   html: 'HTML Scraper',
   bluesky: 'Bluesky',
   twitter: 'Twitter/X',
+  x_scraper: 'X (Twitter)',
   pdf: 'PDF',
-  mastodon: 'Mastodon'
+  mastodon: 'Mastodon',
+  telegram: 'Telegram',
+  instagram: 'Instagram',
+  instagram_scraper: 'Instagram',
+  google_alerts: 'Google Alerts'
 }
 
 const deleteSource = async (source: Source) => {

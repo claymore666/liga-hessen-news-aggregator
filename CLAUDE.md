@@ -181,6 +181,35 @@ Die Dokumentation ist durchgehend auf **Deutsch** verfasst. Code-Beispiele und K
 
 ---
 
+## API vs. Docker Container Zugriff
+
+**WICHTIG für Claude Code**: Bevorzuge die REST-API für Datenbankabfragen statt direkter Docker-Container-Befehle.
+
+```bash
+# ✅ BEVORZUGT: API verwenden
+curl -s http://localhost:8000/api/sources | jq '.'
+curl -s http://localhost:8000/api/items?limit=100 | jq '.'
+curl -s http://localhost:8000/api/stats/by-source | jq '.'
+curl -s http://localhost:8000/api/stats/by-connector | jq '.'
+
+# ⚠️ NUR WENN NÖTIG: Docker exec (langsamer, komplexer)
+docker exec liga-news-backend python -c "..."
+```
+
+### Wichtige API-Endpunkte
+
+| Endpunkt | Beschreibung |
+|----------|--------------|
+| `GET /api/sources` | Alle Quellen auflisten |
+| `GET /api/items?limit=N` | Items abrufen |
+| `GET /api/stats/by-source` | Items pro Quelle |
+| `GET /api/stats/by-connector` | Items pro Connector-Typ |
+| `GET /api/sources/errors` | Quellen mit Fehlern |
+| `POST /api/sources/{id}/fetch` | Quelle manuell abrufen |
+| `GET /api/admin/db-stats` | Datenbank-Statistiken |
+
+---
+
 ## Docker & Datenbank-Zugriff
 
 ### Container-Übersicht
