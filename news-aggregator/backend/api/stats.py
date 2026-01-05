@@ -99,20 +99,37 @@ async def get_stats(
 @router.get("/stats/by-source")
 async def get_stats_by_source(
     db: AsyncSession = Depends(get_db),
+    connector_type: str | None = None,
+    source_id: int | None = None,
 ) -> list[dict]:
-    """Get item counts grouped by source."""
+    """Get item counts grouped by source.
+
+    Args:
+        connector_type: Filter by connector type (e.g., 'rss', 'x_scraper', 'telegram', 'instagram_scraper')
+        source_id: Filter by specific source ID
+    """
     query = (
         select(
             Source.id,
             Source.name,
             Source.connector_type,
+            Source.enabled,
+            Source.last_fetch_at,
+            Source.last_error,
             func.count(Item.id).label("item_count"),
             func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
         )
         .outerjoin(Item, Source.id == Item.source_id)
         .group_by(Source.id)
-        .order_by(Source.name)
     )
+
+    # Apply filters
+    if connector_type:
+        query = query.where(Source.connector_type == connector_type)
+    if source_id:
+        query = query.where(Source.id == source_id)
+
+    query = query.order_by(Source.name)
 
     result = await db.execute(query)
     rows = result.all()
@@ -121,7 +138,41 @@ async def get_stats_by_source(
         {
             "source_id": row.id,
             "name": row.name,
-            "connector_type": row.connector_type,
+            "connector_type": row.connector_type.value if hasattr(row.connector_type, 'value') else row.connector_type,
+            "enabled": row.enabled,
+            "item_count": row.item_count or 0,
+            "unread_count": row.unread_count or 0,
+            "last_fetch_at": row.last_fetch_at.isoformat() if row.last_fetch_at else None,
+            "last_error": row.last_error,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/stats/by-connector")
+async def get_stats_by_connector(
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Get aggregated stats grouped by connector type."""
+    query = (
+        select(
+            Source.connector_type,
+            func.count(Source.id.distinct()).label("source_count"),
+            func.count(Item.id).label("item_count"),
+            func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
+        )
+        .outerjoin(Item, Source.id == Item.source_id)
+        .group_by(Source.connector_type)
+        .order_by(Source.connector_type)
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "connector_type": row.connector_type.value if hasattr(row.connector_type, 'value') else row.connector_type,
+            "source_count": row.source_count or 0,
             "item_count": row.item_count or 0,
             "unread_count": row.unread_count or 0,
         }
