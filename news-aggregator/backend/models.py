@@ -22,6 +22,8 @@ class ConnectorType(str, Enum):
     PDF = "pdf"
     X_SCRAPER = "x_scraper"
     INSTAGRAM = "instagram"
+    INSTAGRAM_SCRAPER = "instagram_scraper"
+    TELEGRAM = "telegram"
 
 
 class Priority(str, Enum):
