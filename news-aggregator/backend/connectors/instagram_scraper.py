@@ -183,88 +183,146 @@ class InstagramScraperConnector(BaseConnector):
         return items
 
     async def _extract_posts(self, page, config: InstagramScraperConfig) -> list[RawItem]:
-        """Extract posts from Instagram profile page."""
+        """Extract posts from Instagram profile page, including full captions."""
         items = []
 
         # Find all post links (Instagram uses /p/SHORTCODE/ format)
         post_links = await page.query_selector_all("article a[href*='/p/']")
 
         seen_shortcodes = set()
+        shortcodes_to_fetch = []
 
-        for link in post_links[:config.max_posts * 2]:  # Get extra to filter duplicates
+        # First pass: collect unique shortcodes
+        for link in post_links[:config.max_posts * 2]:
             try:
                 href = await link.get_attribute("href")
                 if not href:
                     continue
 
-                # Extract shortcode from URL
                 match = re.search(r"/p/([A-Za-z0-9_-]+)", href)
                 if not match:
                     continue
 
                 shortcode = match.group(1)
+                if shortcode not in seen_shortcodes:
+                    seen_shortcodes.add(shortcode)
+                    shortcodes_to_fetch.append(shortcode)
 
-                # Skip duplicates (Instagram often has multiple links to same post)
-                if shortcode in seen_shortcodes:
-                    continue
-                seen_shortcodes.add(shortcode)
-
-                if len(items) >= config.max_posts:
+                if len(shortcodes_to_fetch) >= config.max_posts:
                     break
+            except Exception:
+                continue
 
-                # Get image from the link
-                img = await link.query_selector("img")
+        # Second pass: visit each post to get full caption
+        for shortcode in shortcodes_to_fetch:
+            try:
+                post_url = f"https://www.instagram.com/p/{shortcode}/"
+                logger.debug(f"Fetching post details: {post_url}")
+
+                await page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(2000)
+
+                # Extract full caption from post page
+                caption = await self._extract_caption(page)
+
+                # Get image URL
                 image_url = ""
-                alt_text = ""
+                img = await page.query_selector("article img[src*='instagram']")
                 if img:
                     image_url = await img.get_attribute("src") or ""
+
+                # Get alt text (contains image description)
+                alt_text = ""
+                if img:
                     alt_text = await img.get_attribute("alt") or ""
 
-                # The alt text often contains the caption
-                content = alt_text
-                if content.startswith("Photo by"):
-                    # Extract actual caption after "Photo by X on Month Day, Year."
-                    parts = content.split(".", 1)
-                    if len(parts) > 1:
-                        content = parts[1].strip()
+                # Check if video/reel
+                is_video = bool(await page.query_selector("article video"))
 
-                # Check if it's a video/reel
-                is_video = False
-                video_indicator = await link.query_selector("svg[aria-label*='Video'], svg[aria-label*='Reel']")
-                if video_indicator:
-                    is_video = True
+                # Try to get timestamp
+                published_at = datetime.now(UTC)
+                time_elem = await page.query_selector("time[datetime]")
+                if time_elem:
+                    datetime_str = await time_elem.get_attribute("datetime")
+                    if datetime_str:
+                        try:
+                            published_at = datetime.fromisoformat(datetime_str.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
 
-                # Create title from content
-                title = content[:100] + "..." if len(content) > 100 else content
-                if not title:
-                    title = f"Post by @{config.username}"
+                # Combine alt text (image description) with caption
+                full_content = caption
+                if alt_text and not alt_text.startswith("Photo"):
+                    # Alt text might have OCR'd text from image
+                    full_content = f"{alt_text}\n\n{caption}" if caption else alt_text
 
-                # Instagram URLs
-                post_url = f"https://www.instagram.com/p/{shortcode}/"
+                # Create title from caption (first line or truncated)
+                title = caption.split("\n")[0][:100] if caption else f"Post by @{config.username}"
+                if len(caption.split("\n")[0]) > 100:
+                    title += "..."
 
                 items.append(
                     RawItem(
                         external_id=shortcode,
                         title=title,
-                        content=content,
+                        content=full_content,
                         url=post_url,
                         author=f"@{config.username}",
-                        published_at=datetime.now(UTC),  # Instagram doesn't show dates on grid
+                        published_at=published_at,
                         metadata={
                             "platform": "instagram",
                             "username": config.username,
                             "shortcode": shortcode,
                             "image_url": image_url,
+                            "alt_text": alt_text,
                             "is_video": is_video,
                         },
                     )
                 )
 
             except Exception as e:
-                logger.warning(f"Error extracting post: {e}")
+                logger.warning(f"Error extracting post {shortcode}: {e}")
                 continue
 
         return items
+
+    async def _extract_caption(self, page) -> str:
+        """Extract full caption from Instagram post page."""
+        caption = ""
+
+        # Try multiple selectors for caption
+        selectors = [
+            # Main caption container
+            "article div[role='button'] span:not([class])",
+            "article h1 + div span",
+            # Expanded caption
+            "article span[dir='auto']",
+            # Caption in meta
+            "meta[property='og:description']",
+        ]
+
+        for selector in selectors:
+            try:
+                if selector.startswith("meta"):
+                    elem = await page.query_selector(selector)
+                    if elem:
+                        caption = await elem.get_attribute("content") or ""
+                else:
+                    # Get all matching elements and find the longest text
+                    elements = await page.query_selector_all(selector)
+                    for elem in elements:
+                        text = await elem.inner_text()
+                        if text and len(text) > len(caption):
+                            # Skip if it's just metadata like "likes" or "comments"
+                            if not re.match(r"^\d+[,.]?\d*\s*(likes?|comments?|views?)", text.lower()):
+                                caption = text
+
+                if len(caption) > 50:  # Found substantial caption
+                    break
+            except Exception:
+                continue
+
+        return caption.strip()
 
     async def validate(self, config: InstagramScraperConfig) -> tuple[bool, str]:
         """Validate configuration by checking if profile exists."""

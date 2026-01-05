@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -107,7 +107,7 @@ async def get_stats_by_source(
             Source.name,
             Source.connector_type,
             func.count(Item.id).label("item_count"),
-            func.sum(func.cast(Item.is_read == False, int)).label("unread_count"),  # noqa: E712
+            func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
         )
         .outerjoin(Item, Source.id == Item.source_id)
         .group_by(Source.id)
