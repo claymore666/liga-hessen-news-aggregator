@@ -122,6 +122,46 @@ Das Daily-Briefing-System folgt einer dreistufigen Pipeline:
 - Für Instagram wird `instagram_scraper` empfohlen (max ~12 Posts ohne Login)
 - Telegram funktioniert nur für **öffentliche** Kanäle (keine privaten Gruppen)
 
+### X.com Authentifizierung
+
+X.com blockiert unauthentifizierte Zugriffe auf viele Profile. Der `x_scraper` verwendet Cookies aus Chrome für authentifizierten Zugriff.
+
+**Cookie-Refresh (wenn Cookies ablaufen):**
+```bash
+cd news-aggregator/backend
+source venv/bin/activate
+python scripts/extract_chrome_cookies.py
+docker cp /tmp/x_cookies.json liga-news-backend:/app/data/x_cookies.json
+```
+
+**Voraussetzungen:**
+- Chrome mit aktivem X.com Login (Account: 1andonlyChrisK)
+- `browser-cookie3` pip package (wird automatisch installiert)
+
+### Helper Scripts
+
+```bash
+# Mehrere Quellen abrufen
+./scripts/fetch_sources.sh 100 116 137
+
+# Alle X-Quellen ohne Items abrufen
+./scripts/fetch_sources.sh $(curl -s http://localhost:8000/api/stats/by-source | \
+  jq -r '[.[] | select(.item_count == 0 and .connector_type == "x_scraper")] | .[].source_id' | tr '\n' ' ')
+```
+
+### Lange Tasks: Progress-Monitoring
+
+Für lange Tasks (z.B. viele Quellen fetchen) Bash mit `run_in_background: true` nutzen und Fortschritt mit `TaskOutput` abfragen:
+
+```
+1. Bash-Task im Hintergrund starten (run_in_background: true)
+2. Fortschritt mit TaskOutput abfragen (block: false)
+3. Output-Datei direkt lesen: /tmp/claude/.../tasks/{task_id}.output
+4. Bei Abschluss: TaskOutput mit block: true
+```
+
+**WICHTIG**: Bei lang laufenden Tasks regelmäßig Fortschritt anzeigen statt nur auf Completion warten.
+
 ### Hybridansatz: Eigenes System + Google Alerts
 
 | Aspekt | Eigenes System | Google Alerts (RSS) |

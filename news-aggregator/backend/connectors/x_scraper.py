@@ -1,9 +1,11 @@
 """X.com (Twitter) scraper connector using Playwright."""
 
+import json
 import logging
 import random
 import re
 from datetime import datetime
+from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
@@ -13,6 +15,9 @@ from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 
 logger = logging.getLogger(__name__)
+
+# Path to saved X.com cookies (from scripts/x_auth.py)
+COOKIE_FILE = Path(__file__).parent.parent / "data" / "x_cookies.json"
 
 
 class XScraperConfig(BaseModel):
@@ -66,6 +71,34 @@ class XScraperConnector(BaseConnector):
 
     # Locale rotation pool
     LOCALES = ["de-DE", "en-US", "en-GB", "de-AT", "de-CH"]
+
+    @staticmethod
+    def _load_cookies() -> list[dict] | None:
+        """Load saved X.com cookies from file.
+
+        Returns:
+            List of cookie dicts or None if no cookies found
+        """
+        if not COOKIE_FILE.exists():
+            logger.debug(f"No cookie file found at {COOKIE_FILE}")
+            return None
+
+        try:
+            with open(COOKIE_FILE) as f:
+                cookies = json.load(f)
+
+            # Verify we have the essential auth_token
+            auth_token = next((c for c in cookies if c.get("name") == "auth_token"), None)
+            if not auth_token:
+                logger.warning("Cookie file exists but missing auth_token")
+                return None
+
+            logger.info(f"Loaded {len(cookies)} X.com cookies from file")
+            return cookies
+
+        except Exception as e:
+            logger.error(f"Error loading cookies: {e}")
+            return None
 
     async def fetch(self, config: XScraperConfig) -> list[RawItem]:
         """Fetch tweets from X.com profile.
@@ -140,6 +173,13 @@ class XScraperConnector(BaseConnector):
                     context_args["proxy"] = {"server": proxy_server}
 
                 context = await browser.new_context(**context_args)
+
+                # Load and inject saved cookies for authentication
+                cookies = self._load_cookies()
+                if cookies:
+                    await context.add_cookies(cookies)
+                    logger.info("Injected saved X.com cookies for authenticated access")
+
                 page = await context.new_page()
 
                 # Apply stealth mode
@@ -148,7 +188,8 @@ class XScraperConnector(BaseConnector):
 
                 # Navigate to profile
                 url = f"https://x.com/{config.username}"
-                logger.info(f"Fetching X.com profile: {url}" + (f" via proxy" if proxy_server else ""))
+                auth_status = "authenticated" if cookies else "unauthenticated"
+                logger.info(f"Fetching X.com profile: {url} ({auth_status})" + (f" via proxy" if proxy_server else ""))
 
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
