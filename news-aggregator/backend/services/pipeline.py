@@ -122,6 +122,11 @@ class Pipeline:
                     # Update priority based on LLM suggestion
                     # New model returns "priority", old model used "priority_suggestion"
                     llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+
+                    # If LLM says not relevant, force low priority
+                    if analysis.get("relevant") is False:
+                        llm_priority = "low"
+
                     if llm_priority == "critical":
                         item.priority = Priority.CRITICAL
                         item.priority_score = max(item.priority_score, 90)

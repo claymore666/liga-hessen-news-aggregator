@@ -233,7 +233,10 @@ Antworte NUR mit JA oder NEIN."""
 
         try:
             # Try direct JSON parse
-            return json.loads(text)
+            result = json.loads(text)
+            if isinstance(result, dict):
+                return result
+            # Not a dict (e.g., array) - fall through to default
         except json.JSONDecodeError:
             pass
 
@@ -262,8 +265,9 @@ Antworte NUR mit JA oder NEIN."""
         """Return default analysis when LLM fails."""
         return {
             "summary": summary,
-            "relevance_score": 0.5,
-            "priority_suggestion": "medium",
+            "relevant": False,
+            "relevance_score": 0.0,
+            "priority": "low",
             "assigned_ak": None,
             "matched_rules": [],
             "tags": [],
