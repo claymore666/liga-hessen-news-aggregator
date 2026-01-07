@@ -109,40 +109,28 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
         Returns:
             Analysis result dict with keys:
             - summary: str
+            - relevant: bool
             - relevance_score: float (0.0-1.0)
-            - priority_suggestion: str (critical/high/medium/low)
+            - priority: str (critical/high/medium/low/null)
             - assigned_ak: str | None
-            - matched_rules: list[int]
             - tags: list[str]
             - reasoning: str
         """
-        rules_context = self._build_rules_context(rules or [])
+        # Format input as the fine-tuned model expects
+        source_name = item.source.name if item.source else "Unbekannt"
+        date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 
-        prompt = f"""Analysiere folgenden Nachrichtenartikel:
-
-TITEL: {item.title}
-
-INHALT: {item.content[:3000]}
-
-{rules_context}
-
-Antworte mit JSON:
-{{
-    "summary": "2-3 Sätze Zusammenfassung auf Deutsch",
-    "relevance_score": 0.0-1.0,
-    "priority_suggestion": "critical|high|medium|low",
-    "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
-    "matched_rules": [1, 2],
-    "tags": ["tag1", "tag2"],
-    "reasoning": "Kurze Begründung"
-}}"""
+        prompt = f"""Titel: {item.title}
+Inhalt: {item.content[:2000]}
+Quelle: {source_name}
+Datum: {date_str}"""
 
         try:
+            # Don't send system prompt - it's baked into the fine-tuned model
             response = await self.llm.complete(
                 prompt,
-                system=SYSTEM_PROMPT,
-                temperature=0.3,
-                max_tokens=1000,
+                temperature=0.1,
+                max_tokens=500,
             )
             return self._parse_analysis_response(response)
 

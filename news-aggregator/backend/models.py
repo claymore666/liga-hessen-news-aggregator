@@ -55,6 +55,7 @@ class Source(Base):
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     source_identifier: Mapped[str] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
+    is_stakeholder: Mapped[bool] = mapped_column(default=False)  # Never filter out, always keep for training
     fetch_interval_minutes: Mapped[int] = mapped_column(default=30)
     last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

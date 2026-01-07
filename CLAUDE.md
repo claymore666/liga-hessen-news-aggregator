@@ -181,8 +181,47 @@ Google Alerts werden als RSS-Feeds eingebunden (keine offizielle API).
 
 | Priorität | Anbieter | Modell | Beschreibung |
 |-----------|----------|--------|--------------|
-| Primär | Ollama (lokal) | Qwen3 14B (Q8) | GPU-Server gpu1, unbegrenzt |
+| Primär | Ollama (lokal) | `liga-relevance` | Fine-tuned Qwen3-14B für Liga-Klassifikation |
 | Fallback | OpenRouter | meta-llama/llama-3.3-70b | Cloud-API, bei Ollama-Ausfall |
+
+### Fine-tuned Modell: liga-relevance
+
+Das Modell wurde speziell für Liga-Relevanzklassifikation trainiert.
+
+**Input-Format** (exakt einhalten!):
+```
+Titel: {title}
+Inhalt: {content[:2000]}
+Quelle: {source_name}
+Datum: {YYYY-MM-DD}
+```
+
+**Output-Format** (JSON):
+```json
+{
+  "summary": "2-3 Sätze Zusammenfassung",
+  "relevant": true/false,
+  "relevance_score": 0.0-1.0,
+  "priority": "critical|high|medium|low|null",
+  "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
+  "tags": ["tag1", "tag2"],
+  "reasoning": "Kurze Begründung"
+}
+```
+
+**Reprocessing** (Items neu klassifizieren):
+```bash
+# 100 neueste Items (skip bereits prozessierte)
+curl -X POST "http://localhost:8000/api/items/reprocess?limit=100"
+
+# Force reprocess (auch bereits prozessierte)
+curl -X POST "http://localhost:8000/api/items/reprocess?limit=100&force=true"
+
+# Nur bestimmte Quelle
+curl -X POST "http://localhost:8000/api/items/reprocess?source_id=5&limit=100"
+```
+
+Speed: ~3 sec/item, läuft im Hintergrund. Logs: `docker logs -f liga-news-backend`
 
 ## Wichtige Trigger-Keywords
 
@@ -246,6 +285,7 @@ docker exec liga-news-backend python -c "..."
 | `GET /api/stats/by-connector` | Items pro Connector-Typ |
 | `GET /api/sources/errors` | Quellen mit Fehlern |
 | `POST /api/sources/{id}/fetch` | Quelle manuell abrufen |
+| `POST /api/items/reprocess` | Items durch LLM neu klassifizieren |
 | `GET /api/admin/db-stats` | Datenbank-Statistiken |
 
 ---

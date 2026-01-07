@@ -110,37 +110,31 @@ class Pipeline:
             # 4. Apply rules and calculate priority (keyword-based first pass)
             await self._apply_rules(item)
 
-            # 5. Skip obviously irrelevant items (no keyword matches) - disabled in training_mode
-            if not self.training_mode and item.priority_score <= 50:
-                logger.debug(f"Skipping irrelevant (no keywords): {normalized.title[:50]}")
-                continue
-
-            # 6. LLM-based relevance evaluation and summarization
+            # 5. LLM-based categorization and summarization (no filtering)
             if self.processor and not self.training_mode:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
                     analysis = await self.processor.analyze(item)
 
-                    # Apply LLM's relevance assessment - disabled in training_mode
+                    # Record relevance score (no filtering, just for reference)
                     relevance_score = analysis.get("relevance_score", 0.5)
-                    if relevance_score < 0.3:
-                        logger.debug(f"Skipping irrelevant (LLM score {relevance_score:.2f}): {normalized.title[:50]}")
-                        continue
 
-                    # Update priority based on LLM suggestion (can upgrade OR downgrade)
-                    llm_priority = analysis.get("priority_suggestion", "medium")
+                    # Update priority based on LLM suggestion
+                    # New model returns "priority", old model used "priority_suggestion"
+                    llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                     if llm_priority == "critical":
                         item.priority = Priority.CRITICAL
                         item.priority_score = max(item.priority_score, 90)
                     elif llm_priority == "high":
                         item.priority = Priority.HIGH
                         item.priority_score = max(item.priority_score, 70)
-                    elif llm_priority == "low":
-                        item.priority = Priority.LOW
-                        item.priority_score = min(item.priority_score, 40)
                     elif llm_priority == "medium":
                         item.priority = Priority.MEDIUM
                         # Keep keyword-based score for medium
+                    else:
+                        # null or "low" = LOW (not relevant or low priority)
+                        item.priority = Priority.LOW
+                        item.priority_score = min(item.priority_score, 40)
 
                     # Set summary from analysis
                     if analysis.get("summary"):

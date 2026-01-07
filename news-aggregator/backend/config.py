@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # LLM - Ollama (primary)
     ollama_base_url: str = "http://gpu1:11434"
-    ollama_model: str = "qwen3:14b-q8_0"
+    ollama_model: str = "liga-relevance"
     ollama_timeout: int = 120
 
     # LLM - OpenRouter (fallback)

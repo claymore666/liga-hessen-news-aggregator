@@ -27,6 +27,7 @@ class SourceBase(BaseModel):
     connector_type: ConnectorType
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    is_stakeholder: bool = False  # Never filter out, always keep for training data
     fetch_interval_minutes: int = Field(default=30, ge=5, le=1440)
 
 
@@ -42,6 +43,7 @@ class SourceUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     config: dict[str, Any] | None = None
     enabled: bool | None = None
+    is_stakeholder: bool | None = None
     fetch_interval_minutes: int | None = Field(None, ge=5, le=1440)
 
 

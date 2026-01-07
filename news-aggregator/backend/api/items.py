@@ -1,17 +1,19 @@
 """API endpoints for news items."""
 
+import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db
+from database import get_db, async_session_maker
 from models import Item, Priority
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/items", response_model=ItemListResponse)
@@ -157,3 +159,106 @@ async def mark_all_as_read(
         item.is_read = True
 
     return {"marked": len(items)}
+
+
+# Background task for reprocessing
+async def _reprocess_items_task(item_ids: list[int], force: bool):
+    """Background task to reprocess items through LLM."""
+    from services.processor import create_processor_from_settings
+
+    processor = await create_processor_from_settings()
+    processed = 0
+    errors = 0
+
+    async with async_session_maker() as db:
+        for item_id in item_ids:
+            try:
+                result = await db.execute(
+                    select(Item).where(Item.id == item_id).options(selectinload(Item.source))
+                )
+                item = result.scalar_one_or_none()
+                if not item:
+                    continue
+
+                # Skip if already processed (unless force)
+                if not force and item.metadata_.get("llm_analysis"):
+                    continue
+
+                # Run LLM analysis
+                analysis = await processor.analyze(item)
+
+                # Update item
+                if analysis.get("summary"):
+                    item.summary = analysis["summary"]
+
+                # New model returns "priority", old model used "priority_suggestion"
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if llm_priority == "critical":
+                    item.priority = Priority.CRITICAL
+                elif llm_priority == "high":
+                    item.priority = Priority.HIGH
+                elif llm_priority == "medium":
+                    item.priority = Priority.MEDIUM
+                else:
+                    # null or "low" = LOW (not relevant or low priority)
+                    item.priority = Priority.LOW
+
+                # Store analysis metadata
+                item.metadata_ = {
+                    **item.metadata_,
+                    "llm_analysis": {
+                        "relevance_score": analysis.get("relevance_score", 0.5),
+                        "priority_suggestion": llm_priority,
+                        "assigned_ak": analysis.get("assigned_ak"),
+                        "tags": analysis.get("tags", []),
+                        "reasoning": analysis.get("reasoning"),
+                    },
+                }
+
+                await db.flush()
+                processed += 1
+
+                if processed % 10 == 0:
+                    logger.info(f"Reprocessed {processed}/{len(item_ids)} items")
+
+            except Exception as e:
+                logger.error(f"Error reprocessing item {item_id}: {e}")
+                errors += 1
+
+        await db.commit()
+
+    logger.info(f"Reprocessing complete: {processed} processed, {errors} errors")
+
+
+@router.post("/items/reprocess")
+async def reprocess_items(
+    background_tasks: BackgroundTasks,
+    source_id: int | None = Query(None, description="Only reprocess items from this source"),
+    limit: int = Query(100, ge=1, le=1000, description="Max items to reprocess"),
+    force: bool = Query(False, description="Reprocess even if already has LLM analysis"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Reprocess items through the LLM for priority and summary.
+
+    Runs in background. Check logs for progress.
+    """
+    query = select(Item.id).order_by(Item.published_at.desc())
+
+    if source_id is not None:
+        query = query.where(Item.source_id == source_id)
+
+    query = query.limit(limit)
+    result = await db.execute(query)
+    item_ids = [row[0] for row in result.fetchall()]
+
+    if not item_ids:
+        return {"status": "no items to process", "count": 0}
+
+    background_tasks.add_task(_reprocess_items_task, item_ids, force)
+
+    return {
+        "status": "started",
+        "count": len(item_ids),
+        "force": force,
+        "message": "Reprocessing in background. Check logs for progress.",
+    }
