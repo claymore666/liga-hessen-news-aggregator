@@ -247,6 +247,13 @@ async def reprocess_items(
     if source_id is not None:
         query = query.where(Item.source_id == source_id)
 
+    # When not forcing, only select items without LLM analysis
+    # Use SQLite JSON extract to check if key exists
+    if not force:
+        query = query.where(
+            func.json_extract(Item.metadata_, "$.llm_analysis").is_(None)
+        )
+
     query = query.limit(limit)
     result = await db.execute(query)
     item_ids = [row[0] for row in result.fetchall()]

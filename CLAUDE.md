@@ -272,7 +272,8 @@ curl -s http://localhost:8000/api/stats/by-source | jq '.'
 curl -s http://localhost:8000/api/stats/by-connector | jq '.'
 
 # ⚠️ NUR WENN NÖTIG: Docker exec (langsamer, komplexer)
-docker exec liga-news-backend python -c "..."
+# IMMER mit timeout verwenden - docker exec kann hängen!
+timeout 30 docker exec liga-news-backend python -c "..."
 ```
 
 ### Wichtige API-Endpunkte
@@ -281,12 +282,13 @@ docker exec liga-news-backend python -c "..."
 |----------|--------------|
 | `GET /api/sources` | Alle Quellen auflisten |
 | `GET /api/items?limit=N` | Items abrufen |
-| `GET /api/stats/by-source` | Items pro Quelle |
-| `GET /api/stats/by-connector` | Items pro Connector-Typ |
 | `GET /api/sources/errors` | Quellen mit Fehlern |
 | `POST /api/sources/{id}/fetch` | Quelle manuell abrufen |
 | `POST /api/items/reprocess` | Items durch LLM neu klassifizieren |
-| `GET /api/admin/db-stats` | Datenbank-Statistiken |
+| `GET /api/admin/db-stats` | Datenbank-Statistiken (inkl. processed/remaining) |
+| `GET /api/stats/by-priority` | Items pro Priorität |
+| `GET /api/stats/by-source` | Items pro Quelle |
+| `GET /api/stats/by-connector` | Items pro Connector-Typ |
 
 ---
 
