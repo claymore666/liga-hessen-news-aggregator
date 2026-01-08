@@ -29,7 +29,7 @@ const isActive = (path: string) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-blue-50">
+  <div class="min-h-screen bg-gray-200">
     <!-- Mobile sidebar backdrop -->
     <div
       v-if="sidebarOpen"
