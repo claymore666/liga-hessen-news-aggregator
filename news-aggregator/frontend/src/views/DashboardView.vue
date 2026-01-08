@@ -368,7 +368,7 @@ watch(
           <li v-for="(item, index) in itemsStore.items" :key="item.id">
             <RouterLink
               :to="`/items/${item.id}`"
-              class="block py-2 px-4 transition-colors hover:bg-blue-100"
+              class="block py-2 px-4 transition-colors hover:bg-yellow-100"
               :class="index % 2 === 1 ? 'bg-blue-50' : ''"
             >
               <div class="flex items-center gap-2">
