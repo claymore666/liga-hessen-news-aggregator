@@ -260,7 +260,7 @@ watch(
     <!-- News Items with Filters -->
     <div class="card py-3 px-4">
       <!-- Filter Bar (always visible) -->
-      <div class="flex flex-wrap items-center gap-2 mb-2">
+      <div class="flex flex-wrap items-center gap-2 mb-2 -mx-4 px-4 py-2 bg-gray-50 border-b border-gray-100">
         <!-- Search -->
         <div class="relative">
           <input
