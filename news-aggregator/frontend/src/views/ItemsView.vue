@@ -20,7 +20,7 @@ const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
 
 const showFilters = ref(false)
-const page = ref(0)
+const page = ref(1)
 const pageSize = 20
 const selectedItems = ref<number[]>([])
 const focusedIndex = ref(-1)
@@ -99,8 +99,8 @@ const formatTime = (date: string | null) => {
 
 const loadItems = () => {
   itemsStore.fetchItems({
-    skip: page.value * pageSize,
-    limit: pageSize
+    page: page.value,
+    page_size: pageSize
   })
 }
 
@@ -122,7 +122,7 @@ const markSelectedAsRead = async () => {
 watch(
   () => itemsStore.filters,
   () => {
-    page.value = 0
+    page.value = 1
     loadItems()
   },
   { deep: true }
@@ -323,14 +323,14 @@ onMounted(async () => {
     <!-- Pagination -->
     <div class="flex items-center justify-between">
       <p class="text-sm text-gray-500">
-        Zeige {{ page * pageSize + 1 }} - {{ Math.min((page + 1) * pageSize, itemsStore.total) }}
+        Zeige {{ (page - 1) * pageSize + 1 }} - {{ Math.min(page * pageSize, itemsStore.total) }}
         von {{ itemsStore.total }}
       </p>
       <div class="flex gap-2">
         <button
           type="button"
           class="btn btn-secondary"
-          :disabled="page === 0"
+          :disabled="page === 1"
           @click="page--; loadItems()"
         >
           Zurück
@@ -338,7 +338,7 @@ onMounted(async () => {
         <button
           type="button"
           class="btn btn-secondary"
-          :disabled="(page + 1) * pageSize >= itemsStore.total"
+          :disabled="page * pageSize >= itemsStore.total"
           @click="page++; loadItems()"
         >
           Weiter

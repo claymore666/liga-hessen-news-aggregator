@@ -4,12 +4,12 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker
-from models import Item, Priority
+from models import Item, Priority, Source
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
 router = APIRouter()
@@ -29,6 +29,10 @@ async def list_items(
     until: datetime | None = None,
     search: str | None = None,
     relevant_only: bool = Query(True, description="Exclude LOW priority items (not Liga-relevant)"),
+    connector_type: str | None = Query(None, description="Filter by connector type (rss, x_scraper, etc.)"),
+    assigned_ak: str | None = Query(None, description="Filter by Arbeitskreis (AK1-5, QAG)"),
+    sort_by: str = Query("date", description="Sort by: date, priority, source"),
+    sort_order: str = Query("desc", description="Sort order: asc, desc"),
 ) -> ItemListResponse:
     """List items with filtering and pagination.
 
@@ -58,13 +62,46 @@ async def list_items(
         query = query.where(
             (Item.title.ilike(search_pattern)) | (Item.content.ilike(search_pattern))
         )
+    if connector_type is not None:
+        query = query.join(Source).where(Source.connector_type == connector_type)
+    if assigned_ak is not None:
+        # Filter by assigned_ak in metadata.llm_analysis.assigned_ak
+        query = query.where(
+            func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak
+        )
 
     # Get total count
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
 
-    # Apply pagination and ordering (secondary sort by id for stable pagination)
-    query = query.order_by(Item.published_at.desc(), Item.id.desc())
+    # Apply ordering based on sort_by parameter
+    if sort_by == "priority":
+        # Priority order: critical > high > medium > low
+        priority_order = case(
+            (Item.priority == "critical", 1),
+            (Item.priority == "high", 2),
+            (Item.priority == "medium", 3),
+            (Item.priority == "low", 4),
+            else_=5,
+        )
+        if sort_order == "asc":
+            query = query.order_by(priority_order.desc(), Item.id.desc())
+        else:
+            query = query.order_by(priority_order.asc(), Item.id.desc())
+    elif sort_by == "source":
+        # Need to join Source if not already joined
+        if connector_type is None:
+            query = query.join(Source, isouter=True)
+        if sort_order == "asc":
+            query = query.order_by(Source.name.asc(), Item.id.desc())
+        else:
+            query = query.order_by(Source.name.desc(), Item.id.desc())
+    else:
+        # Default: sort by date
+        if sort_order == "asc":
+            query = query.order_by(Item.published_at.asc(), Item.id.asc())
+        else:
+            query = query.order_by(Item.published_at.desc(), Item.id.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)

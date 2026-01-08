@@ -12,7 +12,12 @@ export const useItemsStore = defineStore('items', () => {
   const filters = ref({
     priority: null as Priority | null,
     source_id: null as number | null,
-    is_read: null as boolean | null
+    is_read: null as boolean | null,
+    connector_type: null as string | null,
+    assigned_ak: null as string | null,
+    sort_by: 'date' as string,
+    sort_order: 'desc' as string,
+    search: null as string | null
   })
 
   const unreadCount = computed(() => items.value.filter((i) => !i.is_read).length)
@@ -25,7 +30,7 @@ export const useItemsStore = defineStore('items', () => {
     items.value.filter((i) => ['critical', 'high'].includes(i.priority) && !i.is_read)
   )
 
-  async function fetchItems(params?: { skip?: number; limit?: number }) {
+  async function fetchItems(params?: { page?: number; page_size?: number }) {
     loading.value = true
     error.value = null
     try {
@@ -33,7 +38,12 @@ export const useItemsStore = defineStore('items', () => {
         ...params,
         priority: filters.value.priority || undefined,
         source_id: filters.value.source_id || undefined,
-        is_read: filters.value.is_read ?? undefined
+        is_read: filters.value.is_read ?? undefined,
+        connector_type: filters.value.connector_type || undefined,
+        assigned_ak: filters.value.assigned_ak || undefined,
+        sort_by: filters.value.sort_by,
+        sort_order: filters.value.sort_order,
+        search: filters.value.search || undefined
       })
       items.value = response.data.items
       total.value = response.data.total
@@ -115,7 +125,12 @@ export const useItemsStore = defineStore('items', () => {
     filters.value = {
       priority: null,
       source_id: null,
-      is_read: null
+      is_read: null,
+      connector_type: null,
+      assigned_ak: null,
+      sort_by: 'date',
+      sort_order: 'desc',
+      search: null
     }
   }
 

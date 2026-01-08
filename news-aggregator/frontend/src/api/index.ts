@@ -13,11 +13,17 @@ export const sourcesApi = {
 
 export const itemsApi = {
   list: (params?: {
-    skip?: number
-    limit?: number
+    page?: number
+    page_size?: number
     priority?: string
     source_id?: number
     is_read?: boolean
+    connector_type?: string
+    assigned_ak?: string
+    sort_by?: string
+    sort_order?: string
+    search?: string
+    relevant_only?: boolean
   }) => api.get<PaginatedResponse<Item>>('/items', { params }),
   get: (id: number) => api.get<Item>(`/items/${id}`),
   update: (id: number, data: Partial<Item>) => api.put<Item>(`/items/${id}`, data),

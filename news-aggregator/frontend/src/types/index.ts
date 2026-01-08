@@ -17,6 +17,19 @@ export interface Source {
   updated_at: string
 }
 
+export interface LLMAnalysis {
+  relevance_score?: number
+  priority_suggestion?: string
+  assigned_ak?: string
+  tags?: string[]
+  reasoning?: string
+}
+
+export interface ItemMetadata {
+  llm_analysis?: LLMAnalysis
+  [key: string]: unknown
+}
+
 export interface Item {
   id: number
   source_id: number
@@ -34,6 +47,7 @@ export interface Item {
   is_archived: boolean
   assigned_ak: string | null
   tags: string[]
+  metadata?: ItemMetadata
   created_at: string
   updated_at: string
 }
@@ -65,8 +79,9 @@ export interface Stats {
 export interface PaginatedResponse<T> {
   items: T[]
   total: number
-  skip: number
-  limit: number
+  page: number
+  page_size: number
+  total_pages: number
 }
 
 export interface ConnectorInfo {
