@@ -1,17 +1,20 @@
 """Background job scheduler using APScheduler."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from config import settings
 from database import async_session_maker
 from models import Source
 
 logger = logging.getLogger(__name__)
+
+# Track if a fetch is currently running to avoid overlapping fetches
+_fetch_in_progress = False
 
 scheduler = AsyncIOScheduler()
 
@@ -127,6 +130,70 @@ async def fetch_source(source_id: int, training_mode: bool = False) -> int:
             raise
 
 
+async def fetch_due_sources() -> dict:
+    """Fetch sources that are past their individual fetch interval.
+
+    Checks every enabled source and fetches those where:
+    now - last_fetch_at > fetch_interval_minutes
+
+    Returns:
+        Dict with fetch statistics.
+    """
+    global _fetch_in_progress
+
+    if _fetch_in_progress:
+        logger.debug("Fetch already in progress, skipping")
+        return {"skipped": True, "reason": "fetch_in_progress"}
+
+    _fetch_in_progress = True
+    try:
+        now = datetime.utcnow()
+        fetched = 0
+        errors = 0
+
+        async with async_session_maker() as db:
+            # Find enabled sources that are due for fetching
+            # A source is due if: last_fetch_at is NULL OR last_fetch_at + interval < now
+            query = select(Source).where(Source.enabled == True)  # noqa: E712
+            result = await db.execute(query)
+            all_sources = result.scalars().all()
+
+            # Filter in Python since SQLite doesn't support interval arithmetic well
+            due_sources = []
+            for source in all_sources:
+                if source.last_fetch_at is None:
+                    due_sources.append((source, None))
+                else:
+                    due_time = source.last_fetch_at + timedelta(minutes=source.fetch_interval_minutes)
+                    if due_time < now:
+                        due_sources.append((source, source.last_fetch_at))
+
+            # Sort by last_fetch_at (oldest first, NULL first)
+            due_sources.sort(key=lambda x: x[1] or datetime.min)
+
+            if due_sources:
+                logger.info(f"Found {len(due_sources)} sources due for fetching")
+
+            for source, _ in due_sources:
+                try:
+                    await fetch_source(source.id)
+                    fetched += 1
+                except Exception as e:
+                    logger.error(f"Error fetching source {source.id} ({source.name}): {e}")
+                    errors += 1
+
+        if fetched > 0 or errors > 0:
+            logger.info(f"Fetched {fetched} due sources, {errors} errors")
+
+        return {
+            "due_sources": len(due_sources),
+            "fetched": fetched,
+            "errors": errors,
+        }
+    finally:
+        _fetch_in_progress = False
+
+
 async def cleanup_old_items() -> int:
     """Remove items older than configured retention period.
 
@@ -161,12 +228,12 @@ def start_scheduler() -> None:
     """Start the background scheduler."""
     from services.proxy_manager import proxy_manager
 
-    # Main fetch job
+    # Smart fetch job - checks every minute for sources that are due
     scheduler.add_job(
-        fetch_all_sources,
-        trigger=IntervalTrigger(minutes=settings.fetch_interval_minutes),
-        id="fetch_all_sources",
-        name="Fetch all enabled sources",
+        fetch_due_sources,
+        trigger=IntervalTrigger(minutes=1),
+        id="fetch_due_sources",
+        name="Fetch sources that are due",
         replace_existing=True,
     )
 

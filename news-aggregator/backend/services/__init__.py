@@ -4,6 +4,7 @@ from services.pipeline import Pipeline, RawItem, process_items
 from services.processor import ItemProcessor, create_processor_from_settings
 from services.scheduler import (
     fetch_all_sources,
+    fetch_due_sources,
     fetch_source,
     get_job_status,
     start_scheduler,
@@ -21,6 +22,7 @@ __all__ = [
     "create_processor_from_settings",
     # Scheduler
     "fetch_all_sources",
+    "fetch_due_sources",
     "fetch_source",
     "get_job_status",
     "start_scheduler",
