@@ -258,9 +258,9 @@ watch(
     </div>
 
     <!-- News Items with Filters -->
-    <div class="card py-3 px-4">
+    <div class="card p-0 overflow-hidden">
       <!-- Filter Bar (always visible) -->
-      <div class="flex flex-wrap items-center gap-2 mb-2 -mx-4 px-4 py-2 bg-gray-50 border-b border-gray-100">
+      <div class="flex flex-wrap items-center gap-2 px-4 py-2 bg-gray-100 border-b border-gray-200">
         <!-- Search -->
         <div class="relative">
           <input
@@ -363,7 +363,7 @@ watch(
       </div>
 
       <!-- Scrollable News List -->
-      <div v-else class="max-h-[calc(100vh-340px)] min-h-[300px] overflow-y-auto -mx-4">
+      <div v-else class="max-h-[calc(100vh-340px)] min-h-[300px] overflow-y-auto">
         <ul class="divide-y divide-gray-100">
           <li v-for="item in itemsStore.items" :key="item.id">
             <RouterLink
@@ -394,7 +394,7 @@ watch(
       </div>
 
       <!-- Pagination -->
-      <div v-if="itemsStore.total > pageSize" class="mt-2 flex items-center justify-between border-t pt-2 mx-0">
+      <div v-if="itemsStore.total > pageSize" class="flex items-center justify-between border-t border-gray-200 px-4 py-2">
         <p class="text-sm text-gray-500">
           {{ (page - 1) * pageSize + 1 }} - {{ Math.min(page * pageSize, itemsStore.total) }} von {{ itemsStore.total }}
         </p>
