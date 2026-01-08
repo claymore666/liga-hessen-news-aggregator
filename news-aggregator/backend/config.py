@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./data/news_aggregator.db"
 
+    # LLM - General
+    llm_enabled: bool = True  # Set to False to disable all LLM processing
+
     # LLM - Ollama (primary)
     ollama_base_url: str = "http://gpu1:11434"
     ollama_model: str = "liga-relevance"

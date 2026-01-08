@@ -7,6 +7,7 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/liga_news.db
+      - LLM_ENABLED=${LLM_ENABLED:-true}
       - OLLAMA_BASE_URL=http://gpu1:11434
       - OLLAMA_MODEL=liga-relevance
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}

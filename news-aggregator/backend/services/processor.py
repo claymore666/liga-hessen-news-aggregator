@@ -99,12 +99,15 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             logger.error(f"Summarization failed: {e}")
             return None
 
-    async def analyze(self, item: Item, rules: list[Rule] | None = None) -> dict[str, Any]:
+    async def analyze(
+        self, item: Item, rules: list[Rule] | None = None, source_name: str | None = None
+    ) -> dict[str, Any]:
         """Analyze item for relevance, priority, and working group assignment.
 
         Args:
             item: Item to analyze
             rules: Optional list of rules to check
+            source_name: Optional source name (if item.source isn't loaded yet)
 
         Returns:
             Analysis result dict with keys:
@@ -117,11 +120,15 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             - reasoning: str
         """
         # Format input as the fine-tuned model expects
-        source_name = item.source.name if item.source else "Unbekannt"
+        if source_name is None:
+            try:
+                source_name = item.source.name if item.source else "Unbekannt"
+            except Exception:
+                source_name = "Unbekannt"
         date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 
         prompt = f"""Titel: {item.title}
-Inhalt: {item.content[:2000]}
+Inhalt: {item.content[:3000]}
 Quelle: {source_name}
 Datum: {date_str}"""
 
@@ -130,7 +137,7 @@ Datum: {date_str}"""
             response = await self.llm.complete(
                 prompt,
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=800,  # Increased for detailed_analysis field
             )
             return self._parse_analysis_response(response)
 
@@ -275,14 +282,42 @@ Antworte NUR mit JA oder NEIN."""
         }
 
 
-async def create_processor_from_settings() -> ItemProcessor:
+async def is_llm_enabled() -> bool:
+    """Check if LLM is enabled (runtime DB setting overrides env)."""
+    from config import settings
+    from database import async_session_maker
+    from sqlalchemy import select
+    from models import Setting
+
+    # Check database for runtime override
+    try:
+        async with async_session_maker() as db:
+            setting = await db.scalar(
+                select(Setting).where(Setting.key == "llm_enabled")
+            )
+            if setting is not None:
+                return setting.value.lower() == "true"
+    except Exception:
+        pass  # Fall back to env if DB check fails
+
+    # Fall back to environment variable
+    return settings.llm_enabled
+
+
+async def create_processor_from_settings() -> ItemProcessor | None:
     """Create processor instance from application settings.
 
     Returns:
-        Configured ItemProcessor instance
+        Configured ItemProcessor instance, or None if LLM is disabled
     """
     from config import settings
     from .llm import OllamaProvider, OpenRouterProvider, LLMService
+
+    # Check if LLM processing is enabled (runtime setting overrides env)
+    if not await is_llm_enabled():
+        import logging
+        logging.getLogger(__name__).info("LLM processing disabled (env or runtime setting)")
+        return None
 
     providers = []
 

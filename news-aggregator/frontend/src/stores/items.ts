@@ -17,7 +17,8 @@ export const useItemsStore = defineStore('items', () => {
     assigned_ak: null as string | null,
     sort_by: 'date' as string,
     sort_order: 'desc' as string,
-    search: null as string | null
+    search: null as string | null,
+    since: null as string | null
   })
 
   const unreadCount = computed(() => items.value.filter((i) => !i.is_read).length)
@@ -43,7 +44,8 @@ export const useItemsStore = defineStore('items', () => {
         assigned_ak: filters.value.assigned_ak || undefined,
         sort_by: filters.value.sort_by,
         sort_order: filters.value.sort_order,
-        search: filters.value.search || undefined
+        search: filters.value.search || undefined,
+        since: filters.value.since || undefined
       })
       items.value = response.data.items
       total.value = response.data.total
@@ -130,7 +132,8 @@ export const useItemsStore = defineStore('items', () => {
       assigned_ak: null,
       sort_by: 'date',
       sort_order: 'desc',
-      search: null
+      search: null,
+      since: null
     }
   }
 

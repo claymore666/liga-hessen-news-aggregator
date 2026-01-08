@@ -14,7 +14,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import PriorityBadge from '@/components/PriorityBadge.vue'
 import SourceIcon from '@/components/SourceIcon.vue'
-import { formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow, startOfDay, subDays, subWeeks, subMonths, isMonday } from 'date-fns'
 import { de } from 'date-fns/locale'
 
 const router = useRouter()
@@ -64,6 +64,38 @@ const sortOptions = [
   { value: 'source', label: 'Quelle' }
 ]
 
+// Date range presets
+const datePresets = [
+  { value: '1d', label: '1 Tag', days: 1 },
+  { value: '3d', label: '3 Tage', days: 3 },
+  { value: '1w', label: '1 Woche', days: 7 },
+  { value: '1m', label: '1 Monat', days: 30 },
+  { value: 'all', label: 'Alle', days: null }
+]
+
+// Default: 3 days on Monday (weekend news), 1 day otherwise
+const defaultPreset = computed(() => isMonday(new Date()) ? '3d' : '1d')
+const selectedDatePreset = ref<string | null>(null)
+
+// Calculate since date from preset
+const calculateSinceDate = (preset: string): string | null => {
+  if (preset === 'all') return null
+
+  const presetConfig = datePresets.find(p => p.value === preset)
+  if (!presetConfig?.days) return null
+
+  const now = new Date()
+  const startDate = startOfDay(subDays(now, presetConfig.days))
+  return startDate.toISOString()
+}
+
+// Apply date preset
+const applyDatePreset = (preset: string) => {
+  selectedDatePreset.value = preset
+  const since = calculateSinceDate(preset)
+  itemsStore.setFilter('since', since)
+}
+
 // Computed
 const hasActiveFilters = computed(() => {
   return (
@@ -71,7 +103,8 @@ const hasActiveFilters = computed(() => {
     itemsStore.filters.source_id ||
     itemsStore.filters.connector_type ||
     itemsStore.filters.assigned_ak ||
-    itemsStore.filters.search
+    itemsStore.filters.search ||
+    (selectedDatePreset.value && selectedDatePreset.value !== defaultPreset.value)
   )
 })
 
@@ -94,6 +127,8 @@ const applySearch = () => {
 const clearAllFilters = () => {
   searchQuery.value = ''
   itemsStore.clearFilters()
+  // Reset to default date preset
+  applyDatePreset(defaultPreset.value)
   page.value = 1
   loadItems()
 }
@@ -111,7 +146,8 @@ watch(
     itemsStore.filters.source_id,
     itemsStore.filters.connector_type,
     itemsStore.filters.assigned_ak,
-    itemsStore.filters.sort_by
+    itemsStore.filters.sort_by,
+    itemsStore.filters.since
   ],
   () => {
     page.value = 1
@@ -139,6 +175,13 @@ onMounted(async () => {
     itemsStore.setFilter('search', route.query.search as string)
   }
 
+  // Apply date preset from URL or use smart default
+  const presetFromUrl = route.query.date_range as string | undefined
+  const presetToApply = presetFromUrl && datePresets.some(p => p.value === presetFromUrl)
+    ? presetFromUrl
+    : defaultPreset.value
+  applyDatePreset(presetToApply)
+
   await Promise.all([
     statsStore.fetchStats(),
     loadItems(),
@@ -148,14 +191,15 @@ onMounted(async () => {
 
 // Update URL when filters change
 watch(
-  () => itemsStore.filters,
-  (filters) => {
+  [() => itemsStore.filters, selectedDatePreset],
+  ([filters, datePreset]) => {
     const query: Record<string, string> = {}
     if (filters.priority) query.priority = filters.priority
     if (filters.connector_type) query.connector_type = filters.connector_type
     if (filters.assigned_ak) query.assigned_ak = filters.assigned_ak
     if (filters.source_id) query.source_id = String(filters.source_id)
     if (filters.search) query.search = filters.search
+    if (datePreset && datePreset !== defaultPreset.value) query.date_range = datePreset
 
     router.replace({ query })
   },
@@ -336,6 +380,22 @@ watch(
         >
           <ChevronUpDownIcon class="h-4 w-4" />
         </button>
+
+        <!-- Date Range Presets -->
+        <div class="flex items-center gap-1 ml-2 border-l border-blue-500 pl-2">
+          <button
+            v-for="preset in datePresets"
+            :key="preset.value"
+            type="button"
+            class="px-2 py-1 text-xs font-medium rounded transition-colors"
+            :class="selectedDatePreset === preset.value
+              ? 'bg-blue-700 text-white'
+              : 'bg-blue-300 text-blue-900 hover:bg-blue-500 hover:text-white'"
+            @click="applyDatePreset(preset.value)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
 
         <!-- Clear Filters -->
         <button

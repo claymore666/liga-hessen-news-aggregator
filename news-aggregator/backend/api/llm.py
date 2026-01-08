@@ -1,19 +1,25 @@
 """API endpoints for LLM configuration."""
 
+import asyncio
 import logging
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import Setting
+from models import Item, Setting
 from services.llm.ollama import OllamaProvider
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Constants
+LLM_ENABLED_KEY = "llm_enabled"
+LLM_ENABLED_AT_KEY = "llm_enabled_at"
 
 
 class PromptRequest(BaseModel):
@@ -253,3 +259,263 @@ async def get_selected_model(
         "model": settings.ollama_model,
         "source": "config",
     }
+
+
+# ============================================================================
+# LLM Enable/Disable API
+# ============================================================================
+
+
+class LLMStatusResponse(BaseModel):
+    """Current LLM processing status."""
+
+    enabled: bool
+    env_enabled: bool  # From environment variable
+    runtime_enabled: bool | None  # From database (None = not set, use env)
+    provider: str
+    model: str
+    ollama_available: bool
+    unprocessed_count: int
+    last_enabled_at: str | None
+
+
+class LLMToggleResponse(BaseModel):
+    """Response after toggling LLM."""
+
+    success: bool
+    enabled: bool
+    message: str
+    reprocess_triggered: bool = False
+    unprocessed_count: int = 0
+
+
+async def get_llm_enabled(db: AsyncSession) -> bool:
+    """Check if LLM is enabled (runtime setting overrides env)."""
+    # Check database for runtime override
+    setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_KEY)
+    )
+
+    if setting is not None:
+        return setting.value.lower() == "true"
+
+    # Fall back to environment variable
+    return settings.llm_enabled
+
+
+async def get_unprocessed_count(db: AsyncSession) -> int:
+    """Count items without LLM analysis."""
+    count = await db.scalar(
+        select(func.count(Item.id)).where(
+            (Item.summary.is_(None)) | (Item.summary == "")
+        )
+    )
+    return count or 0
+
+
+async def reprocess_unprocessed_items(limit: int = 100) -> int:
+    """Background task to reprocess items without LLM analysis."""
+    from database import async_session_maker
+    from services.processor import create_processor_from_settings
+    from services.pipeline import Pipeline
+
+    logger.info(f"Starting background reprocessing of up to {limit} unprocessed items")
+
+    async with async_session_maker() as db:
+        # Get processor
+        processor = await create_processor_from_settings()
+        if not processor:
+            logger.warning("LLM processor not available, skipping reprocess")
+            return 0
+
+        # Get unprocessed items
+        result = await db.execute(
+            select(Item)
+            .where((Item.summary.is_(None)) | (Item.summary == ""))
+            .order_by(Item.published_at.desc())
+            .limit(limit)
+        )
+        items = result.scalars().all()
+
+        if not items:
+            logger.info("No unprocessed items found")
+            return 0
+
+        logger.info(f"Found {len(items)} unprocessed items to process")
+
+        processed = 0
+        for item in items:
+            try:
+                # Get source name for context
+                from models import Channel, Source
+                channel = await db.get(Channel, item.channel_id)
+                source_name = "Unknown"
+                if channel:
+                    source = await db.get(Source, channel.source_id)
+                    if source:
+                        source_name = source.name
+
+                # Run LLM analysis
+                analysis = await processor.analyze(item, source_name=source_name)
+
+                # Update item
+                item.summary = analysis.get("summary")
+                item.detailed_analysis = analysis.get("detailed_analysis")
+                item.priority = analysis.get("priority")
+                item.priority_score = int(analysis.get("relevance_score", 0) * 100)
+
+                # Store in metadata
+                if item.metadata is None:
+                    item.metadata = {}
+                item.metadata["llm_analysis"] = analysis
+
+                await db.commit()
+                processed += 1
+                logger.debug(f"Processed item {item.id}: {item.title[:50]}...")
+
+            except Exception as e:
+                logger.error(f"Error processing item {item.id}: {e}")
+                await db.rollback()
+
+        logger.info(f"Background reprocessing completed: {processed}/{len(items)} items")
+        return processed
+
+
+@router.get("/llm/status", response_model=LLMStatusResponse)
+async def get_llm_status(db: AsyncSession = Depends(get_db)) -> LLMStatusResponse:
+    """Get current LLM processing status."""
+    # Check runtime setting
+    runtime_setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_KEY)
+    )
+    runtime_enabled = None
+    if runtime_setting is not None:
+        runtime_enabled = runtime_setting.value.lower() == "true"
+
+    # Get last enabled timestamp
+    enabled_at_setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_AT_KEY)
+    )
+    last_enabled_at = enabled_at_setting.value if enabled_at_setting else None
+
+    # Check if effectively enabled
+    enabled = await get_llm_enabled(db)
+
+    # Check Ollama availability
+    provider = OllamaProvider(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model,
+    )
+    ollama_available = await provider.is_available()
+
+    # Count unprocessed items
+    unprocessed_count = await get_unprocessed_count(db)
+
+    return LLMStatusResponse(
+        enabled=enabled,
+        env_enabled=settings.llm_enabled,
+        runtime_enabled=runtime_enabled,
+        provider="ollama",
+        model=settings.ollama_model,
+        ollama_available=ollama_available,
+        unprocessed_count=unprocessed_count,
+        last_enabled_at=last_enabled_at,
+    )
+
+
+@router.post("/llm/enable", response_model=LLMToggleResponse)
+async def enable_llm(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    auto_reprocess: bool = True,
+    reprocess_limit: int = 100,
+) -> LLMToggleResponse:
+    """Enable LLM processing at runtime.
+
+    Args:
+        auto_reprocess: If True, automatically process items without LLM analysis
+        reprocess_limit: Maximum number of items to reprocess in background
+    """
+    # Update or create setting
+    setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_KEY)
+    )
+
+    if setting:
+        setting.value = "true"
+    else:
+        setting = Setting(
+            key=LLM_ENABLED_KEY,
+            value="true",
+            description="Runtime toggle for LLM processing",
+        )
+        db.add(setting)
+
+    # Update enabled timestamp
+    timestamp_setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_AT_KEY)
+    )
+    now = datetime.utcnow().isoformat()
+
+    if timestamp_setting:
+        timestamp_setting.value = now
+    else:
+        timestamp_setting = Setting(
+            key=LLM_ENABLED_AT_KEY,
+            value=now,
+            description="Timestamp when LLM was last enabled",
+        )
+        db.add(timestamp_setting)
+
+    await db.commit()
+    logger.info("LLM processing enabled via API")
+
+    # Count unprocessed items
+    unprocessed_count = await get_unprocessed_count(db)
+
+    # Trigger background reprocessing if requested
+    reprocess_triggered = False
+    if auto_reprocess and unprocessed_count > 0:
+        background_tasks.add_task(reprocess_unprocessed_items, reprocess_limit)
+        reprocess_triggered = True
+        logger.info(f"Triggered background reprocessing of up to {reprocess_limit} items")
+
+    return LLMToggleResponse(
+        success=True,
+        enabled=True,
+        message="LLM processing enabled",
+        reprocess_triggered=reprocess_triggered,
+        unprocessed_count=unprocessed_count,
+    )
+
+
+@router.post("/llm/disable", response_model=LLMToggleResponse)
+async def disable_llm(db: AsyncSession = Depends(get_db)) -> LLMToggleResponse:
+    """Disable LLM processing at runtime."""
+    # Update or create setting
+    setting = await db.scalar(
+        select(Setting).where(Setting.key == LLM_ENABLED_KEY)
+    )
+
+    if setting:
+        setting.value = "false"
+    else:
+        setting = Setting(
+            key=LLM_ENABLED_KEY,
+            value="false",
+            description="Runtime toggle for LLM processing",
+        )
+        db.add(setting)
+
+    await db.commit()
+    logger.info("LLM processing disabled via API")
+
+    # Count unprocessed items
+    unprocessed_count = await get_unprocessed_count(db)
+
+    return LLMToggleResponse(
+        success=True,
+        enabled=False,
+        message="LLM processing disabled",
+        unprocessed_count=unprocessed_count,
+    )
