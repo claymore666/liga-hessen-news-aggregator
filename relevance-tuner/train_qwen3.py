@@ -38,14 +38,20 @@ SYSTEM_PROMPT = """Du bist ein Nachrichtenanalyse-Assistent für die Liga der Fr
 
 Analysiere Nachrichtenartikel und antworte IMMER mit gültigem JSON im folgenden Format:
 {
-  "summary": "2-3 Sätze Zusammenfassung auf Deutsch",
+  "summary": "Bis zu 8 Sätze - reine Fakten, neutral.",
+  "detailed_analysis": "Bis zu 15 Sätze - Fakten + Zitate + Auswirkungen. KEINE Liga-Spekulation!",
+  "argumentationskette": ["Argument 1", "Argument 2", ...],
   "relevant": true/false,
   "relevance_score": 0.0-1.0,
   "priority": "critical|high|medium|low|null",
   "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
   "tags": ["tag1", "tag2"],
-  "reasoning": "Kurze Begründung"
+  "reasoning": "Debug: Warum relevant/nicht relevant?"
 }
+
+detailed_analysis: Ausführliche Fakten, Zitate, Auswirkungen. KEINE "Liga dürfte...", "Wohlfahrtsverbände könnten..." - nur objektive Analyse!
+
+argumentationskette: 2-6 konkrete Argumente für Liga-Stellungnahmen/Lobbying. Direkt verwendbar, keine Konjunktive. Fokus: Betroffene Gruppen, Grundrechte, praktische Auswirkungen.
 
 Arbeitskreise:
 - AK1: Grundsatz und Sozialpolitik
@@ -55,7 +61,7 @@ Arbeitskreise:
 - AK5: Kinder, Jugend, Frauen und Familie
 - QAG: Digitalisierung, Klimaschutz, Wohnen
 
-Relevante Themen: Pflege, Kita, Migration, Eingliederungshilfe, Sozialfinanzierung, Wohlfahrtsverbände (AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden).
+Relevante Themen: Pflege, Kita, Migration, Eingliederungshilfe, Sozialfinanzierung, Wohlfahrtsverbände.
 
 Prioritäten:
 - critical: Sofortige Reaktion nötig (Kürzungen, Schließungen, Gesetzesentwürfe)
@@ -79,23 +85,28 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def format_example(record: dict) -> dict:
-    """Convert a training record to chat format with JSON output."""
+    """Convert a training record to chat format with JSON output.
+
+    Note: Full content is passed (no truncation) so the model learns
+    to produce comprehensive summaries from complete articles.
+    """
     inp = record["input"]
     labels = record["labels"]
 
-    # Build user message
+    # Build user message - full content, no truncation
     user_msg = f"""Titel: {inp["title"]}
-Inhalt: {inp["content"][:2000]}
+Inhalt: {inp["content"]}
 Quelle: {inp["source"]}
 Datum: {inp["date"]}"""
 
     # Get reasoning from provenance if available
     reasoning = record.get("provenance", {}).get("reasoning", "Keine Begründung verfügbar.")
 
-    # Generate a summary from content (first ~200 chars as placeholder)
-    # In production, summaries should be pre-generated during labeling
-    content_preview = inp["content"][:500].replace("\n", " ").strip()
-    summary = record.get("summary", f"{content_preview[:200]}...")
+    # Get summary, detailed_analysis and argumentationskette from labeling output
+    output = record.get("output", {})
+    summary = output.get("summary") or "Keine Zusammenfassung verfügbar."
+    detailed_analysis = output.get("detailed_analysis") or "Keine detaillierte Analyse verfügbar."
+    argumentationskette = output.get("argumentationskette") or []
 
     # Calculate relevance score
     relevance_score = 1.0 if labels["relevant"] else 0.0
@@ -122,6 +133,8 @@ Datum: {inp["date"]}"""
     # Build JSON response
     response_obj = {
         "summary": summary,
+        "detailed_analysis": detailed_analysis,
+        "argumentationskette": argumentationskette,
         "relevant": labels["relevant"],
         "relevance_score": relevance_score,
         "priority": labels.get("priority"),

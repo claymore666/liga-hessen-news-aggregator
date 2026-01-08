@@ -283,10 +283,47 @@ EHER MEDIUM:
 === OUTPUT FORMAT ===
 
 Für jeden Artikel ausgeben (eine JSON-Zeile):
-{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|"AK2"|"AK3"|"AK4"|"AK5"|"QAG"|null, "priority": "critical"|"high"|"medium"|"low"|null, "reasoning": "Kurze Begründung auf Deutsch"}
+{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|...|null, "priority": "critical"|...|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}
 
-Bei relevant=false: ak=null und priority=null
-Bei relevant=true: ak und priority müssen gesetzt sein
+=== FELDER summary, detailed_analysis UND argumentationskette ===
+
+Alle drei Felder sind PFLICHT bei relevant=true.
+
+**summary** (bis zu 8 Sätze):
+- Reine Fakten: Was ist passiert?
+- Neutral und sachlich formuliert
+- Keine Bewertungen, Einschätzungen oder Liga-Interpretation
+- Beispiel: "Ein SPD-Mitgliederbegehren gegen die Bürgergeldreform könnte zu spät kommen. Der Parteivorstand hat den Start der Abstimmung auf den 23. Dezember festgelegt. Die Reform sieht schärfere Sanktionen für Bürgergeld-Empfänger vor."
+
+**detailed_analysis** (bis zu 15 Sätze):
+- Was ist passiert? (Fakten)
+- Wer hat was gesagt? (Zitate und Positionen)
+- Welche Auswirkungen sind zu erwarten?
+- KEINE Liga-Spekulation! Keine "Liga dürfte...", "Wohlfahrtsverbände könnten..."
+- Nur Fakten, Zitate und objektive Auswirkungsanalyse
+- Beispiel: "Sophie Ringhand, Thüringer Jusos-Chefin, kritisiert den Zeitplan als 'unglücklich'. Mitinitiator Denny Möller fordert: 'Das parlamentarische Verfahren darf nicht abgeschlossen werden, bevor das Begehren ausgewertet ist.' Die Reform würde Bürgergeld-Empfängern bei Nicht-Kooperation schärfere Sanktionen auferlegen. Selbst bei erfolgreichem Begehren ist das Ergebnis nicht bindend."
+
+**argumentationskette** (Array von Strings, 2-6 Argumente):
+- Konkrete Argumente für Liga-Stellungnahmen/Lobbying
+- Klare, prägnante Aussagen - direkt verwendbar
+- Fokus auf: Betroffene Gruppen, Grundrechte, praktische Auswirkungen
+- KEINE Konjunktive ("dürfte", "könnte") - sondern klare Aussagen
+- Beispiel:
+  [
+    "Verschärfte Sanktionen gefährden Existenzsicherung vulnerabler Gruppen",
+    "Komplettstreichung widerspricht dem Würde-Prinzip des Grundgesetzes",
+    "Wohlfahrtsverbände tragen Mehrbelastung durch Notfallhilfen",
+    "Sanktionsdruck verbessert nicht nachhaltige Arbeitsmarktintegration"
+  ]
+
+WICHTIG:
+- summary: Kurze Fakten
+- detailed_analysis: Ausführliche Fakten + Zitate + Auswirkungen (KEINE Liga-Spekulation)
+- argumentationskette: Konkrete Liga-Argumente
+- Keine "..." am Ende
+
+Bei relevant=false: ak=null, priority=null, summary=null, detailed_analysis=null, argumentationskette=null
+Bei relevant=true: Alle Felder MÜSSEN gesetzt sein
 ```
 
 ## Usage

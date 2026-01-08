@@ -164,7 +164,11 @@ def count_batch_items(batch_num: int) -> int:
 
 
 def format_items_for_labeling(items: list[dict]) -> str:
-    """Format items as text for the labeling agent."""
+    """Format items as text for the labeling agent.
+
+    Note: Full content is passed to the LLM (no truncation) so that
+    summary and detailed_analysis can capture all relevant information.
+    """
     lines = []
     for i, item in enumerate(items, 1):
         inp = item.get("input", {})
@@ -172,7 +176,7 @@ def format_items_for_labeling(items: list[dict]) -> str:
         lines.append(f"Titel: {inp.get('title', 'N/A')}")
         lines.append(f"Quelle: {inp.get('source', 'N/A')}")
         lines.append(f"Datum: {inp.get('date', 'N/A')}")
-        content = inp.get('content', 'N/A')[:1200]  # Shorter for local LLM
+        content = inp.get('content', 'N/A')  # Full content - no truncation
         lines.append(f"Inhalt: {content}")
         lines.append("")
 
@@ -192,13 +196,17 @@ Analysiere die folgenden {num_items} Artikel. Gib für JEDEN Artikel genau EINE 
 === AUSGABE ===
 
 Gib für JEDEN der {num_items} Artikel genau EINE JSON-Zeile aus. Format:
-{{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|"AK2"|"AK3"|"AK4"|"AK5"|"QAG"|null, "priority": "critical"|"high"|"medium"|"low"|null, "reasoning": "Kurze Begründung"}}
+{{"title": "...", "relevant": true/false, "ak": "AK1"|...|null, "priority": "critical"|...|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}}
 
 WICHTIG:
 - Genau {num_items} JSON-Zeilen
 - Keine zusätzlichen Erklärungen
-- Bei relevant=false: ak=null und priority=null
-- Bei relevant=true: ak und priority MÜSSEN gesetzt sein
+- Bei relevant=false: ak=null, priority=null, summary=null, detailed_analysis=null, argumentationskette=null
+- Bei relevant=true: ALLE Felder MÜSSEN gesetzt sein
+- summary: Reine Fakten (bis zu 8 Sätze)
+- detailed_analysis: Fakten + Zitate + Auswirkungen (bis zu 15 Sätze) - KEINE Liga-Spekulation!
+- argumentationskette: 2-6 konkrete Argumente für Liga (direkt verwendbar, keine Konjunktive)
+- Keine "..." am Ende
 
 Beginne jetzt mit der Analyse (nur JSON-Zeilen, keine Erklärungen):"""
 
@@ -213,7 +221,7 @@ def call_ollama(prompt: str, model: str) -> str:
         "stream": False,
         "options": {
             "temperature": 0.3,  # Lower for consistency
-            "num_predict": 4096,
+            "num_predict": 8192,  # Increased for longer summary/detailed_analysis output
         }
     }
 
@@ -293,6 +301,11 @@ def merge_labels(original: dict, labels: Optional[dict]) -> dict:
             "ak": None,
             "reaction_type": None
         }
+        result["output"] = {
+            "summary": None,
+            "detailed_analysis": None,
+            "argumentationskette": None
+        }
         result["provenance"]["reasoning"] = "LABELING_FAILED"
         return result
 
@@ -301,6 +314,12 @@ def merge_labels(original: dict, labels: Optional[dict]) -> dict:
         "priority": labels.get("priority"),
         "ak": labels.get("ak"),
         "reaction_type": None
+    }
+    # Store summary, detailed_analysis and argumentationskette in output field
+    result["output"] = {
+        "summary": labels.get("summary"),
+        "detailed_analysis": labels.get("detailed_analysis"),
+        "argumentationskette": labels.get("argumentationskette")
     }
     result["provenance"]["reasoning"] = labels.get("reasoning", "")
 
