@@ -381,7 +381,7 @@ watch(
                     {{ item.title }}
                   </p>
                 </div>
-                <span class="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0">
+                <span class="flex items-center gap-1 text-xs text-black flex-shrink-0">
                   <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
                   {{ formatTime(item.published_at) }}
                   <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
