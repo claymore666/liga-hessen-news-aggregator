@@ -29,24 +29,24 @@ const isActive = (path: string) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50">
+  <div class="min-h-screen bg-blue-50">
     <!-- Mobile sidebar backdrop -->
     <div
       v-if="sidebarOpen"
-      class="fixed inset-0 z-40 bg-gray-600 bg-opacity-75 lg:hidden"
+      class="fixed inset-0 z-40 bg-blue-900 bg-opacity-50 lg:hidden"
       @click="sidebarOpen = false"
     />
 
     <!-- Mobile sidebar -->
     <div
       v-if="sidebarOpen"
-      class="fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-xl lg:hidden"
+      class="fixed inset-y-0 left-0 z-50 w-64 bg-blue-100 shadow-xl lg:hidden"
     >
-      <div class="flex h-16 items-center justify-between px-4">
-        <span class="text-xl font-bold text-liga-600">Liga News</span>
+      <div class="flex h-16 items-center justify-between px-4 border-b border-blue-300">
+        <span class="text-xl font-bold text-blue-800">Liga News</span>
         <button
           type="button"
-          class="text-gray-500 hover:text-gray-700"
+          class="text-blue-600 hover:text-blue-800"
           @click="sidebarOpen = false"
         >
           <XMarkIcon class="h-6 w-6" />
@@ -60,8 +60,8 @@ const isActive = (path: string) => {
           class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
           :class="[
             isActive(item.to)
-              ? 'bg-liga-50 text-liga-600'
-              : 'text-gray-700 hover:bg-gray-100'
+              ? 'bg-blue-300 text-blue-900'
+              : 'text-blue-800 hover:bg-blue-200'
           ]"
           @click="sidebarOpen = false"
         >
@@ -73,9 +73,9 @@ const isActive = (path: string) => {
 
     <!-- Desktop sidebar -->
     <div class="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-      <div class="flex min-h-0 flex-1 flex-col border-r border-gray-200 bg-white">
-        <div class="flex h-16 items-center px-6">
-          <span class="text-xl font-bold text-liga-600">Liga News</span>
+      <div class="flex min-h-0 flex-1 flex-col border-r border-blue-300 bg-blue-100">
+        <div class="flex h-16 items-center px-6 border-b border-blue-300">
+          <span class="text-xl font-bold text-blue-800">Liga News</span>
         </div>
         <nav class="mt-4 flex-1 px-3">
           <RouterLink
@@ -85,16 +85,16 @@ const isActive = (path: string) => {
             class="mb-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
             :class="[
               isActive(item.to)
-                ? 'bg-liga-50 text-liga-600'
-                : 'text-gray-700 hover:bg-gray-100'
+                ? 'bg-blue-300 text-blue-900'
+                : 'text-blue-800 hover:bg-blue-200'
             ]"
           >
             <component :is="item.icon" class="h-5 w-5" />
             {{ item.name }}
           </RouterLink>
         </nav>
-        <div class="border-t border-gray-200 p-4">
-          <p class="text-xs text-gray-500">
+        <div class="border-t border-blue-300 p-4">
+          <p class="text-xs text-blue-600">
             Liga der Freien Wohlfahrtspflege Hessen
           </p>
         </div>
@@ -104,15 +104,15 @@ const isActive = (path: string) => {
     <!-- Main content -->
     <div class="lg:pl-64">
       <!-- Mobile header -->
-      <div class="sticky top-0 z-10 flex h-16 items-center gap-4 border-b border-gray-200 bg-white px-4 lg:hidden">
+      <div class="sticky top-0 z-10 flex h-16 items-center gap-4 border-b border-blue-300 bg-blue-100 px-4 lg:hidden">
         <button
           type="button"
-          class="text-gray-500 hover:text-gray-700"
+          class="text-blue-600 hover:text-blue-800"
           @click="sidebarOpen = true"
         >
           <Bars3Icon class="h-6 w-6" />
         </button>
-        <span class="text-lg font-semibold text-liga-600">Liga News</span>
+        <span class="text-lg font-semibold text-blue-800">Liga News</span>
       </div>
 
       <main class="p-4 lg:p-8">
