@@ -363,7 +363,7 @@ watch(
       </div>
 
       <!-- Scrollable News List -->
-      <div v-else class="max-h-[calc(100vh-340px)] min-h-[300px] overflow-y-auto">
+      <div v-else class="max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto">
         <ul>
           <li v-for="(item, index) in itemsStore.items" :key="item.id">
             <RouterLink
