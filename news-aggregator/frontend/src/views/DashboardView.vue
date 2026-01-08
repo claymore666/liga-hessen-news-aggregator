@@ -349,7 +349,7 @@ watch(
         </button>
 
         <!-- Result count -->
-        <span class="ml-auto text-xs text-gray-500">{{ itemsStore.total }} Ergebnisse</span>
+        <span class="ml-auto text-sm font-semibold text-black">{{ itemsStore.total }} Ergebnisse</span>
       </div>
 
       <!-- Loading -->
@@ -384,7 +384,7 @@ watch(
                 <span class="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0">
                   <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
                   {{ formatTime(item.published_at) }}
-                  <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs text-blue-800">
+                  <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
                     {{ item.metadata.llm_analysis.assigned_ak }}
                   </span>
                 </span>
