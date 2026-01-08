@@ -172,49 +172,49 @@ watch(
 
     <!-- Stats Cards -->
     <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
-      <div class="card py-2 px-3">
+      <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
         <div class="flex items-center gap-2">
-          <div class="rounded bg-liga-100 p-1.5">
-            <NewspaperIcon class="h-4 w-4 text-liga-600" />
+          <div class="rounded bg-blue-200 p-1.5">
+            <NewspaperIcon class="h-4 w-4 text-blue-700" />
           </div>
           <div>
-            <p class="text-xs text-gray-500">Nachrichten</p>
+            <p class="text-xs text-blue-600">Nachrichten</p>
             <p class="text-lg font-semibold text-gray-900">{{ statsStore.stats?.total_items ?? '-' }}</p>
           </div>
         </div>
       </div>
 
-      <div class="card py-2 px-3">
+      <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
         <div class="flex items-center gap-2">
-          <div class="rounded bg-yellow-100 p-1.5">
-            <ExclamationTriangleIcon class="h-4 w-4 text-yellow-600" />
+          <div class="rounded bg-yellow-200 p-1.5">
+            <ExclamationTriangleIcon class="h-4 w-4 text-yellow-700" />
           </div>
           <div>
-            <p class="text-xs text-gray-500">Ungelesen</p>
+            <p class="text-xs text-blue-600">Ungelesen</p>
             <p class="text-lg font-semibold text-gray-900">{{ statsStore.stats?.unread_items ?? '-' }}</p>
           </div>
         </div>
       </div>
 
-      <div class="card py-2 px-3">
+      <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
         <div class="flex items-center gap-2">
-          <div class="rounded bg-green-100 p-1.5">
-            <RssIcon class="h-4 w-4 text-green-600" />
+          <div class="rounded bg-green-200 p-1.5">
+            <RssIcon class="h-4 w-4 text-green-700" />
           </div>
           <div>
-            <p class="text-xs text-gray-500">Quellen</p>
+            <p class="text-xs text-blue-600">Quellen</p>
             <p class="text-lg font-semibold text-gray-900">{{ statsStore.stats?.sources_count ?? '-' }}</p>
           </div>
         </div>
       </div>
 
-      <div class="card py-2 px-3">
+      <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
         <div class="flex items-center gap-2">
-          <div class="rounded bg-purple-100 p-1.5">
-            <ClockIcon class="h-4 w-4 text-purple-600" />
+          <div class="rounded bg-purple-200 p-1.5">
+            <ClockIcon class="h-4 w-4 text-purple-700" />
           </div>
           <div>
-            <p class="text-xs text-gray-500">Letzter Abruf</p>
+            <p class="text-xs text-blue-600">Letzter Abruf</p>
             <p class="text-sm font-semibold text-gray-900">{{ formatTime(statsStore.stats?.last_fetch_at ?? null) }}</p>
           </div>
         </div>
@@ -258,9 +258,9 @@ watch(
     </div>
 
     <!-- News Items with Filters -->
-    <div class="card p-0 overflow-hidden">
+    <div class="rounded-lg border border-blue-300 overflow-hidden">
       <!-- Filter Bar (always visible) -->
-      <div class="flex flex-wrap items-center gap-2 px-4 py-2 bg-gray-200 border-b border-gray-300">
+      <div class="flex flex-wrap items-center gap-2 px-4 py-2 bg-blue-400 border-b border-blue-500">
         <!-- Search -->
         <div class="relative">
           <input
@@ -384,7 +384,7 @@ watch(
                 <span class="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0">
                   <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
                   {{ formatTime(item.published_at) }}
-                  <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-gray-100 px-1 text-xs">
+                  <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs text-blue-800">
                     {{ item.metadata.llm_analysis.assigned_ak }}
                   </span>
                 </span>
@@ -395,7 +395,7 @@ watch(
       </div>
 
       <!-- Pagination -->
-      <div v-if="itemsStore.total > pageSize" class="flex items-center justify-between border-t border-gray-200 px-4 py-2">
+      <div v-if="itemsStore.total > pageSize" class="flex items-center justify-between border-t border-blue-300 bg-blue-100 px-4 py-2">
         <p class="text-sm text-gray-500">
           {{ (page - 1) * pageSize + 1 }} - {{ Math.min(page * pageSize, itemsStore.total) }} von {{ itemsStore.total }}
         </p>
