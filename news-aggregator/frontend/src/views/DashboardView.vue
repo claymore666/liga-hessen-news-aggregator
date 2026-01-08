@@ -364,11 +364,12 @@ watch(
 
       <!-- Scrollable News List -->
       <div v-else class="max-h-[calc(100vh-340px)] min-h-[300px] overflow-y-auto">
-        <ul class="divide-y divide-gray-100">
-          <li v-for="item in itemsStore.items" :key="item.id">
+        <ul>
+          <li v-for="(item, index) in itemsStore.items" :key="item.id">
             <RouterLink
               :to="`/items/${item.id}`"
-              class="block py-2 hover:bg-gray-50 px-4 transition-colors"
+              class="block py-2 px-4 transition-colors hover:bg-blue-100"
+              :class="index % 2 === 1 ? 'bg-blue-50' : ''"
             >
               <div class="flex items-center gap-2">
                 <PriorityBadge :priority="item.priority" class="flex-shrink-0" />
