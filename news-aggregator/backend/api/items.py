@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker
-from models import Item, Priority, Source
+from models import Channel, Item, Priority, Source
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
 router = APIRouter()
@@ -22,6 +22,7 @@ async def list_items(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     source_id: int | None = None,
+    channel_id: int | None = None,
     priority: Priority | None = None,
     is_read: bool | None = None,
     is_starred: bool | None = None,
@@ -39,11 +40,16 @@ async def list_items(
     By default, only shows relevant items (critical, high, medium priority).
     Set relevant_only=false to include all items including LOW priority.
     """
-    query = select(Item).options(selectinload(Item.source))
+    query = select(Item).options(
+        selectinload(Item.channel).selectinload(Channel.source)
+    )
 
     # Apply filters
-    if source_id is not None:
-        query = query.where(Item.source_id == source_id)
+    if channel_id is not None:
+        query = query.where(Item.channel_id == channel_id)
+    elif source_id is not None:
+        # Filter by source through channel
+        query = query.join(Channel).where(Channel.source_id == source_id)
     if priority is not None:
         query = query.where(Item.priority == priority)
     elif relevant_only:
@@ -63,7 +69,10 @@ async def list_items(
             (Item.title.ilike(search_pattern)) | (Item.content.ilike(search_pattern))
         )
     if connector_type is not None:
-        query = query.join(Source).where(Source.connector_type == connector_type)
+        # Filter by connector type through channel
+        if channel_id is None and source_id is None:
+            query = query.join(Channel)
+        query = query.where(Channel.connector_type == connector_type)
     if assigned_ak is not None:
         # Filter by assigned_ak in metadata.llm_analysis.assigned_ak
         query = query.where(
@@ -89,9 +98,13 @@ async def list_items(
         else:
             query = query.order_by(priority_order.asc(), Item.id.desc())
     elif sort_by == "source":
-        # Need to join Source if not already joined
-        if connector_type is None:
-            query = query.join(Source, isouter=True)
+        # Need to join Channel and Source if not already joined
+        if channel_id is None and source_id is None and connector_type is None:
+            query = query.join(Channel, isouter=True).join(Source, isouter=True)
+        elif connector_type is not None:
+            query = query.join(Source, Channel.source_id == Source.id, isouter=True)
+        else:
+            query = query.join(Source, Channel.source_id == Source.id, isouter=True)
         if sort_order == "asc":
             query = query.order_by(Source.name.asc(), Item.id.desc())
         else:
@@ -124,7 +137,11 @@ async def get_item(
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
     """Get a single item by ID."""
-    query = select(Item).where(Item.id == item_id).options(selectinload(Item.source))
+    query = (
+        select(Item)
+        .where(Item.id == item_id)
+        .options(selectinload(Item.channel).selectinload(Channel.source))
+    )
     result = await db.execute(query)
     item = result.scalar_one_or_none()
 
@@ -141,7 +158,11 @@ async def update_item(
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
     """Update an item (read status, starred, notes)."""
-    query = select(Item).where(Item.id == item_id).options(selectinload(Item.source))
+    query = (
+        select(Item)
+        .where(Item.id == item_id)
+        .options(selectinload(Item.channel).selectinload(Channel.source))
+    )
     result = await db.execute(query)
     item = result.scalar_one_or_none()
 
@@ -178,14 +199,17 @@ async def mark_as_read(
 @router.post("/items/mark-all-read")
 async def mark_all_as_read(
     source_id: int | None = None,
+    channel_id: int | None = None,
     before: datetime | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     """Mark multiple items as read."""
     query = select(Item).where(Item.is_read == False)  # noqa: E712
 
-    if source_id is not None:
-        query = query.where(Item.source_id == source_id)
+    if channel_id is not None:
+        query = query.where(Item.channel_id == channel_id)
+    elif source_id is not None:
+        query = query.join(Channel).where(Channel.source_id == source_id)
     if before is not None:
         query = query.where(Item.published_at <= before)
 
@@ -211,7 +235,9 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
         for item_id in item_ids:
             try:
                 result = await db.execute(
-                    select(Item).where(Item.id == item_id).options(selectinload(Item.source))
+                    select(Item)
+                    .where(Item.id == item_id)
+                    .options(selectinload(Item.channel).selectinload(Channel.source))
                 )
                 item = result.scalar_one_or_none()
                 if not item:
@@ -271,6 +297,7 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
 async def reprocess_items(
     background_tasks: BackgroundTasks,
     source_id: int | None = Query(None, description="Only reprocess items from this source"),
+    channel_id: int | None = Query(None, description="Only reprocess items from this channel"),
     limit: int = Query(100, ge=1, le=1000, description="Max items to reprocess"),
     force: bool = Query(False, description="Reprocess even if already has LLM analysis"),
     db: AsyncSession = Depends(get_db),
@@ -281,8 +308,10 @@ async def reprocess_items(
     """
     query = select(Item.id).order_by(Item.published_at.desc())
 
-    if source_id is not None:
-        query = query.where(Item.source_id == source_id)
+    if channel_id is not None:
+        query = query.where(Item.channel_id == channel_id)
+    elif source_id is not None:
+        query = query.join(Channel).where(Channel.source_id == source_id)
 
     # When not forcing, only select items without LLM analysis
     # Use SQLite JSON extract to check if key exists

@@ -2,12 +2,15 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
+if TYPE_CHECKING:
+    pass
 
 
 class ConnectorType(str, Enum):
@@ -45,17 +48,62 @@ class RuleType(str, Enum):
 
 
 class Source(Base):
-    """A configured news source."""
+    """An organization or entity we track (e.g., BMAS, SPD Hessen).
+
+    Sources represent organizations that may have multiple channels (RSS, X.com, etc.).
+    """
 
     __tablename__ = "sources"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_stakeholder: Mapped[bool] = mapped_column(default=False)  # Never filter out
+    enabled: Mapped[bool] = mapped_column(default=True)  # Master toggle for all channels
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    channels: Mapped[list["Channel"]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
+        order_by="Channel.connector_type",
+    )
+
+    @property
+    def active_channels(self) -> list["Channel"]:
+        """Return enabled channels for this source."""
+        return [c for c in self.channels if c.enabled]
+
+    @property
+    def channel_count(self) -> int:
+        """Return total number of channels."""
+        return len(self.channels)
+
+    @property
+    def has_errors(self) -> bool:
+        """Return True if any channel has an error."""
+        return any(c.last_error for c in self.channels)
+
+
+class Channel(Base):
+    """A specific feed/channel for a source (e.g., RSS, X.com, Instagram).
+
+    Each channel represents one data source (URL, handle, etc.) with its own
+    fetch interval and configuration.
+    """
+
+    __tablename__ = "channels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # e.g., "Aktuell", "Politik"
     connector_type: Mapped[ConnectorType] = mapped_column(String(50))
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    source_identifier: Mapped[str] = mapped_column(String(500), nullable=True)
+    source_identifier: Mapped[str | None] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
-    is_stakeholder: Mapped[bool] = mapped_column(default=False)  # Never filter out, always keep for training
     fetch_interval_minutes: Mapped[int] = mapped_column(default=30)
     last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -65,12 +113,15 @@ class Source(Base):
     )
 
     # Relationships
-    items: Mapped[list["Item"]] = relationship(back_populates="source", cascade="all, delete-orphan")
+    source: Mapped["Source"] = relationship(back_populates="channels")
+    items: Mapped[list["Item"]] = relationship(back_populates="channel", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("ix_sources_connector_type", "connector_type"),
+        Index("ix_channels_source_id", "source_id"),
+        Index("ix_channels_connector_type", "connector_type"),
         Index(
-            "ix_sources_unique_identifier",
+            "ix_channels_unique_identifier",
+            "source_id",
             "connector_type",
             "source_identifier",
             unique=True,
@@ -80,17 +131,40 @@ class Source(Base):
     @staticmethod
     def extract_identifier(connector_type: str, config: dict[str, Any]) -> str | None:
         """Extract the unique identifier from config based on connector type."""
-        if connector_type in ("x_scraper", "twitter", "instagram"):
+        if connector_type in ("x_scraper", "twitter", "instagram", "instagram_scraper"):
             return config.get("username", "").lower()
         elif connector_type in ("mastodon", "bluesky"):
             return config.get("handle", "").lower()
-        elif connector_type == "rss":
+        elif connector_type in ("rss", "html", "pdf", "google_alerts"):
             return config.get("url", "").lower()
-        elif connector_type == "html":
-            return config.get("url", "").lower()
-        elif connector_type == "pdf":
-            return config.get("url", "").lower()
+        elif connector_type == "telegram":
+            return config.get("channel", "").lower()
         return None
+
+    @property
+    def display_name(self) -> str:
+        """Return display name for this channel."""
+        if self.name:
+            return self.name
+        return {
+            "rss": "RSS Feed",
+            "x_scraper": "X.com",
+            "mastodon": "Mastodon",
+            "bluesky": "Bluesky",
+            "instagram_scraper": "Instagram",
+            "instagram": "Instagram",
+            "telegram": "Telegram",
+            "html": "Website",
+            "pdf": "PDF",
+            "google_alerts": "Google Alerts",
+            "twitter": "Twitter",
+            "linkedin": "LinkedIn",
+        }.get(self.connector_type, self.connector_type)
+
+    @property
+    def is_effectively_enabled(self) -> bool:
+        """Return True if both channel and parent source are enabled."""
+        return self.enabled and self.source.enabled
 
 
 class Item(Base):
@@ -99,7 +173,7 @@ class Item(Base):
     __tablename__ = "items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"))
     external_id: Mapped[str] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(500))
     content: Mapped[str] = mapped_column(Text)
@@ -117,19 +191,29 @@ class Item(Base):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     # Relationships
-    source: Mapped["Source"] = relationship(back_populates="items")
+    channel: Mapped["Channel"] = relationship(back_populates="items")
     matched_rules: Mapped[list["ItemRuleMatch"]] = relationship(
         back_populates="item", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
-        Index("ix_items_source_id", "source_id"),
+        Index("ix_items_channel_id", "channel_id"),
         Index("ix_items_external_id", "external_id"),
         Index("ix_items_content_hash", "content_hash"),
         Index("ix_items_published_at", "published_at"),
         Index("ix_items_priority", "priority"),
         Index("ix_items_is_read", "is_read"),
     )
+
+    @property
+    def source(self) -> "Source":
+        """Get the parent source (organization) through the channel."""
+        return self.channel.source
+
+    @property
+    def source_id(self) -> int:
+        """Backward compatibility: get source_id through channel."""
+        return self.channel.source_id
 
 
 class Rule(Base):

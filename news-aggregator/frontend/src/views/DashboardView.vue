@@ -382,7 +382,7 @@ watch(
                   </p>
                 </div>
                 <span class="flex items-center gap-1 text-xs text-black flex-shrink-0">
-                  <SourceIcon v-if="item.source" :connector-type="item.source.connector_type" size="sm" />
+                  <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="sm" />
                   {{ formatTime(item.published_at) }}
                   <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
                     {{ item.metadata.llm_analysis.assigned_ak }}
@@ -425,12 +425,12 @@ watch(
       <button
         type="button"
         class="btn btn-primary text-sm"
-        :disabled="sourcesStore.fetching !== null"
-        @click="sourcesStore.triggerFetchAll()"
+        :disabled="sourcesStore.fetchingSourceId !== null"
+        @click="sourcesStore.fetchAllChannels()"
       >
         <ArrowPathIcon
           class="mr-1.5 h-4 w-4"
-          :class="{ 'animate-spin': sourcesStore.fetching !== null }"
+          :class="{ 'animate-spin': sourcesStore.fetchingSourceId !== null }"
         />
         Alle abrufen
       </button>

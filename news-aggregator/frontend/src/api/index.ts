@@ -1,14 +1,33 @@
 import api from './client'
-import type { Source, Item, Rule, Stats, PaginatedResponse } from '@/types'
+import type { Source, SourceCreate, Channel, ChannelCreate, Item, Rule, Stats, SourceStats, ChannelStats, PaginatedResponse } from '@/types'
 
 export const sourcesApi = {
-  list: () => api.get<Source[]>('/sources'),
+  list: (params?: { enabled?: boolean; has_errors?: boolean }) =>
+    api.get<Source[]>('/sources', { params }),
+  listWithErrors: () => api.get<Source[]>('/sources/errors'),
   get: (id: number) => api.get<Source>(`/sources/${id}`),
-  create: (data: Partial<Source>) => api.post<Source>('/sources', data),
-  update: (id: number, data: Partial<Source>) => api.put<Source>(`/sources/${id}`, data),
+  create: (data: SourceCreate) => api.post<Source>('/sources', data),
+  update: (id: number, data: Partial<Source>) => api.patch<Source>(`/sources/${id}`, data),
   delete: (id: number) => api.delete(`/sources/${id}`),
-  fetch: (id: number) => api.post(`/sources/${id}/fetch`),
-  fetchAll: () => api.post('/sources/fetch-all')
+  enable: (id: number) => api.post<Source>(`/sources/${id}/enable`),
+  disable: (id: number) => api.post<Source>(`/sources/${id}/disable`),
+  fetchAll: (trainingMode?: boolean) =>
+    api.post('/sources/fetch-all', null, { params: { training_mode: trainingMode } }),
+  fetchAllChannels: (id: number, trainingMode?: boolean) =>
+    api.post(`/sources/${id}/fetch-all`, null, { params: { training_mode: trainingMode } }),
+  // Add channel to source
+  addChannel: (sourceId: number, data: ChannelCreate) =>
+    api.post<Channel>(`/sources/${sourceId}/channels`, data)
+}
+
+export const channelsApi = {
+  get: (id: number) => api.get<Channel>(`/channels/${id}`),
+  update: (id: number, data: Partial<Channel>) => api.patch<Channel>(`/channels/${id}`, data),
+  delete: (id: number) => api.delete(`/channels/${id}`),
+  fetch: (id: number, trainingMode?: boolean) =>
+    api.post(`/channels/${id}/fetch`, null, { params: { training_mode: trainingMode } }),
+  enable: (id: number) => api.post<Channel>(`/channels/${id}/enable`),
+  disable: (id: number) => api.post<Channel>(`/channels/${id}/disable`)
 }
 
 export const itemsApi = {
@@ -17,7 +36,11 @@ export const itemsApi = {
     page_size?: number
     priority?: string
     source_id?: number
+    channel_id?: number
     is_read?: boolean
+    is_starred?: boolean
+    since?: string
+    until?: string
     connector_type?: string
     assigned_ak?: string
     sort_by?: string
@@ -44,8 +67,12 @@ export const rulesApi = {
 
 export const statsApi = {
   get: () => api.get<Stats>('/stats'),
-  priorities: () => api.get('/stats/priorities'),
-  sources: () => api.get('/stats/sources')
+  byPriority: () => api.get<Record<string, number>>('/stats/by-priority'),
+  bySource: (sourceId?: number) =>
+    api.get<SourceStats[]>('/stats/by-source', { params: sourceId ? { source_id: sourceId } : undefined }),
+  byChannel: (params?: { source_id?: number; connector_type?: string }) =>
+    api.get<ChannelStats[]>('/stats/by-channel', { params }),
+  byConnector: () => api.get<{ connector_type: string; channel_count: number; item_count: number; unread_count: number }[]>('/stats/by-connector')
 }
 
 export const connectorsApi = {

@@ -17,44 +17,94 @@ class BaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# === Source schemas ===
+# === Channel schemas ===
 
 
-class SourceBase(BaseModel):
-    """Base source fields."""
+class ChannelBase(BaseModel):
+    """Base channel fields."""
 
-    name: str = Field(..., min_length=1, max_length=255)
+    name: str | None = Field(None, max_length=255)  # Display name like "Aktuell", "Politik"
     connector_type: ConnectorType
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
-    is_stakeholder: bool = False  # Never filter out, always keep for training data
     fetch_interval_minutes: int = Field(default=30, ge=5, le=1440)
 
 
-class SourceCreate(SourceBase):
-    """Schema for creating a source."""
+class ChannelCreate(ChannelBase):
+    """Schema for creating a channel."""
 
     pass
 
 
-class SourceUpdate(BaseModel):
-    """Schema for updating a source."""
+class ChannelUpdate(BaseModel):
+    """Schema for updating a channel."""
 
-    name: str | None = Field(None, min_length=1, max_length=255)
+    name: str | None = Field(None, max_length=255)
     config: dict[str, Any] | None = None
     enabled: bool | None = None
-    is_stakeholder: bool | None = None
     fetch_interval_minutes: int | None = Field(None, ge=5, le=1440)
 
 
-class SourceResponse(SourceBase, BaseSchema):
-    """Schema for source response."""
+class ChannelResponse(ChannelBase, BaseSchema):
+    """Schema for channel response."""
 
     id: int
+    source_id: int
+    source_identifier: str | None
     last_fetch_at: datetime | None
     last_error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ChannelBrief(BaseSchema):
+    """Minimal channel info for embedding in item responses."""
+
+    id: int
+    connector_type: ConnectorType
+    name: str | None
+    enabled: bool
+    last_error: str | None
+
+
+# === Source schemas ===
+
+
+class SourceBase(BaseModel):
+    """Base source fields (organization-level)."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    is_stakeholder: bool = False  # Never filter out, always keep for training data
+    enabled: bool = True  # Master toggle for all channels
+
+
+class SourceCreate(SourceBase):
+    """Schema for creating a source with optional initial channels."""
+
+    channels: list[ChannelCreate] = Field(default_factory=list)
+
+
+class SourceUpdate(BaseModel):
+    """Schema for updating a source (organization-level fields only)."""
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = None
+    enabled: bool | None = None
+    is_stakeholder: bool | None = None
+
+
+class SourceResponse(SourceBase, BaseSchema):
+    """Schema for source response with nested channels."""
+
+    id: int
+    channels: list[ChannelResponse] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    # Computed properties (set by the API endpoint)
+    channel_count: int = 0
+    enabled_channel_count: int = 0
 
 
 class SourceBrief(BaseSchema):
@@ -62,7 +112,6 @@ class SourceBrief(BaseSchema):
 
     id: int
     name: str
-    connector_type: ConnectorType
 
 
 # === Item schemas ===
@@ -84,8 +133,9 @@ class ItemResponse(ItemBase, BaseSchema):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: int
-    source_id: int
-    source: SourceBrief | None = None
+    channel_id: int
+    channel: ChannelBrief | None = None
+    source: SourceBrief | None = None  # Derived from channel.source
     external_id: str
     summary: str | None
     fetched_at: datetime
@@ -182,12 +232,41 @@ class StatsResponse(BaseModel):
     critical_items: int
     high_priority_items: int
     sources_count: int
+    channels_count: int  # New: total number of channels
     enabled_sources: int
+    enabled_channels: int  # New: enabled channels
     rules_count: int
     items_today: int
     items_this_week: int
     items_by_priority: dict[str, int]  # For frontend compatibility
     last_fetch_at: str | None = None
+
+
+class SourceStats(BaseModel):
+    """Statistics for a single source (organization)."""
+
+    source_id: int
+    name: str
+    is_stakeholder: bool
+    enabled: bool
+    channel_count: int
+    item_count: int
+    unread_count: int
+
+
+class ChannelStats(BaseModel):
+    """Statistics for a single channel."""
+
+    channel_id: int
+    source_id: int
+    source_name: str
+    connector_type: ConnectorType
+    name: str | None
+    enabled: bool
+    item_count: int
+    unread_count: int
+    last_fetch_at: datetime | None
+    last_error: str | None
 
 
 # === Validation schemas ===

@@ -7,8 +7,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
-from models import Item, Priority, Rule, Source
-from schemas import StatsResponse
+from models import Channel, Item, Priority, Rule, Source
+from schemas import ChannelStats, SourceStats, StatsResponse
 
 router = APIRouter()
 
@@ -44,10 +44,21 @@ async def get_stats(
         select(func.count(Item.id)).where(Item.priority == Priority.HIGH)
     ) or 0
 
-    # Source counts
+    # Source (organization) counts
     sources_count = await db.scalar(select(func.count(Source.id))) or 0
     enabled_sources = await db.scalar(
         select(func.count(Source.id)).where(Source.enabled == True)  # noqa: E712
+    ) or 0
+
+    # Channel counts
+    channels_count = await db.scalar(select(func.count(Channel.id))) or 0
+    enabled_channels = await db.scalar(
+        select(func.count(Channel.id))
+        .join(Source)
+        .where(
+            Channel.enabled == True,  # noqa: E712
+            Source.enabled == True,  # noqa: E712
+        )
     ) or 0
 
     # Rule count
@@ -69,9 +80,9 @@ async def get_stats(
         select(func.count(Item.id)).where(Item.priority == Priority.LOW)
     ) or 0
 
-    # Last fetch time
+    # Last fetch time (from channels now)
     last_fetch = await db.scalar(
-        select(func.max(Source.last_fetch_at)).where(Source.last_fetch_at.isnot(None))
+        select(func.max(Channel.last_fetch_at)).where(Channel.last_fetch_at.isnot(None))
     )
 
     return StatsResponse(
@@ -82,7 +93,9 @@ async def get_stats(
         critical_items=critical_items,
         high_priority_items=high_priority_items,
         sources_count=sources_count,
+        channels_count=channels_count,
         enabled_sources=enabled_sources,
+        enabled_channels=enabled_channels,
         rules_count=rules_count,
         items_today=items_today,
         items_this_week=items_this_week,
@@ -96,36 +109,46 @@ async def get_stats(
     )
 
 
-@router.get("/stats/by-source")
+@router.get("/stats/by-source", response_model=list[SourceStats])
 async def get_stats_by_source(
     db: AsyncSession = Depends(get_db),
-    connector_type: str | None = None,
     source_id: int | None = None,
-) -> list[dict]:
-    """Get item counts grouped by source.
+) -> list[SourceStats]:
+    """Get item counts grouped by source (organization).
+
+    Aggregates items across all channels for each source.
 
     Args:
-        connector_type: Filter by connector type (e.g., 'rss', 'x_scraper', 'telegram', 'instagram_scraper')
         source_id: Filter by specific source ID
     """
+    # Subquery to count items per source through channels
+    item_counts = (
+        select(
+            Channel.source_id,
+            func.count(Item.id).label("item_count"),
+            func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
+        )
+        .outerjoin(Item, Channel.id == Item.channel_id)
+        .group_by(Channel.source_id)
+        .subquery()
+    )
+
+    # Main query joining sources with item counts
     query = (
         select(
             Source.id,
             Source.name,
-            Source.connector_type,
+            Source.is_stakeholder,
             Source.enabled,
-            Source.last_fetch_at,
-            Source.last_error,
-            func.count(Item.id).label("item_count"),
-            func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
+            func.count(Channel.id).label("channel_count"),
+            func.coalesce(item_counts.c.item_count, 0).label("item_count"),
+            func.coalesce(item_counts.c.unread_count, 0).label("unread_count"),
         )
-        .outerjoin(Item, Source.id == Item.source_id)
-        .group_by(Source.id)
+        .outerjoin(Channel, Source.id == Channel.source_id)
+        .outerjoin(item_counts, Source.id == item_counts.c.source_id)
+        .group_by(Source.id, item_counts.c.item_count, item_counts.c.unread_count)
     )
 
-    # Apply filters
-    if connector_type:
-        query = query.where(Source.connector_type == connector_type)
     if source_id:
         query = query.where(Source.id == source_id)
 
@@ -135,16 +158,72 @@ async def get_stats_by_source(
     rows = result.all()
 
     return [
-        {
-            "source_id": row.id,
-            "name": row.name,
-            "connector_type": row.connector_type.value if hasattr(row.connector_type, 'value') else row.connector_type,
-            "enabled": row.enabled,
-            "item_count": row.item_count or 0,
-            "unread_count": row.unread_count or 0,
-            "last_fetch_at": row.last_fetch_at.isoformat() if row.last_fetch_at else None,
-            "last_error": row.last_error,
-        }
+        SourceStats(
+            source_id=row.id,
+            name=row.name,
+            is_stakeholder=row.is_stakeholder,
+            enabled=row.enabled,
+            channel_count=row.channel_count or 0,
+            item_count=row.item_count or 0,
+            unread_count=row.unread_count or 0,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/stats/by-channel", response_model=list[ChannelStats])
+async def get_stats_by_channel(
+    db: AsyncSession = Depends(get_db),
+    source_id: int | None = None,
+    connector_type: str | None = None,
+) -> list[ChannelStats]:
+    """Get item counts grouped by channel.
+
+    Args:
+        source_id: Filter by specific source ID
+        connector_type: Filter by connector type (e.g., 'rss', 'x_scraper')
+    """
+    query = (
+        select(
+            Channel.id,
+            Channel.source_id,
+            Source.name.label("source_name"),
+            Channel.connector_type,
+            Channel.name,
+            Channel.enabled,
+            Channel.last_fetch_at,
+            Channel.last_error,
+            func.count(Item.id).label("item_count"),
+            func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
+        )
+        .join(Source, Channel.source_id == Source.id)
+        .outerjoin(Item, Channel.id == Item.channel_id)
+        .group_by(Channel.id, Source.name)
+    )
+
+    if source_id:
+        query = query.where(Channel.source_id == source_id)
+    if connector_type:
+        query = query.where(Channel.connector_type == connector_type)
+
+    query = query.order_by(Source.name, Channel.connector_type)
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        ChannelStats(
+            channel_id=row.id,
+            source_id=row.source_id,
+            source_name=row.source_name,
+            connector_type=row.connector_type,
+            name=row.name,
+            enabled=row.enabled,
+            item_count=row.item_count or 0,
+            unread_count=row.unread_count or 0,
+            last_fetch_at=row.last_fetch_at,
+            last_error=row.last_error,
+        )
         for row in rows
     ]
 
@@ -156,14 +235,14 @@ async def get_stats_by_connector(
     """Get aggregated stats grouped by connector type."""
     query = (
         select(
-            Source.connector_type,
-            func.count(Source.id.distinct()).label("source_count"),
+            Channel.connector_type,
+            func.count(Channel.id.distinct()).label("channel_count"),
             func.count(Item.id).label("item_count"),
             func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
         )
-        .outerjoin(Item, Source.id == Item.source_id)
-        .group_by(Source.connector_type)
-        .order_by(Source.connector_type)
+        .outerjoin(Item, Channel.id == Item.channel_id)
+        .group_by(Channel.connector_type)
+        .order_by(Channel.connector_type)
     )
 
     result = await db.execute(query)
@@ -172,7 +251,7 @@ async def get_stats_by_connector(
     return [
         {
             "connector_type": row.connector_type.value if hasattr(row.connector_type, 'value') else row.connector_type,
-            "source_count": row.source_count or 0,
+            "channel_count": row.channel_count or 0,
             "item_count": row.item_count or 0,
             "unread_count": row.unread_count or 0,
         }

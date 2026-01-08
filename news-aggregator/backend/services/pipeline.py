@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Item, Priority, Rule, RuleType, Source
+from models import Channel, Item, Priority, Rule, RuleType
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
@@ -58,7 +58,7 @@ class Pipeline:
         self.training_mode = training_mode
         self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
-    async def process(self, raw_items: list[RawItem], source: Source) -> list[Item]:
+    async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
         """Process raw items through the pipeline.
 
         Steps:
@@ -69,6 +69,10 @@ class Pipeline:
         5. Skip irrelevant items (disabled in training_mode)
         6. LLM analysis with relevance filter (disabled in training_mode)
         7. Store in database
+
+        Args:
+            raw_items: List of raw items from connector
+            channel: Channel the items came from
 
         Returns:
             List of newly created items.
@@ -87,7 +91,7 @@ class Pipeline:
             # 3. Check for duplicates
             content_hash = self._compute_hash(normalized.content)
             is_duplicate = await self._is_duplicate(
-                source.id, normalized.external_id, content_hash
+                channel.id, normalized.external_id, content_hash
             )
 
             if is_duplicate:
@@ -96,7 +100,7 @@ class Pipeline:
 
             # 3. Create item
             item = Item(
-                source_id=source.id,
+                channel_id=channel.id,
                 external_id=normalized.external_id,
                 title=normalized.title,
                 content=normalized.content,
@@ -165,7 +169,7 @@ class Pipeline:
 
         if new_items:
             await self.db.flush()
-            logger.info(f"Created {len(new_items)} new items from source {source.id}")
+            logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
 
         return new_items
 
@@ -203,12 +207,12 @@ class Pipeline:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     async def _is_duplicate(
-        self, source_id: int, external_id: str, content_hash: str
+        self, channel_id: int, external_id: str, content_hash: str
     ) -> bool:
         """Check if item already exists."""
         # Check by external_id first (faster)
         query = select(Item.id).where(
-            Item.source_id == source_id,
+            Item.channel_id == channel_id,
             Item.external_id == external_id,
         )
         result = await self.db.execute(query)
@@ -328,8 +332,8 @@ class Pipeline:
 async def process_items(
     db: AsyncSession,
     raw_items: list[RawItem],
-    source: Source,
-    processor: ItemProcessor | None = None,
+    channel: Channel,
+    processor: "ItemProcessor | None" = None,
     training_mode: bool = False,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
@@ -337,7 +341,7 @@ async def process_items(
     Args:
         db: Database session
         raw_items: List of raw items from connector
-        source: Source the items came from
+        channel: Channel the items came from
         processor: Optional LLM processor for summarization and semantic rules
         training_mode: If True, disables filtering for training data collection
 
@@ -345,4 +349,4 @@ async def process_items(
         List of newly created Item objects
     """
     pipeline = Pipeline(db, processor=processor, training_mode=training_mode)
-    return await pipeline.process(raw_items, source)
+    return await pipeline.process(raw_items, channel)

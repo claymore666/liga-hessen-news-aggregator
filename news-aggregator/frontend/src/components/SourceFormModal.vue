@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useSourcesStore } from '@/stores'
-import { connectorsApi } from '@/api'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
-import type { Source, ConnectorType, ConnectorInfo } from '@/types'
+import type { Source } from '@/types'
 
 const props = defineProps<{
   source?: Source | null
@@ -15,61 +14,41 @@ const emit = defineEmits<{
 }>()
 
 const sourcesStore = useSourcesStore()
-
-const connectors = ref<ConnectorInfo[]>([])
 const loading = ref(false)
-const validating = ref(false)
-const validationResult = ref<{ valid: boolean; message: string } | null>(null)
 
 const form = ref({
   name: props.source?.name ?? '',
-  url: (props.source?.config?.url || props.source?.config?.feed_url || props.source?.config?.handle || '') as string,
-  connector_type: (props.source?.connector_type ?? 'rss') as ConnectorType,
-  connector_config: props.source?.config ?? {},
-  enabled: props.source?.enabled ?? true,
-  fetch_interval: props.source?.fetch_interval_minutes ?? 60
+  description: props.source?.description ?? '',
+  is_stakeholder: props.source?.is_stakeholder ?? false,
+  enabled: props.source?.enabled ?? true
 })
 
 const isEditing = computed(() => !!props.source)
-
-const currentConnector = computed(() =>
-  connectors.value.find((c) => c.type === form.value.connector_type)
-)
-
-const validateConfig = async () => {
-  validating.value = true
-  validationResult.value = null
-  try {
-    const response = await connectorsApi.validate(
-      form.value.connector_type,
-      { url: form.value.url, ...form.value.connector_config }
-    )
-    validationResult.value = response.data
-  } catch {
-    validationResult.value = { valid: false, message: 'Validierung fehlgeschlagen' }
-  } finally {
-    validating.value = false
-  }
-}
 
 const save = async () => {
   loading.value = true
   try {
     if (isEditing.value && props.source) {
-      await sourcesStore.updateSource(props.source.id, form.value)
+      await sourcesStore.updateSource(props.source.id, {
+        name: form.value.name,
+        description: form.value.description || null,
+        is_stakeholder: form.value.is_stakeholder,
+        enabled: form.value.enabled
+      })
     } else {
-      await sourcesStore.createSource(form.value)
+      await sourcesStore.createSource({
+        name: form.value.name,
+        description: form.value.description || null,
+        is_stakeholder: form.value.is_stakeholder,
+        enabled: form.value.enabled,
+        channels: []
+      })
     }
     emit('saved')
   } finally {
     loading.value = false
   }
 }
-
-onMounted(async () => {
-  const response = await connectorsApi.list()
-  connectors.value = response.data
-})
 </script>
 
 <template>
@@ -77,7 +56,7 @@ onMounted(async () => {
     <div class="w-full max-w-lg rounded-lg bg-white shadow-xl">
       <div class="flex items-center justify-between border-b border-gray-200 p-4">
         <h2 class="text-lg font-medium text-gray-900">
-          {{ isEditing ? 'Quelle bearbeiten' : 'Neue Quelle' }}
+          {{ isEditing ? 'Organisation bearbeiten' : 'Neue Organisation' }}
         </h2>
         <button
           type="button"
@@ -91,78 +70,57 @@ onMounted(async () => {
       <form class="p-4" @submit.prevent="save">
         <div class="space-y-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700">Name</label>
+            <label class="block text-sm font-medium text-gray-700">Name *</label>
             <input
               v-model="form.name"
               type="text"
               class="input mt-1"
               required
-              placeholder="z.B. Hessenschau"
+              placeholder="z.B. BMAS (Arbeitsministerium)"
             />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700">Connector-Typ</label>
-            <select v-model="form.connector_type" class="input mt-1">
-              <option v-for="c in connectors" :key="c.type" :value="c.type">
-                {{ c.name }}
-              </option>
-            </select>
-            <p v-if="currentConnector" class="mt-1 text-xs text-gray-500">
-              {{ currentConnector.description }}
+            <p class="mt-1 text-xs text-gray-500">
+              Name der Organisation (z.B. Ministerium, Verband, Medium)
             </p>
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-gray-700">URL</label>
-            <input
-              v-model="form.url"
-              type="url"
+            <label class="block text-sm font-medium text-gray-700">Beschreibung</label>
+            <textarea
+              v-model="form.description"
               class="input mt-1"
-              required
-              placeholder="https://example.com/feed.xml"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700">
-              Abrufintervall (Minuten)
-            </label>
-            <input
-              v-model.number="form.fetch_interval"
-              type="number"
-              min="5"
-              max="1440"
-              class="input mt-1"
+              rows="2"
+              placeholder="Optionale Beschreibung der Organisation..."
             />
           </div>
 
           <div class="flex items-center gap-2">
             <input
+              id="is_stakeholder"
+              v-model="form.is_stakeholder"
+              type="checkbox"
+              class="rounded border-gray-300"
+            />
+            <label for="is_stakeholder" class="text-sm text-gray-700">
+              Stakeholder
+            </label>
+            <span class="text-xs text-gray-500">
+              (wichtige Organisation für Liga)
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input
+              id="enabled"
               v-model="form.enabled"
               type="checkbox"
               class="rounded border-gray-300"
             />
-            <label class="text-sm text-gray-700">Quelle aktivieren</label>
-          </div>
-
-          <!-- Validation -->
-          <div class="border-t border-gray-200 pt-4">
-            <button
-              type="button"
-              class="btn btn-secondary w-full"
-              :disabled="validating || !form.url"
-              @click="validateConfig"
-            >
-              {{ validating ? 'Prüfe...' : 'Verbindung testen' }}
-            </button>
-            <div
-              v-if="validationResult"
-              class="mt-2 rounded p-2 text-sm"
-              :class="validationResult.valid ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
-            >
-              {{ validationResult.message }}
-            </div>
+            <label for="enabled" class="text-sm text-gray-700">
+              Organisation aktivieren
+            </label>
+            <span class="text-xs text-gray-500">
+              (Master-Schalter für alle Kanäle)
+            </span>
           </div>
         </div>
 
@@ -177,12 +135,16 @@ onMounted(async () => {
           <button
             type="submit"
             class="btn btn-primary"
-            :disabled="loading"
+            :disabled="loading || !form.name.trim()"
           >
-            {{ loading ? 'Speichere...' : (isEditing ? 'Speichern' : 'Erstellen') }}
+            {{ loading ? 'Speichere...' : isEditing ? 'Speichern' : 'Erstellen' }}
           </button>
         </div>
       </form>
+
+      <div v-if="!isEditing" class="border-t border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+        Nach dem Erstellen können Sie Kanäle (RSS, X.com, etc.) hinzufügen.
+      </div>
     </div>
   </div>
 </template>

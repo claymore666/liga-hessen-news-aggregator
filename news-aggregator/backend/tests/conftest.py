@@ -72,9 +72,21 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 def sample_source_data() -> dict[str, Any]:
-    """Sample source data for testing."""
+    """Sample source (organization) data for testing."""
     return {
-        "name": "Test RSS Feed",
+        "name": "Test Organization",
+        "description": "A test organization",
+        "is_stakeholder": True,
+        "enabled": True,
+        "channels": [],
+    }
+
+
+@pytest.fixture
+def sample_channel_data() -> dict[str, Any]:
+    """Sample channel data for testing."""
+    return {
+        "name": "Main Feed",
         "connector_type": "rss",
         "config": {"url": "https://example.com/feed.xml"},
         "enabled": True,
