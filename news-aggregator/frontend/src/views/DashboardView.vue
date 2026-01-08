@@ -222,38 +222,38 @@ watch(
     </div>
 
     <!-- Priority Summary -->
-    <div class="grid grid-cols-4 gap-2">
+    <div class="flex gap-2">
       <button
-        class="card py-2 px-3 text-center hover:bg-red-50 transition-colors cursor-pointer"
+        class="card py-1.5 px-3 hover:bg-red-50 transition-colors cursor-pointer"
         :class="itemsStore.filters.priority === 'critical' ? 'ring-2 ring-red-500 bg-red-50' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'critical' ? null : 'critical')"
       >
-        <p class="text-xl font-bold text-red-600">{{ statsStore.stats?.items_by_priority?.critical ?? 0 }}</p>
-        <p class="text-xs text-red-700">Kritisch</p>
+        <span class="text-lg font-bold text-red-600">{{ statsStore.stats?.items_by_priority?.critical ?? 0 }}</span>
+        <span class="text-xs text-red-700 ml-1">Kritisch</span>
       </button>
       <button
-        class="card py-2 px-3 text-center hover:bg-orange-50 transition-colors cursor-pointer"
+        class="card py-1.5 px-3 hover:bg-orange-50 transition-colors cursor-pointer"
         :class="itemsStore.filters.priority === 'high' ? 'ring-2 ring-orange-500 bg-orange-50' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'high' ? null : 'high')"
       >
-        <p class="text-xl font-bold text-orange-600">{{ statsStore.stats?.items_by_priority?.high ?? 0 }}</p>
-        <p class="text-xs text-orange-700">Hoch</p>
+        <span class="text-lg font-bold text-orange-600">{{ statsStore.stats?.items_by_priority?.high ?? 0 }}</span>
+        <span class="text-xs text-orange-700 ml-1">Hoch</span>
       </button>
       <button
-        class="card py-2 px-3 text-center hover:bg-yellow-50 transition-colors cursor-pointer"
+        class="card py-1.5 px-3 hover:bg-yellow-50 transition-colors cursor-pointer"
         :class="itemsStore.filters.priority === 'medium' ? 'ring-2 ring-yellow-500 bg-yellow-50' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'medium' ? null : 'medium')"
       >
-        <p class="text-xl font-bold text-yellow-600">{{ statsStore.stats?.items_by_priority?.medium ?? 0 }}</p>
-        <p class="text-xs text-yellow-700">Mittel</p>
+        <span class="text-lg font-bold text-yellow-600">{{ statsStore.stats?.items_by_priority?.medium ?? 0 }}</span>
+        <span class="text-xs text-yellow-700 ml-1">Mittel</span>
       </button>
       <button
-        class="card py-2 px-3 text-center hover:bg-green-50 transition-colors cursor-pointer"
+        class="card py-1.5 px-3 hover:bg-green-50 transition-colors cursor-pointer"
         :class="itemsStore.filters.priority === 'low' ? 'ring-2 ring-green-500 bg-green-50' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'low' ? null : 'low')"
       >
-        <p class="text-xl font-bold text-green-600">{{ statsStore.stats?.items_by_priority?.low ?? 0 }}</p>
-        <p class="text-xs text-green-700">Niedrig</p>
+        <span class="text-lg font-bold text-green-600">{{ statsStore.stats?.items_by_priority?.low ?? 0 }}</span>
+        <span class="text-xs text-green-700 ml-1">Niedrig</span>
       </button>
     </div>
 
