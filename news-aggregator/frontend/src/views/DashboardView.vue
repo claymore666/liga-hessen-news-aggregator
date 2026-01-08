@@ -222,9 +222,9 @@ watch(
     </div>
 
     <!-- Priority Summary -->
-    <div class="flex gap-2">
+    <div class="grid grid-cols-4 gap-2">
       <button
-        class="rounded-lg py-1.5 px-3 bg-red-500 hover:bg-red-600 transition-colors cursor-pointer"
+        class="rounded-lg py-1.5 px-3 bg-red-500 hover:bg-red-600 transition-colors cursor-pointer text-center"
         :class="itemsStore.filters.priority === 'critical' ? 'ring-2 ring-offset-1 ring-red-700' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'critical' ? null : 'critical')"
       >
@@ -232,7 +232,7 @@ watch(
         <span class="text-xs text-red-100 ml-1">Kritisch</span>
       </button>
       <button
-        class="rounded-lg py-1.5 px-3 bg-orange-500 hover:bg-orange-600 transition-colors cursor-pointer"
+        class="rounded-lg py-1.5 px-3 bg-orange-500 hover:bg-orange-600 transition-colors cursor-pointer text-center"
         :class="itemsStore.filters.priority === 'high' ? 'ring-2 ring-offset-1 ring-orange-700' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'high' ? null : 'high')"
       >
@@ -240,15 +240,15 @@ watch(
         <span class="text-xs text-orange-100 ml-1">Hoch</span>
       </button>
       <button
-        class="rounded-lg py-1.5 px-3 bg-yellow-500 hover:bg-yellow-600 transition-colors cursor-pointer"
-        :class="itemsStore.filters.priority === 'medium' ? 'ring-2 ring-offset-1 ring-yellow-700' : ''"
+        class="rounded-lg py-1.5 px-3 bg-yellow-400 hover:bg-yellow-500 transition-colors cursor-pointer text-center"
+        :class="itemsStore.filters.priority === 'medium' ? 'ring-2 ring-offset-1 ring-yellow-600' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'medium' ? null : 'medium')"
       >
         <span class="text-lg font-bold text-gray-900">{{ statsStore.stats?.items_by_priority?.medium ?? 0 }}</span>
-        <span class="text-xs text-yellow-900 ml-1">Mittel</span>
+        <span class="text-xs text-yellow-800 ml-1">Mittel</span>
       </button>
       <button
-        class="rounded-lg py-1.5 px-3 bg-green-500 hover:bg-green-600 transition-colors cursor-pointer"
+        class="rounded-lg py-1.5 px-3 bg-green-500 hover:bg-green-600 transition-colors cursor-pointer text-center"
         :class="itemsStore.filters.priority === 'low' ? 'ring-2 ring-offset-1 ring-green-700' : ''"
         @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'low' ? null : 'low')"
       >
