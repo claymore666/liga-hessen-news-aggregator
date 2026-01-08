@@ -5,13 +5,12 @@ export type RuleType = 'keyword' | 'regex' | 'semantic'
 export interface Source {
   id: number
   name: string
-  url: string
   connector_type: ConnectorType
-  connector_config: Record<string, unknown>
+  config: Record<string, unknown>
   enabled: boolean
-  fetch_interval: number
-  last_fetched_at: string | null
-  error_count: number
+  fetch_interval_minutes: number
+  is_stakeholder: boolean
+  last_fetch_at: string | null
   last_error: string | null
   created_at: string
   updated_at: string

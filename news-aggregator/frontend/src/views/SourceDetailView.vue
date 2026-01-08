@@ -29,7 +29,7 @@ onMounted(() => {
         {{ sourcesStore.currentSource.name }}
       </h1>
       <p class="mt-2 text-gray-500">
-        {{ sourcesStore.currentSource.url }}
+        {{ sourcesStore.currentSource.config?.url || sourcesStore.currentSource.config?.feed_url || sourcesStore.currentSource.config?.handle || '-' }}
       </p>
     </div>
   </div>

@@ -118,7 +118,7 @@ onMounted(() => {
               </h3>
             </div>
             <p class="mt-1 truncate text-sm text-gray-500">
-              {{ source.url }}
+              {{ source.config?.url || source.config?.feed_url || source.config?.handle || '-' }}
             </p>
           </div>
         </div>
@@ -128,17 +128,17 @@ onMounted(() => {
             {{ connectorLabels[source.connector_type] || source.connector_type }}
           </span>
           <span class="badge bg-gray-100 text-gray-700">
-            Alle {{ source.fetch_interval }} Min.
+            Alle {{ source.fetch_interval_minutes }} Min.
           </span>
         </div>
 
         <div class="mt-4 space-y-1 text-sm text-gray-500">
           <p>
-            Letzter Abruf: {{ formatTime(source.last_fetched_at) }}
+            Letzter Abruf: {{ formatTime(source.last_fetch_at) }}
           </p>
-          <p v-if="source.error_count > 0" class="flex items-center gap-1 text-red-600">
+          <p v-if="source.last_error" class="flex items-center gap-1 text-red-600">
             <ExclamationCircleIcon class="h-4 w-4" />
-            {{ source.error_count }} Fehler
+            Fehler
           </p>
         </div>
 

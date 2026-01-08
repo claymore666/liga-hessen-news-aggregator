@@ -260,6 +260,20 @@ Die Dokumentation ist durchgehend auf **Deutsch** verfasst. Code-Beispiele und K
 
 ---
 
+## Python Virtual Environment
+
+**CRITICAL**: When running Python scripts outside Docker, ALWAYS use the venv:
+
+```bash
+cd news-aggregator/backend
+source venv/bin/activate
+python script.py
+```
+
+The venv is located at `news-aggregator/backend/venv/`.
+
+---
+
 ## API vs. Docker Container Zugriff
 
 **WICHTIG für Claude Code**: Bevorzuge die REST-API für Datenbankabfragen statt direkter Docker-Container-Befehle.

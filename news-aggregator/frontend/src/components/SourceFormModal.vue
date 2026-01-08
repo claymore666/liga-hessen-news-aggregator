@@ -23,11 +23,11 @@ const validationResult = ref<{ valid: boolean; message: string } | null>(null)
 
 const form = ref({
   name: props.source?.name ?? '',
-  url: props.source?.url ?? '',
+  url: (props.source?.config?.url || props.source?.config?.feed_url || props.source?.config?.handle || '') as string,
   connector_type: (props.source?.connector_type ?? 'rss') as ConnectorType,
-  connector_config: props.source?.connector_config ?? {},
+  connector_config: props.source?.config ?? {},
   enabled: props.source?.enabled ?? true,
-  fetch_interval: props.source?.fetch_interval ?? 60
+  fetch_interval: props.source?.fetch_interval_minutes ?? 60
 })
 
 const isEditing = computed(() => !!props.source)
