@@ -27,6 +27,8 @@ class XScraperConfig(BaseModel):
     use_proxy: bool = Field(default=False, description="Use proxy rotation")
     include_replies: bool = Field(default=False, description="Include replies")
     max_tweets: int = Field(default=20, ge=1, le=100, description="Maximum tweets to fetch")
+    follow_links: bool = Field(default=True, description="Follow links to fetch article content")
+    max_links_per_tweet: int = Field(default=1, ge=1, le=3, description="Max article links to follow per tweet")
 
 
 @ConnectorRegistry.register
@@ -229,7 +231,7 @@ class XScraperConnector(BaseConnector):
         return items
 
     async def _extract_tweets(self, page, config: XScraperConfig) -> list[RawItem]:
-        """Extract tweets from page.
+        """Extract tweets from page with optional link following.
 
         Args:
             page: Playwright page object
@@ -238,6 +240,15 @@ class XScraperConnector(BaseConnector):
         Returns:
             List of RawItem objects
         """
+        # Import article extractor if link following is enabled
+        article_extractor = None
+        if config.follow_links:
+            try:
+                from services.article_extractor import ArticleExtractor
+                article_extractor = ArticleExtractor()
+            except ImportError:
+                logger.warning("ArticleExtractor not available, disabling link following")
+
         items = []
 
         # Find all tweet elements
@@ -300,12 +311,46 @@ class XScraperConnector(BaseConnector):
                 if not external_id:
                     external_id = f"{config.username}_{i}_{int(published_at.timestamp())}"
 
+                # Extract and follow links if enabled
+                combined_content = text
+                extracted_links = []
+                linked_articles = []
+
+                if article_extractor:
+                    extracted_links = article_extractor.extract_urls_from_text(text)
+
+                    # Try to fetch article content from first valid link(s)
+                    for link_url in extracted_links[: config.max_links_per_tweet]:
+                        try:
+                            article = await article_extractor.fetch_article(link_url)
+                            if article and article.is_article:
+                                linked_articles.append({
+                                    "url": article.url,
+                                    "title": article.title,
+                                    "domain": article.source_domain,
+                                    "content_length": len(article.content),
+                                })
+                                # Combine tweet text with article content
+                                combined_content = f"""Tweet von @{author}:
+{text}
+
+---
+
+Verlinkter Artikel von {article.source_domain}:
+{article.title or 'Unbekannter Titel'}
+
+{article.content[:4000]}"""
+                                logger.info(f"Fetched article from {article.source_domain} ({len(article.content)} chars)")
+                                break  # Only use first valid article
+                        except Exception as e:
+                            logger.debug(f"Failed to fetch article from {link_url}: {e}")
+
                 # Create RawItem
                 items.append(
                     RawItem(
                         external_id=external_id,
                         title=text[:100] + "..." if len(text) > 100 else text,
-                        content=text,
+                        content=combined_content,
                         url=tweet_url or f"https://x.com/{config.username}",
                         author=author,
                         published_at=published_at,
@@ -313,6 +358,9 @@ class XScraperConnector(BaseConnector):
                             "platform": "x.com",
                             "username": config.username,
                             "is_reply": is_reply,
+                            "original_tweet_text": text,
+                            "extracted_links": extracted_links,
+                            "linked_articles": linked_articles,
                         },
                     )
                 )

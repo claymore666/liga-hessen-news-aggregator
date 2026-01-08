@@ -89,6 +89,7 @@ export interface Item {
   title: string
   content: string
   summary: string | null
+  detailed_analysis: string | null
   url: string
   author: string | null
   published_at: string | null

@@ -178,6 +178,7 @@ class Item(Base):
     title: Mapped[str] = mapped_column(String(500))
     content: Mapped[str] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detailed_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     url: Mapped[str] = mapped_column(String(2000))
     author: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime)

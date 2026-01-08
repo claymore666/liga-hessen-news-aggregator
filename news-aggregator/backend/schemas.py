@@ -138,6 +138,7 @@ class ItemResponse(ItemBase, BaseSchema):
     source: SourceBrief | None = None  # Derived from channel.source
     external_id: str
     summary: str | None
+    detailed_analysis: str | None = None
     fetched_at: datetime
     priority: Priority
     priority_score: int

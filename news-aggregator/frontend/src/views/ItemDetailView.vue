@@ -126,7 +126,7 @@ onMounted(async () => {
           </p>
         </div>
 
-        <!-- Summary -->
+        <!-- Summary (short, 2-3 sentences) -->
         <div v-if="itemsStore.currentItem.summary" class="mt-6">
           <h2 class="text-lg font-medium text-gray-900">Zusammenfassung</h2>
           <p class="mt-2 text-gray-700">
@@ -134,12 +134,27 @@ onMounted(async () => {
           </p>
         </div>
 
-        <!-- Content -->
-        <div class="mt-6">
-          <h2 class="text-lg font-medium text-gray-900">Inhalt</h2>
+        <!-- Detailed Analysis (5-8 sentences) -->
+        <div v-if="itemsStore.currentItem.detailed_analysis" class="mt-6">
+          <h2 class="text-lg font-medium text-gray-900">Analyse</h2>
           <div class="prose prose-sm mt-2 max-w-none text-gray-700">
-            {{ itemsStore.currentItem.content }}
+            {{ itemsStore.currentItem.detailed_analysis }}
           </div>
+        </div>
+
+        <!-- Original Content (collapsible) -->
+        <div class="mt-6">
+          <details class="group">
+            <summary class="text-lg font-medium text-gray-900 cursor-pointer hover:text-gray-700 list-none flex items-center gap-2">
+              <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+              Originalinhalt
+            </summary>
+            <div class="prose prose-sm mt-2 max-w-none text-gray-600">
+              {{ itemsStore.currentItem.content }}
+            </div>
+          </details>
         </div>
 
         <!-- Tags -->

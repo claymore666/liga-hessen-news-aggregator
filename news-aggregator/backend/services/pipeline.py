@@ -118,7 +118,9 @@ class Pipeline:
             if self.processor and not self.training_mode:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
-                    analysis = await self.processor.analyze(item)
+                    # Pass source_name since item.channel relationship isn't loaded yet
+                    source_name = channel.source.name if channel.source else "Unbekannt"
+                    analysis = await self.processor.analyze(item, source_name=source_name)
 
                     # Record relevance score (no filtering, just for reference)
                     relevance_score = analysis.get("relevance_score", 0.5)
@@ -148,6 +150,10 @@ class Pipeline:
                     # Set summary from analysis
                     if analysis.get("summary"):
                         item.summary = analysis["summary"]
+
+                    # Set detailed analysis from analysis
+                    if analysis.get("detailed_analysis"):
+                        item.detailed_analysis = analysis["detailed_analysis"]
 
                     # Store analysis metadata
                     item.metadata_["llm_analysis"] = {

@@ -254,6 +254,10 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                 if analysis.get("summary"):
                     item.summary = analysis["summary"]
 
+                # Set detailed analysis
+                if analysis.get("detailed_analysis"):
+                    item.detailed_analysis = analysis["detailed_analysis"]
+
                 # New model returns "priority", old model used "priority_suggestion"
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if llm_priority == "critical":
@@ -298,6 +302,7 @@ async def reprocess_items(
     background_tasks: BackgroundTasks,
     source_id: int | None = Query(None, description="Only reprocess items from this source"),
     channel_id: int | None = Query(None, description="Only reprocess items from this channel"),
+    connector_type: str | None = Query(None, description="Only reprocess items from this connector type (e.g., x_scraper, rss)"),
     limit: int = Query(100, ge=1, le=1000, description="Max items to reprocess"),
     force: bool = Query(False, description="Reprocess even if already has LLM analysis"),
     db: AsyncSession = Depends(get_db),
@@ -308,10 +313,17 @@ async def reprocess_items(
     """
     query = select(Item.id).order_by(Item.published_at.desc())
 
+    # Join with Channel if we need to filter by source or connector type
+    needs_channel_join = source_id is not None or connector_type is not None
+
     if channel_id is not None:
         query = query.where(Item.channel_id == channel_id)
-    elif source_id is not None:
-        query = query.join(Channel).where(Channel.source_id == source_id)
+    elif needs_channel_join:
+        query = query.join(Channel)
+        if source_id is not None:
+            query = query.where(Channel.source_id == source_id)
+        if connector_type is not None:
+            query = query.where(Channel.connector_type == connector_type)
 
     # When not forcing, only select items without LLM analysis
     # Use SQLite JSON extract to check if key exists
