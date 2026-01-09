@@ -289,19 +289,23 @@ Für jeden Artikel ausgeben (eine JSON-Zeile):
 
 Alle drei Felder sind PFLICHT bei relevant=true.
 
-**summary** (bis zu 8 Sätze):
-- Reine Fakten: Was ist passiert?
+**summary** (PFLICHT: 4-8 Sätze, MINIMUM 4):
+- Kompakte Zusammenfassung der wichtigsten Fakten
+- Was ist passiert? Wer ist betroffen? Was sind die Kernpunkte?
 - Neutral und sachlich formuliert
-- Keine Bewertungen, Einschätzungen oder Liga-Interpretation
-- Beispiel: "Ein SPD-Mitgliederbegehren gegen die Bürgergeldreform könnte zu spät kommen. Der Parteivorstand hat den Start der Abstimmung auf den 23. Dezember festgelegt. Die Reform sieht schärfere Sanktionen für Bürgergeld-Empfänger vor."
+- Keine Bewertungen oder Liga-Interpretation
+- BEISPIEL (gute Länge, 5 Sätze):
+  "Die Inklusions-Kita 'Elfenwiese' in Hamburg, eine wichtige Einrichtung für schwerstbehinderte Kinder, steht vor der Schließung im September 2026. Der Träger Vereinigung Elbkinder begründet dies mit wirtschaftlich nicht vertretbaren Sanierungskosten nach einem Marder-Befall. Die Einrichtung bietet seit 1976 spezialisierte Betreuung durch ein multiprofessionelles Team. Eltern haben über 3000 Unterschriften gegen die Schließung gesammelt. Die GEW Hamburg warnt vor Kindeswohlgefährdung durch den Verlust stabiler Bindungen."
 
-**detailed_analysis** (bis zu 15 Sätze):
-- Was ist passiert? (Fakten)
-- Wer hat was gesagt? (Zitate und Positionen)
-- Welche Auswirkungen sind zu erwarten?
+**detailed_analysis** (PFLICHT: 10-15 Sätze, MINIMUM 10):
+- Ausführliche Analyse mit allen relevanten Details aus dem Artikel
+- Enthält: Spezifische Fakten, Daten, Zahlen
+- Enthält: Direkte Zitate von Betroffenen und Experten
+- Enthält: Auswirkungen und Konsequenzen
+- Enthält: Hintergrundinformationen und Kontext
 - KEINE Liga-Spekulation! Keine "Liga dürfte...", "Wohlfahrtsverbände könnten..."
-- Nur Fakten, Zitate und objektive Auswirkungsanalyse
-- Beispiel: "Sophie Ringhand, Thüringer Jusos-Chefin, kritisiert den Zeitplan als 'unglücklich'. Mitinitiator Denny Möller fordert: 'Das parlamentarische Verfahren darf nicht abgeschlossen werden, bevor das Begehren ausgewertet ist.' Die Reform würde Bürgergeld-Empfängern bei Nicht-Kooperation schärfere Sanktionen auferlegen. Selbst bei erfolgreichem Begehren ist das Ergebnis nicht bindend."
+- BEISPIEL (gute Länge, 12 Sätze):
+  "Die Inklusions-Kita 'Elfenwiese' in Hamburg-Marmstorf, ein seit 1976 bestehendes Kompetenzzentrum für schwerstbehinderte Kinder, soll im September 2026 geschlossen werden. Der Träger Vereinigung Elbkinder begründet dies mit wirtschaftlich nicht vertretbaren Sanierungskosten nach einem Marder-Befall im Gebäude. Die Einrichtung bietet spezialisierte Betreuung für beatmete Kinder und solche mit Epilepsie oder Entwicklungsstörungen durch ein multiprofessionelles Team aus Pädagogik, Psychotherapie und Medizin. Für Familien mit schwerstbehinderten Kindern ist die Suche nach geeigneten Kita-Plätzen bereits eine 'Odyssee' – diese gewachsene Expertise ist kaum ersetzbar. Betroffene Eltern kritisieren die Schließung als 'Armutszeugnis für die gesamtgesellschaftliche Verantwortung' und haben über 3000 Unterschriften gesammelt. Die GEW Hamburg warnt vor unmittelbarer Kindeswohlgefährdung durch den Verlust stabiler Bindungen. Besonders brisant: Die Kita wurde über Jahre vernachlässigt, während die benachbarte Schule gefördert wurde. Der Marder-Befall hätte früher behoben werden können, wenn rechtzeitig investiert worden wäre. Experten befürchten, dass die vermeintliche Kosteneinsparung langfristig teurer wird. Die Folgekosten im Gesundheits- und Sozialsystem könnten die Sanierungskosten um ein Vielfaches übersteigen. Die Schließung betrifft besonders vulnerable Familien, die auf spezialisierte Betreuung angewiesen sind. Der Fall zeigt strukturelle Probleme bei der Finanzierung von Inklusions-Einrichtungen."
 
 **argumentationskette** (Array von Strings, 2-6 Argumente):
 - Konkrete Argumente für Liga-Stellungnahmen/Lobbying
@@ -316,11 +320,12 @@ Alle drei Felder sind PFLICHT bei relevant=true.
     "Sanktionsdruck verbessert nicht nachhaltige Arbeitsmarktintegration"
   ]
 
-WICHTIG:
-- summary: Kurze Fakten
-- detailed_analysis: Ausführliche Fakten + Zitate + Auswirkungen (KEINE Liga-Spekulation)
-- argumentationskette: Konkrete Liga-Argumente
+WICHTIG - MINDESTLÄNGEN EINHALTEN:
+- summary: MINIMUM 4 Sätze, nicht weniger! (Fakten kompakt zusammengefasst)
+- detailed_analysis: MINIMUM 10 Sätze, nicht weniger! (Alle Details: Fakten, Zitate, Zahlen, Auswirkungen)
+- argumentationskette: 2-6 konkrete Liga-Argumente
 - Keine "..." am Ende
+- Zu kurze Texte werden ABGELEHNT und müssen wiederholt werden!
 
 Bei relevant=false: ak=null, priority=null, summary=null, detailed_analysis=null, argumentationskette=null
 Bei relevant=true: Alle Felder MÜSSEN gesetzt sein

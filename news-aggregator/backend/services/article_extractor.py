@@ -149,6 +149,58 @@ class ArticleExtractor:
 
         return indicators >= 2
 
+    def _clean_url(self, url: str) -> str:
+        """Clean URL by removing tracking parameters and fixing common issues.
+
+        Args:
+            url: URL to clean
+
+        Returns:
+            Cleaned URL
+        """
+        from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+        parsed = urlparse(url)
+
+        # Remove common tracking parameters
+        tracking_params = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+            "fbclid", "gclid", "ref", "source", "xtor", "wtmc",
+        }
+
+        if parsed.query:
+            params = parse_qs(parsed.query)
+            # Remove tracking parameters
+            cleaned_params = {k: v for k, v in params.items() if k.lower() not in tracking_params}
+            new_query = urlencode(cleaned_params, doseq=True)
+            parsed = parsed._replace(query=new_query)
+
+        return urlunparse(parsed)
+
+    async def resolve_redirect(self, url: str) -> str:
+        """Resolve redirects to get final URL (e.g., t.co -> actual URL).
+
+        Args:
+            url: URL to resolve
+
+        Returns:
+            Final URL after following redirects
+        """
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=True,
+            ) as client:
+                response = await client.head(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    },
+                )
+                return str(response.url)
+        except Exception:
+            return url
+
     async def fetch_article(self, url: str) -> ArticleContent | None:
         """Fetch and extract article content from URL.
 
@@ -158,6 +210,14 @@ class ArticleExtractor:
         - Extracted content is too short
         """
         try:
+            # Resolve t.co and other redirects first
+            if "t.co" in url:
+                url = await self.resolve_redirect(url)
+                logger.debug(f"Resolved t.co URL to: {url}")
+
+            # Clean up URL - remove common tracking parameters
+            url = self._clean_url(url)
+
             parsed = urlparse(url)
             domain = parsed.netloc.lower().replace("www.", "")
 

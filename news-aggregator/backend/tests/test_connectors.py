@@ -16,6 +16,7 @@ from connectors import (
     MastodonConnector,
     InstagramConnector,
     TelegramConnector,
+    LinkedInConnector,
 )
 from connectors.rss import RSSConfig
 from connectors.html import HTMLConfig
@@ -36,7 +37,7 @@ class TestConnectorRegistry:
     def test_list_all_returns_registered_connectors(self):
         """Registry should list all registered connectors."""
         connectors = ConnectorRegistry.list_all()
-        assert len(connectors) >= 8  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon, Instagram, Telegram
+        assert len(connectors) >= 9  # RSS, HTML, Bluesky, Twitter, PDF, Mastodon, Instagram, Telegram, LinkedIn
 
         connector_types = [c["type"] for c in connectors]
         assert "rss" in connector_types
@@ -47,6 +48,7 @@ class TestConnectorRegistry:
         assert "mastodon" in connector_types
         assert "instagram" in connector_types
         assert "telegram" in connector_types
+        assert "linkedin" in connector_types
 
     def test_get_returns_correct_connector(self):
         """Registry should return correct connector class."""

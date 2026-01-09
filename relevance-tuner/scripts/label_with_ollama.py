@@ -203,10 +203,17 @@ WICHTIG:
 - Keine zusätzlichen Erklärungen
 - Bei relevant=false: ak=null, priority=null, summary=null, detailed_analysis=null, argumentationskette=null
 - Bei relevant=true: ALLE Felder MÜSSEN gesetzt sein
-- summary: Reine Fakten (bis zu 8 Sätze)
-- detailed_analysis: Fakten + Zitate + Auswirkungen (bis zu 15 Sätze) - KEINE Liga-Spekulation!
-- argumentationskette: 2-6 konkrete Argumente für Liga (direkt verwendbar, keine Konjunktive)
-- Keine "..." am Ende
+
+MINDESTLÄNGEN - STRIKT EINHALTEN:
+- summary: MINIMUM 4 Sätze, MAXIMUM 8 Sätze (Reine Fakten: Was, Wer, Wo, Wann, Konsequenzen)
+- detailed_analysis: MINIMUM 10 Sätze, MAXIMUM 15 Sätze (Fakten + direkte Zitate + Zahlen + Auswirkungen + Kontext)
+- argumentationskette: 2-6 konkrete Argumente für Liga
+
+VERBOTEN:
+- Weniger als 4 Sätze bei summary = UNGÜLTIG
+- Weniger als 10 Sätze bei detailed_analysis = UNGÜLTIG
+- "..." am Ende = UNGÜLTIG
+- Liga-Spekulationen ("Liga dürfte...", "Wohlfahrtsverbände könnten...") = UNGÜLTIG
 
 Beginne jetzt mit der Analyse (nur JSON-Zeilen, keine Erklärungen):"""
 
@@ -232,6 +239,44 @@ def call_ollama(prompt: str, model: str) -> str:
     except requests.exceptions.RequestException as e:
         print(f"\nError calling Ollama: {e}")
         raise
+
+
+def count_sentences(text: str) -> int:
+    """Count sentences in text by looking for '. ' or end patterns."""
+    if not text:
+        return 0
+    # Count ". " followed by capital letter or end of string
+    # Also count "! " and "? "
+    sentences = re.split(r'[.!?]\s+(?=[A-ZÄÖÜ])|[.!?]$', text)
+    return len([s for s in sentences if s.strip()])
+
+
+def validate_label(label: dict) -> tuple[bool, str]:
+    """Validate that a label meets minimum length requirements.
+
+    Returns (is_valid, error_message).
+    """
+    if not label or not label.get("relevant"):
+        return True, ""  # Non-relevant items don't need validation
+
+    summary = label.get("summary", "")
+    detailed = label.get("detailed_analysis", "")
+
+    summary_sentences = count_sentences(summary)
+    detailed_sentences = count_sentences(detailed)
+
+    errors = []
+
+    if summary_sentences < 3:  # Relaxed: 3 sentences OK
+        errors.append(f"summary has {summary_sentences} sentences (minimum 3)")
+
+    if detailed_sentences < 7:  # Relaxed: 7 sentences OK (was 10)
+        errors.append(f"detailed_analysis has {detailed_sentences} sentences (minimum 7)")
+
+    if errors:
+        return False, "; ".join(errors)
+
+    return True, ""
 
 
 def parse_json_lines(response: str) -> list[dict]:
@@ -271,8 +316,11 @@ def parse_json_lines(response: str) -> list[dict]:
     return results
 
 
+MAX_RETRIES = 2  # Maximum retries for validation failures
+
+
 def label_items(items: list[dict], system_prompt: str, model: str, progress: ProgressTracker) -> list[dict]:
-    """Label a list of items using Ollama."""
+    """Label a list of items using Ollama with validation and retry."""
     items_text = format_items_for_labeling(items)
     prompt = create_labeling_prompt(system_prompt, items_text, len(items))
 
@@ -285,6 +333,50 @@ def label_items(items: list[dict], system_prompt: str, model: str, progress: Pro
         # If we got fewer results, pad with None
         while len(results) < len(items):
             results.append(None)
+
+    # Validate and retry failed items
+    for retry in range(MAX_RETRIES):
+        # Find items that failed validation
+        failed_indices = []
+        for i, label in enumerate(results):
+            is_valid, error = validate_label(label)
+            if not is_valid:
+                failed_indices.append(i)
+
+        if not failed_indices:
+            break  # All items valid
+
+        # Retry only failed items
+        failed_items = [items[i] for i in failed_indices]
+        print(f"\n  Retry {retry + 1}/{MAX_RETRIES}: {len(failed_items)} items failed validation")
+        for i in failed_indices[:3]:  # Show first 3 failures
+            _, err = validate_label(results[i])
+            title = items[i].get("input", {}).get("title", "?")[:40]
+            print(f"    - {title}... ({err})")
+
+        # Retry with stronger emphasis on length
+        retry_text = format_items_for_labeling(failed_items)
+        retry_prompt = create_labeling_prompt(system_prompt, retry_text, len(failed_items))
+        retry_prompt = retry_prompt.replace(
+            "Beginne jetzt mit der Analyse",
+            "ACHTUNG: Vorheriger Versuch hatte zu kurze Texte!\n"
+            "summary MUSS mindestens 4 vollständige Sätze haben.\n"
+            "detailed_analysis MUSS mindestens 10 vollständige Sätze haben.\n"
+            "Beginne jetzt mit der Analyse"
+        )
+
+        retry_response = call_ollama(retry_prompt, model)
+        retry_results = parse_json_lines(retry_response)
+
+        # Merge retry results back
+        for j, idx in enumerate(failed_indices):
+            if j < len(retry_results):
+                results[idx] = retry_results[j]
+
+    # Final validation report
+    final_failures = sum(1 for r in results if not validate_label(r)[0])
+    if final_failures > 0:
+        print(f"\n  Warning: {final_failures} items still fail validation after retries")
 
     return results
 

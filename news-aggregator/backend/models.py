@@ -139,6 +139,18 @@ class Channel(Base):
             return config.get("url", "").lower()
         elif connector_type == "telegram":
             return config.get("channel", "").lower()
+        elif connector_type == "linkedin":
+            # Extract profile ID from URL (e.g., /company/microsoft or /in/satya-nadella)
+            import re
+
+            url = config.get("profile_url", "")
+            if "/company/" in url:
+                match = re.search(r"/company/([^/]+)", url)
+                return match.group(1).lower() if match else None
+            elif "/in/" in url:
+                match = re.search(r"/in/([^/]+)", url)
+                return match.group(1).lower() if match else None
+            return url.lower() if url else None
         return None
 
     @property

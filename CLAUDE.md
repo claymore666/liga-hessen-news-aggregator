@@ -50,6 +50,10 @@ main (production-ready)
 | Database | SQLite |
 | LLM | Ollama (gpu1) + OpenRouter (fallback) |
 
+## Development Guidelines
+
+**Missing API Endpoints**: When an API endpoint is missing and you need to work around it, **always discuss with the user first** about implementing the endpoint instead of creating workarounds. This ensures the system grows with proper API coverage.
+
 ## Testing Requirements
 
 **IMPORTANT**: Always create tests for each feature.

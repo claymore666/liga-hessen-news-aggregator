@@ -32,10 +32,67 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     stop_scheduler()
 
 
+API_DESCRIPTION = """
+## Liga Hessen News Aggregator API
+
+This API powers the daily briefing system for the **Liga der Freien Wohlfahrtspflege Hessen** -
+an umbrella organization of 6 welfare associations (AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden).
+
+### Core Concepts
+
+- **Sources**: Organizations/accounts to monitor (e.g., "Hessischer Landtag", "PRO ASYL")
+- **Channels**: Specific feeds within a source (e.g., RSS feed, X/Twitter profile, LinkedIn page)
+- **Items**: Individual news articles/posts fetched from channels
+- **Rules**: Keyword or semantic rules for priority scoring
+
+### Connector Types
+
+| Type | Description |
+|------|-------------|
+| `rss` | RSS/Atom feeds (including Google Alerts) |
+| `html` | Web scraping with CSS selectors |
+| `x_scraper` | X/Twitter profiles (Playwright-based) |
+| `mastodon` | Mastodon profiles |
+| `bluesky` | Bluesky feeds |
+| `telegram` | Public Telegram channels |
+| `linkedin` | LinkedIn company pages (RSSHub or Playwright) |
+| `instagram_scraper` | Instagram profiles |
+| `pdf` | PDF document extraction |
+
+### Priority Levels
+
+- `critical`: Immediate action required (budget cuts, legislative deadlines)
+- `high`: Important, needs attention within days
+- `medium`: Relevant, monitor situation
+- `low`: Background information
+
+### Arbeitskreise (Working Groups)
+
+- `AK1`: Grundsatz und Sozialpolitik (General & Social Policy)
+- `AK2`: Migration und Flucht (Migration & Refugees)
+- `AK3`: Gesundheit, Pflege und Senioren (Health, Care & Seniors)
+- `AK4`: Eingliederungshilfe (Integration Assistance)
+- `AK5`: Kinder, Jugend, Frauen und Familie (Children, Youth, Women & Family)
+- `QAG`: Querschnitt (Cross-cutting: Digitalization, Climate, Housing)
+"""
+
 app = FastAPI(
     title=settings.app_name,
+    description=API_DESCRIPTION,
     version="0.1.0",
     lifespan=lifespan,
+    openapi_tags=[
+        {"name": "items", "description": "News items (articles, posts) fetched from sources"},
+        {"name": "sources", "description": "Organizations/accounts to monitor"},
+        {"name": "connectors", "description": "Available connector types and their configuration"},
+        {"name": "rules", "description": "Priority scoring rules (keyword and semantic)"},
+        {"name": "stats", "description": "Dashboard statistics and analytics"},
+        {"name": "scheduler", "description": "Background fetch scheduler control"},
+        {"name": "llm", "description": "LLM processing status and reprocessing"},
+        {"name": "admin", "description": "Administrative operations"},
+        {"name": "email", "description": "Email digest configuration"},
+        {"name": "proxies", "description": "Proxy management for scraping"},
+    ],
 )
 
 # CORS middleware

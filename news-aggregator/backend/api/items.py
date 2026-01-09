@@ -157,7 +157,7 @@ async def update_item(
     update: ItemUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
-    """Update an item (read status, starred, notes)."""
+    """Update an item (read status, starred, notes, content, summary, priority)."""
     query = (
         select(Item)
         .where(Item.id == item_id)
@@ -170,6 +170,25 @@ async def update_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     update_data = update.model_dump(exclude_unset=True)
+
+    # Handle priority conversion from string to enum
+    if "priority" in update_data:
+        priority_str = update_data.pop("priority")
+        if priority_str:
+            priority_map = {
+                "critical": Priority.CRITICAL,
+                "high": Priority.HIGH,
+                "medium": Priority.MEDIUM,
+                "low": Priority.LOW,
+            }
+            if priority_str.lower() in priority_map:
+                item.priority = priority_map[priority_str.lower()]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid priority: {priority_str}. Must be critical, high, medium, or low."
+                )
+
     for key, value in update_data.items():
         setattr(item, key, value)
 
@@ -194,6 +213,257 @@ async def mark_as_read(
 
     item.is_read = True
     return {"status": "ok"}
+
+
+@router.post("/items/{item_id}/reprocess")
+async def reprocess_single_item(
+    item_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Reprocess a single item through the LLM.
+
+    Forces reprocessing even if item already has LLM analysis.
+    Runs in background and returns immediately.
+    """
+    # Verify item exists
+    query = select(Item).where(Item.id == item_id)
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    background_tasks.add_task(_reprocess_items_task, [item_id], force=True)
+
+    return {
+        "status": "started",
+        "item_id": item_id,
+        "message": "Reprocessing in background. Check logs for progress.",
+    }
+
+
+async def _refetch_item_task(item_id: int):
+    """Background task to re-fetch an item and extract linked articles."""
+    from connectors import ConnectorRegistry
+    from services.article_extractor import ArticleExtractor
+
+    async with async_session_maker() as db:
+        try:
+            result = await db.execute(
+                select(Item)
+                .where(Item.id == item_id)
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+            )
+            item = result.scalar_one_or_none()
+            if not item:
+                logger.error(f"Item {item_id} not found for re-fetch")
+                return
+
+            connector_type = item.channel.connector_type
+            if connector_type not in ("x_scraper", "linkedin"):
+                logger.warning(f"Re-fetch only supported for x_scraper/linkedin, got {connector_type}")
+                return
+
+            # Get the tweet/post URL
+            post_url = item.url
+            if not post_url:
+                logger.warning(f"Item {item_id} has no URL")
+                return
+
+            extractor = ArticleExtractor()
+            original_text = item.metadata_.get("original_tweet_text") or item.metadata_.get("original_post_text") or item.content
+            links = []
+
+            # Method 1: Extract from stored text
+            links = extractor.extract_urls_from_text(original_text)
+
+            # Method 2: Check for t.co links in text
+            import re
+            tco_links = re.findall(r'https?://t\.co/\w+', original_text)
+            for tco in tco_links:
+                resolved = await extractor.resolve_redirect(tco)
+                if resolved and resolved != tco and "t.co" not in resolved:
+                    if resolved not in links:
+                        links.append(resolved)
+
+            # Method 3: If no links found, scrape the tweet/post page to extract card links
+            if not links and post_url and ("x.com" in post_url or "twitter.com" in post_url):
+                logger.info(f"No links in text, scraping tweet page for card links: {post_url}")
+                card_links = await _scrape_tweet_for_links(post_url)
+                links.extend(card_links)
+
+            # Try to fetch first valid article
+            for link_url in links[:3]:
+                try:
+                    article = await extractor.fetch_article(link_url)
+                    if article and article.is_article:
+                        # Update item content with article
+                        author = item.author or "Unknown"
+                        combined_content = f"""Tweet von @{author}:
+{original_text}
+
+---
+
+Verlinkter Artikel von {article.source_domain}:
+{article.title or 'Unbekannter Titel'}
+
+{article.content[:4000]}"""
+
+                        item.content = combined_content
+                        item.metadata_ = {
+                            **item.metadata_,
+                            "extracted_links": links,
+                            "linked_articles": [{
+                                "url": article.url,
+                                "title": article.title,
+                                "domain": article.source_domain,
+                                "content_length": len(article.content),
+                            }],
+                            "refetched_at": datetime.utcnow().isoformat(),
+                        }
+
+                        await db.flush()
+                        await db.commit()
+                        logger.info(f"Re-fetched item {item_id} with article from {article.source_domain}")
+
+                        # Now reprocess through LLM
+                        await _reprocess_items_task([item_id], force=True)
+                        return
+
+                except Exception as e:
+                    logger.debug(f"Failed to fetch article from {link_url}: {e}")
+
+            logger.warning(f"No valid articles found for item {item_id}")
+
+        except Exception as e:
+            logger.error(f"Error re-fetching item {item_id}: {e}")
+
+
+async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
+    """Scrape a tweet page to extract article links from cards.
+
+    Args:
+        tweet_url: Full URL to the tweet
+
+    Returns:
+        List of article URLs found in the tweet's cards
+    """
+    import json
+    import random
+    from pathlib import Path
+    from playwright.async_api import async_playwright
+    from playwright_stealth import Stealth
+
+    links = []
+    cookie_file = Path("/app/data/x_cookies.json")
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            )
+
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+                viewport={"width": 1920, "height": 1080},
+                locale="de-DE",
+            )
+
+            # Load cookies if available
+            if cookie_file.exists():
+                with open(cookie_file) as f:
+                    cookies = json.load(f)
+                await context.add_cookies(cookies)
+                logger.debug("Loaded X.com cookies for refetch")
+
+            page = await context.new_page()
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+
+            await page.goto(tweet_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)  # Wait for JS to render
+
+            # Extract links from tweet cards
+            skip_domains = ("x.com", "twitter.com", "t.co", "pic.twitter.com", "pbs.twimg.com")
+
+            # Find all links in the tweet
+            all_links = await page.query_selector_all('article a[href*="://"]')
+            for link_el in all_links:
+                href = await link_el.get_attribute("href")
+                if href:
+                    # Skip internal X links
+                    is_internal = any(d in href for d in skip_domains)
+                    if not is_internal and href.startswith("http"):
+                        if href not in links:
+                            links.append(href)
+
+            # Also check for t.co links and resolve them
+            tco_links = await page.query_selector_all('a[href*="t.co"]')
+            for link_el in tco_links:
+                href = await link_el.get_attribute("href")
+                if href and "t.co" in href:
+                    from services.article_extractor import ArticleExtractor
+                    extractor = ArticleExtractor()
+                    resolved = await extractor.resolve_redirect(href)
+                    if resolved and "t.co" not in resolved:
+                        if resolved not in links:
+                            links.append(resolved)
+
+            await browser.close()
+
+    except Exception as e:
+        logger.warning(f"Error scraping tweet for links: {e}")
+
+    logger.info(f"Scraped {len(links)} links from tweet: {links}")
+    return links
+
+
+@router.post("/items/{item_id}/refetch")
+async def refetch_item(
+    item_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Re-fetch an item to extract linked article content.
+
+    For x_scraper and linkedin items, this will:
+    1. Extract any article links from the tweet/post text
+    2. Resolve t.co shortened URLs
+    3. Fetch article content from the linked URLs
+    4. Update the item with the article content
+    5. Reprocess through the LLM for better analysis
+
+    Runs in background and returns immediately.
+    """
+    # Verify item exists and is from a supported connector
+    query = (
+        select(Item)
+        .where(Item.id == item_id)
+        .options(selectinload(Item.channel))
+    )
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    connector_type = item.channel.connector_type
+    if connector_type not in ("x_scraper", "linkedin"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Re-fetch only supported for x_scraper/linkedin items, got {connector_type}"
+        )
+
+    background_tasks.add_task(_refetch_item_task, item_id)
+
+    return {
+        "status": "started",
+        "item_id": item_id,
+        "connector_type": connector_type,
+        "message": "Re-fetching article links in background. Check logs for progress.",
+    }
 
 
 @router.post("/items/mark-all-read")

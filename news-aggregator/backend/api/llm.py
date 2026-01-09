@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import Item, Setting
+from models import Item, Priority, Setting
 from services.llm.ollama import OllamaProvider
 
 logger = logging.getLogger(__name__)
@@ -361,13 +361,24 @@ async def reprocess_unprocessed_items(limit: int = 100) -> int:
                 # Update item
                 item.summary = analysis.get("summary")
                 item.detailed_analysis = analysis.get("detailed_analysis")
-                item.priority = analysis.get("priority")
+
+                # Map priority string to enum
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if llm_priority == "critical":
+                    item.priority = Priority.CRITICAL
+                elif llm_priority == "high":
+                    item.priority = Priority.HIGH
+                elif llm_priority == "medium":
+                    item.priority = Priority.MEDIUM
+                else:
+                    item.priority = Priority.LOW
+
                 item.priority_score = int(analysis.get("relevance_score", 0) * 100)
 
-                # Store in metadata
-                if item.metadata is None:
-                    item.metadata = {}
-                item.metadata["llm_analysis"] = analysis
+                # Store in metadata (use metadata_ to avoid SQLAlchemy naming conflict)
+                if item.metadata_ is None:
+                    item.metadata_ = {}
+                item.metadata_["llm_analysis"] = analysis
 
                 await db.commit()
                 processed += 1

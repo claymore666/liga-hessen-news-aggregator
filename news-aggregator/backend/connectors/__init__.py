@@ -33,6 +33,7 @@ from .instagram import InstagramConnector
 from .instagram_scraper import InstagramScraperConnector
 from .telegram import TelegramConnector
 from .google_alerts import GoogleAlertsConnector
+from .linkedin import LinkedInConnector
 
 __all__ = [
     # Base classes
@@ -51,4 +52,5 @@ __all__ = [
     "InstagramScraperConnector",
     "TelegramConnector",
     "GoogleAlertsConnector",
+    "LinkedInConnector",
 ]

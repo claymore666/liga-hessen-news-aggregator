@@ -317,7 +317,14 @@ class XScraperConnector(BaseConnector):
                 linked_articles = []
 
                 if article_extractor:
+                    # Method 1: Extract URLs from tweet text
                     extracted_links = article_extractor.extract_urls_from_text(text)
+
+                    # Method 2: Extract URLs from card elements (article previews)
+                    card_links = await self._extract_card_links(tweet_el)
+                    for card_url in card_links:
+                        if card_url not in extracted_links:
+                            extracted_links.append(card_url)
 
                     # Try to fetch article content from first valid link(s)
                     for link_url in extracted_links[: config.max_links_per_tweet]:
@@ -370,6 +377,89 @@ Verlinkter Artikel von {article.source_domain}:
                 continue
 
         return items
+
+    async def _extract_card_links(self, tweet_el) -> list[str]:
+        """Extract article links from tweet card elements.
+
+        X.com shows article previews in card elements. This method extracts
+        the actual article URLs from these cards, bypassing t.co redirects.
+
+        Args:
+            tweet_el: Playwright element handle for the tweet
+
+        Returns:
+            List of external article URLs found in cards
+        """
+        links = []
+
+        try:
+            # Method 1: Find card wrapper elements with links
+            # X.com uses data-testid="card.wrapper" for article cards
+            card_wrappers = await tweet_el.query_selector_all('[data-testid="card.wrapper"] a')
+            for link_el in card_wrappers:
+                href = await link_el.get_attribute("href")
+                if href and self._is_external_article_url(href):
+                    links.append(href)
+
+            # Method 2: Find links in card layouts (large/small media cards)
+            card_links = await tweet_el.query_selector_all('[data-testid*="card.layout"] a')
+            for link_el in card_links:
+                href = await link_el.get_attribute("href")
+                if href and self._is_external_article_url(href):
+                    if href not in links:
+                        links.append(href)
+
+            # Method 3: Find any link that looks like an article (not X internal)
+            # Sometimes cards don't have specific testids
+            all_links = await tweet_el.query_selector_all('a[href*="://"]')
+            for link_el in all_links:
+                href = await link_el.get_attribute("href")
+                if href and self._is_external_article_url(href):
+                    if href not in links:
+                        links.append(href)
+
+        except Exception as e:
+            logger.debug(f"Error extracting card links: {e}")
+
+        return links
+
+    def _is_external_article_url(self, url: str) -> bool:
+        """Check if URL is an external article link (not X internal).
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is an external article link
+        """
+        if not url:
+            return False
+
+        # Skip X/Twitter internal links (but allow t.co which redirects to articles)
+        skip_domains = ("x.com", "twitter.com", "pic.twitter.com", "pbs.twimg.com")
+        for domain in skip_domains:
+            if domain in url:
+                return False
+
+        # Allow t.co links - they redirect to actual article URLs
+        if "t.co/" in url:
+            return True
+
+        # Skip common non-article patterns
+        skip_patterns = [
+            r"/login", r"/signin", r"/auth",
+            r"\.(jpg|jpeg|png|gif|mp4|mp3)(\?|$)",
+            r"youtube\.com/watch", r"youtu\.be/",
+        ]
+        for pattern in skip_patterns:
+            if re.search(pattern, url, re.I):
+                return False
+
+        # Must be http/https
+        if not url.startswith(("http://", "https://")):
+            return False
+
+        return True
 
     async def validate(self, config: XScraperConfig) -> tuple[bool, str]:
         """Validate configuration by checking if profile exists.

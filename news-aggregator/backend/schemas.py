@@ -154,6 +154,11 @@ class ItemUpdate(BaseModel):
     is_read: bool | None = None
     is_starred: bool | None = None
     notes: str | None = None
+    # Admin fields for manual corrections
+    content: str | None = None
+    summary: str | None = None
+    detailed_analysis: str | None = None
+    priority: str | None = None  # "critical", "high", "medium", "low"
 
 
 class ItemListResponse(BaseModel):
