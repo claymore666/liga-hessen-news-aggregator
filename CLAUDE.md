@@ -2,197 +2,173 @@
 
 This file provides guidance to Claude Code when working with this repository.
 
-## Git Branching Workflow
+## Quick Reference
 
-**CRITICAL**: Always follow this branching strategy for this project.
-
-```
-main (production-ready)
-  └── dev (integration branch)
-        └── milestone/X-name (feature work)
-```
-
-### Workflow Rules
-1. **Never commit directly to `main` or `dev`**
-2. **Always work on a milestone branch** (e.g., `milestone/1-core-backend`)
-3. When milestone work is complete:
-   - Create PR: `milestone/X` → `dev`
-   - Review and merge
-4. When ready for release:
-   - Create PR: `dev` → `main`
-   - Review and merge
-
-### Branch Naming Convention
-- `milestone/1-core-backend`
-- `milestone/2-connector-system`
-- `milestone/3-llm-integration`
-- `milestone/4-vue-frontend`
-- `milestone/5-deployment`
-
-### Current Branches
-- `main` - Production branch
-- `dev` - Integration/staging branch
-- `milestone/1-core-backend` - Current work (Core Backend issues #1-5)
-
-## Project Structure
-
-- `docs/` - Architecture documentation
-- `news-aggregator/` - Application code
-  - `backend/` - Python/FastAPI
-  - `frontend/` - Vue 3/Vite
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | Vue 3 + Vite + TailwindCSS + Pinia |
-| Backend | Python 3.12 + FastAPI + SQLAlchemy |
-| Database | SQLite |
-| LLM | Ollama (gpu1) + OpenRouter (fallback) |
+| Resource | Location |
+|----------|----------|
+| GitHub | https://github.com/claymore666/liga-hessen-news-aggregator |
+| API Docs (Swagger) | http://localhost:8000/docs |
+| OpenAPI JSON | http://localhost:8000/openapi.json |
+| Backend | http://localhost:8000 |
+| Frontend | http://localhost:3000 |
 
 ## Development Guidelines
 
-**Missing API Endpoints**: When an API endpoint is missing and you need to work around it, **always discuss with the user first** about implementing the endpoint instead of creating workarounds. This ensures the system grows with proper API coverage.
+**API First**: Always use the REST API for data operations. Full documentation at `/docs` (Swagger UI).
 
-## Testing Requirements
+```bash
+# Prefer API calls over docker exec
+curl -s http://localhost:8000/api/items?limit=10 | jq '.'
+curl -s http://localhost:8000/api/stats/by-connector | jq '.'
 
-**IMPORTANT**: Always create tests for each feature.
+# Docker exec only when necessary (always with timeout)
+timeout 30 docker exec liga-news-backend python -c "..."
+```
 
-- Backend: pytest + pytest-asyncio
-- Run tests before committing: `pytest tests/`
-- Test files mirror source structure: `tests/test_<module>.py`
-- Minimum coverage for new features
+**Python Scripts**: Always use the venv when running scripts outside Docker:
+```bash
+cd news-aggregator/backend && source venv/bin/activate && python script.py
+```
 
-## GitHub Repository
+**Testing**: Run `pytest tests/` before committing. Create tests for new features.
 
-https://github.com/claymore666/liga-hessen-news-aggregator
+**Missing Endpoints**: Discuss implementing proper API endpoints rather than creating workarounds.
 
-See `docs/INDEX.md` for full documentation index.
+## Git Workflow
+
+```
+main (production) ← dev (integration) ← milestone/X-name (feature work)
+```
+
+Never commit directly to `main` or `dev`. Create PRs from milestone branches.
 
 ---
 
-## Projektbeschreibung
+## Project Overview
 
-Dieses Repository enthält das **Daily-Briefing-System** der **Liga der Freien Wohlfahrtspflege Hessen** – ein automatisiertes System zur Erfassung, Filterung und Analyse politischer Nachrichten für den hessischen Wohlfahrtsverband.
+**Daily-Briefing-System** for **Liga der Freien Wohlfahrtspflege Hessen** - automated news aggregation and analysis for the Hessian welfare association umbrella organization (AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden).
 
-## Kernkonzepte
+### Tech Stack
 
-### Liga Hessen
-- Dachverband von 6 Wohlfahrtsverbänden: AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden
-- Vertritt 113.000 Beschäftigte und 160.000 Ehrenamtliche in 7.300 Einrichtungen
-- Hauptthemen: Pflege, Kita, Migration, Eingliederungshilfe, Sozialfinanzierung
-- Primärer politischer Kontakt: HMAIJS (Ministerin Heike Hofmann)
+| Layer | Technology |
+|-------|------------|
+| Backend | Python 3.12 + FastAPI + SQLAlchemy + SQLite |
+| Frontend | Vue 3 + Vite + TailwindCSS + Pinia |
+| LLM | Ollama (`liga-relevance` fine-tuned model) + OpenRouter fallback |
+| Scraping | Playwright (stealth mode) for X/Twitter, Instagram, LinkedIn |
 
-### Arbeitskreise (AK)
-- **AK 1**: Grundsatz und Sozialpolitik
-- **AK 2**: Migration und Flucht
-- **AK 3**: Gesundheit, Pflege und Senioren
-- **AK 4**: Eingliederungshilfe
-- **AK 5**: Kinder, Jugend, Frauen und Familie
-- **QAG**: Digitalisierung, Klimaschutz, Wohnen
+### Working Groups (Arbeitskreise)
 
-### Dringlichkeitsstufen im Briefing-System
-- 🔴 **EILIG**: Haushaltskürzungen, Gesetzeseinbringungen (<24h)
-- 🟠 **WICHTIG**: Anhörungsfristen, Richtlinienentwürfe (1 Woche)
-- 🟡 **BEOBACHTEN**: Politische Aussagen, Parteipositionierungen
-- 🔵 **INFORMATION**: Hintergrundberichte, zur Kenntnis
+| Code | Focus Area |
+|------|------------|
+| AK1 | Grundsatz und Sozialpolitik |
+| AK2 | Migration und Flucht |
+| AK3 | Gesundheit, Pflege und Senioren |
+| AK4 | Eingliederungshilfe |
+| AK5 | Kinder, Jugend, Frauen und Familie |
+| QAG | Digitalisierung, Klimaschutz, Wohnen |
 
-## System-Architektur
+### Priority Levels
 
-Das Daily-Briefing-System folgt einer dreistufigen Pipeline:
+- `critical`: Immediate action (<24h) - budget cuts, legislation deadlines
+- `high`: Important (1 week) - hearings, draft regulations
+- `medium`: Monitor - political statements, party positions
+- `low`: Background information
 
-1. **Datenerfassung**: RSS-Feeds (inkl. Google Alerts), HTML-Scraping, Social Media (Mastodon, X/Twitter via Playwright, Bluesky), Landtag-PDF-Dokumente
-2. **Duplikat-Erkennung**: Dreistufig (GUID → Titel-Ähnlichkeit → Content-Hash)
-3. **Keyword-Filter (Stufe 1)**: Trigger-Kategorien mit Gewichtung (finanz_kritisch=10, struktur=8, reform=6, etc.)
-4. **LLM-Verarbeitung (Stufe 2)**: Multi-Provider-Fallback (Ollama → OpenRouter)
+---
 
-### Verfügbare Connectors
+## API Reference
 
-| Connector | Typ | Beschreibung | Status |
-|-----------|-----|--------------|--------|
-| `rss` | RSS/Atom | Standard-Feeds, Google Alerts | ✅ Stabil |
-| `html` | Web Scraping | CSS-Selektor-basiert | ✅ Stabil |
-| `x_scraper` | Playwright | X.com/Twitter Profile (Stealth-Modus) | ✅ Stabil |
-| `twitter` | Nitter RSS | Via Nitter-Instanzen | ⚠️ Instabil (Instanzen oft down) |
-| `bluesky` | RSS | Native Bluesky-Feeds | ✅ Stabil |
-| `mastodon` | RSS + API | Mastodon-Profile | ✅ Stabil |
-| `telegram` | Web Scraping | Öffentliche Telegram-Kanäle via t.me/s/ | ✅ Stabil |
-| `pdf` | PyMuPDF | Landtag-Dokumente | ✅ Stabil |
-| `instagram_scraper` | Playwright | Instagram-Profile direkt (Stealth-Modus) | ✅ Empfohlen |
-| `instagram` | Proxy Scraping | Instagram via Picuki/Picnob/Imginn | ⚠️ Instabil (Proxies oft blockiert) |
+Full interactive documentation: **http://localhost:8000/docs**
 
-**Hinweise**:
-- Für X/Twitter wird `x_scraper` empfohlen, da Nitter-Instanzen unzuverlässig sind
-- Für Instagram wird `instagram_scraper` empfohlen (max ~12 Posts ohne Login)
-- Telegram funktioniert nur für **öffentliche** Kanäle (keine privaten Gruppen)
+### Key Endpoints
 
-### X.com Authentifizierung
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/items` | List items (paginated, filterable) |
+| `GET /api/items/{id}` | Get single item with full details |
+| `PATCH /api/items/{id}` | Update item (read status, priority, content) |
+| `POST /api/items/{id}/reprocess` | Reprocess single item through LLM |
+| `POST /api/items/{id}/refetch` | Re-scrape and extract linked articles |
+| `POST /api/items/reprocess` | Batch reprocess items |
+| `GET /api/sources` | List all sources |
+| `POST /api/sources/{id}/fetch` | Manually fetch source |
+| `GET /api/sources/errors` | Sources with fetch errors |
+| `GET /api/stats/by-connector` | Item counts by connector type |
+| `GET /api/stats/by-source` | Item counts by source |
+| `GET /api/stats/by-priority` | Item counts by priority |
+| `GET /api/admin/db-stats` | Database statistics |
 
-X.com blockiert unauthentifizierte Zugriffe auf viele Profile. Der `x_scraper` verwendet Cookies aus Chrome für authentifizierten Zugriff.
+### Common API Patterns
 
-**Cookie-Refresh (wenn Cookies ablaufen):**
 ```bash
-cd news-aggregator/backend
-source venv/bin/activate
-python scripts/extract_chrome_cookies.py
-docker cp /tmp/x_cookies.json liga-news-backend:/app/data/x_cookies.json
+# Get recent items
+curl -s "http://localhost:8000/api/items?limit=50" | jq '.items[0]'
+
+# Filter by priority
+curl -s "http://localhost:8000/api/items?priority=critical" | jq '.total'
+
+# Reprocess items through LLM
+curl -X POST "http://localhost:8000/api/items/reprocess?limit=100&force=true"
+
+# Fetch specific source
+curl -X POST "http://localhost:8000/api/sources/42/fetch"
+
+# Check processing stats
+curl -s "http://localhost:8000/api/admin/db-stats" | jq '.'
 ```
 
-**Voraussetzungen:**
-- Chrome mit aktivem X.com Login (Account: 1andonlyChrisK)
-- `browser-cookie3` pip package (wird automatisch installiert)
+---
+
+## Connectors
+
+| Type | Description | Status |
+|------|-------------|--------|
+| `rss` | RSS/Atom feeds, Google Alerts | Stable |
+| `x_scraper` | X/Twitter via Playwright | Stable (requires cookies) |
+| `linkedin` | LinkedIn via Playwright | Stable (requires cookies) |
+| `mastodon` | Mastodon RSS + API | Stable |
+| `bluesky` | Bluesky native feeds | Stable |
+| `telegram` | Public channels via t.me/s/ | Stable |
+| `instagram_scraper` | Instagram via Playwright | Stable (max ~12 posts) |
+| `html` | CSS selector-based scraping | Stable |
+| `pdf` | PDF extraction (PyMuPDF) | Stable |
+
+### Cookie Authentication (X.com, LinkedIn)
+
+When cookies expire:
+```bash
+cd news-aggregator/backend && source venv/bin/activate
+
+# X.com cookies
+python scripts/extract_chrome_cookies.py
+docker cp /tmp/x_cookies.json liga-news-backend:/app/data/x_cookies.json
+
+# LinkedIn cookies
+python scripts/extract_linkedin_cookies.py
+docker cp /tmp/linkedin_cookies.json liga-news-backend:/app/data/linkedin_cookies.json
+```
 
 ### Helper Scripts
 
 ```bash
-# Mehrere Quellen abrufen
+# Fetch multiple sources
 ./scripts/fetch_sources.sh 100 116 137
 
-# Alle X-Quellen ohne Items abrufen
+# Fetch all X sources with no items
 ./scripts/fetch_sources.sh $(curl -s http://localhost:8000/api/stats/by-source | \
   jq -r '[.[] | select(.item_count == 0 and .connector_type == "x_scraper")] | .[].source_id' | tr '\n' ' ')
 ```
 
-### Lange Tasks: Progress-Monitoring
+---
 
-Für lange Tasks (z.B. viele Quellen fetchen) Bash mit `run_in_background: true` nutzen und Fortschritt mit `TaskOutput` abfragen:
+## LLM Processing
 
-```
-1. Bash-Task im Hintergrund starten (run_in_background: true)
-2. Fortschritt mit TaskOutput abfragen (block: false)
-3. Output-Datei direkt lesen: /tmp/claude/.../tasks/{task_id}.output
-4. Bei Abschluss: TaskOutput mit block: true
-```
+### Fine-tuned Model: `liga-relevance`
 
-**WICHTIG**: Bei lang laufenden Tasks regelmäßig Fortschritt anzeigen statt nur auf Completion warten.
+Custom Qwen3-14B model trained for Liga relevance classification.
 
-### Hybridansatz: Eigenes System + Google Alerts
-
-| Aspekt | Eigenes System | Google Alerts (RSS) |
-|--------|----------------|---------------------|
-| Stärke | Tiefe, Struktur, LLM-Analyse | Breite, Agenturen, Regionalpresse |
-| Quellen | ~15 kuratierte | Hunderte (dpa, epd, KNA, Regionalmedien) |
-
-Google Alerts werden als RSS-Feeds eingebunden (keine offizielle API).
-
-### Web-Interface
-
-- **Dashboard** (`/`): Live-Ansicht aller Meldungen mit 🆕-Markierung für neue Items
-- **Admin** (`/admin`): Quellen konfigurieren, Keywords bearbeiten, System-Status
-- **Echtzeit**: WebSocket-Updates, Browser-Notifications bei 🔴 EILIG-Meldungen
-
-### LLM-Provider-Strategie
-
-| Priorität | Anbieter | Modell | Beschreibung |
-|-----------|----------|--------|--------------|
-| Primär | Ollama (lokal) | `liga-relevance` | Fine-tuned Qwen3-14B für Liga-Klassifikation |
-| Fallback | OpenRouter | meta-llama/llama-3.3-70b | Cloud-API, bei Ollama-Ausfall |
-
-### Fine-tuned Modell: liga-relevance
-
-Das Modell wurde speziell für Liga-Relevanzklassifikation trainiert.
-
-**Input-Format** (exakt einhalten!):
+**Input Format:**
 ```
 Titel: {title}
 Inhalt: {content[:2000]}
@@ -200,201 +176,66 @@ Quelle: {source_name}
 Datum: {YYYY-MM-DD}
 ```
 
-**Output-Format** (JSON):
+**Output Format (JSON):**
 ```json
 {
-  "summary": "2-3 Sätze Zusammenfassung",
-  "relevant": true/false,
-  "relevance_score": 0.0-1.0,
-  "priority": "critical|high|medium|low|null",
-  "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
-  "tags": ["tag1", "tag2"],
-  "reasoning": "Kurze Begründung"
+  "summary": "4+ sentences summary",
+  "detailed_analysis": "10+ sentences analysis with Liga context",
+  "relevant": true,
+  "relevance_score": 0.85,
+  "priority": "high",
+  "assigned_ak": "AK3",
+  "tags": ["pflege", "finanzierung"],
+  "reasoning": "Brief explanation"
 }
 ```
 
-**Reprocessing** (Items neu klassifizieren):
-```bash
-# 100 neueste Items (skip bereits prozessierte)
-curl -X POST "http://localhost:8000/api/items/reprocess?limit=100"
+### Data Storage
 
-# Force reprocess (auch bereits prozessierte)
-curl -X POST "http://localhost:8000/api/items/reprocess?limit=100&force=true"
-
-# Nur bestimmte Quelle
-curl -X POST "http://localhost:8000/api/items/reprocess?source_id=5&limit=100"
-```
-
-Speed: ~3 sec/item, läuft im Hintergrund. Logs: `docker logs -f liga-news-backend`
-
-## Wichtige Trigger-Keywords
-
-**Höchste Priorität** (finanz_kritisch):
-Kürzung, Streichung, Haushaltssperre, Finanzierungslücke, Kahlschlag, Förderentzug
-
-**Struktur-Trigger**:
-Schließung, Abbau, existenzbedrohend, Insolvenz, Personalreduzierung
-
-**Reform-Trigger**:
-Gesetzesänderung, Novelle, Anhörung, Regierungsentwurf, Bundesratsentscheidung
-
-## RSS-Feeds für Monitoring
-
-Primäre Quellen (siehe Stakeholder-Datenbank):
-- `hessenschau.de/index.rss`
-- `faz.net/rss/aktuell/rhein-main/`
-- `fr.de/?_XML=rss`
-- `proasyl.de/news/feed/`
-- `bmas.de/DE/Service/Newsletter/RSS/rss.html`
-
-## Dokumentstruktur
-
-| Datei | Inhalt |
-|-------|--------|
-| `DailyBriefingArchitecture.md` | Technische Systemarchitektur, Datenbank-Schema, Projektstruktur |
-| `Daily-Briefing-System für die Liga...md` | Fachliche Anforderungen, Trigger-Keywords, Priorisierungsmatrix |
-| `Stakeholder-Datenbank...md` | 80+ Stakeholder, Social-Media-Handles, RSS-Feeds |
-| `FREE_LLMS.md` | LLM-API-Vergleich, kostenlose Kontingente |
-| `liga_hessen_recherche.md` | Organisationsstruktur der Liga |
-| `Umfassende Social Media Analyse...md` | Social-Media-Strategie und Kampagnen |
-
-## Sprachhinweise
-
-Die Dokumentation ist durchgehend auf **Deutsch** verfasst. Code-Beispiele und Konfigurationen verwenden deutsche Bezeichner (z.B. `zustaendiger_ak`, `dringlichkeit`).
+For `x_scraper` items, original content is preserved:
+- `content`: Combined tweet + extracted linked article (for LLM)
+- `metadata.original_tweet_text`: Original tweet text preserved
+- `metadata.linked_articles`: Extracted article metadata
 
 ---
 
-## Python Virtual Environment
-
-**CRITICAL**: When running Python scripts outside Docker, ALWAYS use the venv:
+## Docker Operations
 
 ```bash
-cd news-aggregator/backend
-source venv/bin/activate
-python script.py
-```
-
-The venv is located at `news-aggregator/backend/venv/`.
-
----
-
-## API vs. Docker Container Zugriff
-
-**WICHTIG für Claude Code**: Bevorzuge die REST-API für Datenbankabfragen statt direkter Docker-Container-Befehle.
-
-```bash
-# ✅ BEVORZUGT: API verwenden
-curl -s http://localhost:8000/api/sources | jq '.'
-curl -s http://localhost:8000/api/items?limit=100 | jq '.'
-curl -s http://localhost:8000/api/stats/by-source | jq '.'
-curl -s http://localhost:8000/api/stats/by-connector | jq '.'
-
-# ⚠️ NUR WENN NÖTIG: Docker exec (langsamer, komplexer)
-# IMMER mit timeout verwenden - docker exec kann hängen!
-timeout 30 docker exec liga-news-backend python -c "..."
-```
-
-### Wichtige API-Endpunkte
-
-| Endpunkt | Beschreibung |
-|----------|--------------|
-| `GET /api/sources` | Alle Quellen auflisten |
-| `GET /api/items?limit=N` | Items abrufen |
-| `GET /api/sources/errors` | Quellen mit Fehlern |
-| `POST /api/sources/{id}/fetch` | Quelle manuell abrufen |
-| `POST /api/items/reprocess` | Items durch LLM neu klassifizieren |
-| `GET /api/admin/db-stats` | Datenbank-Statistiken (inkl. processed/remaining) |
-| `GET /api/stats/by-priority` | Items pro Priorität |
-| `GET /api/stats/by-source` | Items pro Quelle |
-| `GET /api/stats/by-connector` | Items pro Connector-Typ |
-
----
-
-## Docker & Datenbank-Zugriff
-
-### Container-Übersicht
-
-```bash
-# Laufende Container anzeigen
+# Container status
 docker compose ps
 
-# Container:
-# - liga-news-backend  (FastAPI auf Port 8000)
-# - liga-news-frontend (Vue/Nginx auf Port 3000)
-```
-
-### Datenbank-Zugriff (SQLite im Container)
-
-Die Datenbank liegt im Docker-Container. **Nicht** direkt auf dem Host-System.
-
-```bash
-# Python-Code im Backend-Container ausführen
-docker exec liga-news-backend python -c "
-import asyncio
-from database import async_session_maker
-from sqlalchemy import select
-from models import Source, Item, Rule
-
-async def query():
-    async with async_session_maker() as db:
-        # Beispiel: Alle Quellen auflisten
-        sources = (await db.execute(select(Source))).scalars().all()
-        for s in sources:
-            print(f'{s.id}: {s.name} ({s.connector_type})')
-
-asyncio.run(query())
-"
-
-# Interaktive Python-Shell im Container
-docker exec -it liga-news-backend python
-
-# SQLite-Datenbank direkt abfragen
-docker exec liga-news-backend sqlite3 /app/data/news.db "SELECT * FROM sources LIMIT 5;"
-```
-
-### Logs anzeigen
-
-```bash
-# Backend-Logs
+# Logs
 docker logs liga-news-backend -f
 
-# Frontend-Logs
-docker logs liga-news-frontend -f
+# Rebuild after code changes
+cd news-aggregator && docker compose down && docker compose up -d --build
+
+# Direct DB query (use API instead when possible)
+docker exec liga-news-backend sqlite3 /app/data/news.db "SELECT COUNT(*) FROM items;"
 ```
 
-### Container neu starten (nach Code-Änderungen)
+---
 
-```bash
-cd news-aggregator
-docker compose down
-docker compose up -d --build
+## Long-Running Tasks
+
+For tasks like batch fetching, use background execution:
+
+```
+1. Start with run_in_background: true
+2. Check progress with TaskOutput (block: false)
+3. Read output file: /tmp/claude/.../tasks/{task_id}.output
+4. Final result: TaskOutput with block: true
 ```
 
-### Häufige Datenbankoperationen
+Show progress regularly rather than waiting silently for completion.
 
-```python
-# Im Container ausführen mit: docker exec liga-news-backend python -c "..."
+---
 
-# Regeln auflisten
-from models import Rule
-rules = (await db.execute(select(Rule))).scalars().all()
+## Documentation Index
 
-# Items nach Priorität
-from models import Item, Priority
-critical = (await db.execute(
-    select(Item).where(Item.priority == Priority.CRITICAL)
-)).scalars().all()
-
-# Neue Regel erstellen
-from models import Rule, RuleType, Priority
-rule = Rule(
-    name="Test-Regel",
-    rule_type=RuleType.KEYWORD,
-    pattern="test, beispiel",
-    priority_boost=10,
-    enabled=True,
-    order=99
-)
-db.add(rule)
-await db.commit()
-```
+| File | Content |
+|------|---------|
+| `docs/DailyBriefingArchitecture.md` | Technical architecture, DB schema |
+| `docs/Stakeholder-Datenbank...md` | 80+ stakeholders, social media handles |
+| `relevance-tuner/` | Model training scripts and data |
