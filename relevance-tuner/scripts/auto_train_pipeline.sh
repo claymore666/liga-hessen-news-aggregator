@@ -47,7 +47,7 @@ else
     python -c "
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained('.')
-model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q4_k_m')
+model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q8_0')
 "
 fi
 echo "GGUF conversion complete!"

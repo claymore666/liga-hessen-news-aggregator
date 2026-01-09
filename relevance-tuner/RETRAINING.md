@@ -81,11 +81,11 @@ cd models/qwen3-trained
 python -c "
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained('.')
-model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q4_k_m')
+model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q8_0')
 "
 ```
 
-**Output**: `models/qwen3-trained/gguf/liga-relevance-q4_k_m.gguf`
+**Output**: `models/qwen3-trained/gguf/liga-relevance-q8_0.gguf`
 
 ### Step 6: Deploy to Ollama
 

@@ -120,7 +120,7 @@ python scripts/label_with_ollama.py --all --model qwen3:70b
 - Method: LoRA rank 16
 - Batch size: 6 (fits in 24GB VRAM)
 - Epochs: 3
-- Output: GGUF q4_k_m for Ollama
+- Output: GGUF q8_0 for Ollama (always use q8_0)
 
 ## Paths
 

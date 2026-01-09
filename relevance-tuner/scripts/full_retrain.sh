@@ -74,8 +74,8 @@ python -c "
 from unsloth import FastLanguageModel
 print('Loading model...')
 model, tokenizer = FastLanguageModel.from_pretrained('.')
-print('Converting to GGUF (q4_k_m)...')
-model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q4_k_m')
+print('Converting to GGUF (q8_0)...')
+model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q8_0')
 print('Done!')
 " 2>&1 | tee "$LOG_DIR/gguf.log"
 cd /home/kamienc/claude.ai/ligahessen/relevance-tuner

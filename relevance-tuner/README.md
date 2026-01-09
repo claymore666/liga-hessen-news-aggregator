@@ -110,7 +110,7 @@ relevance-tuner/
 | Epochs | 3 |
 | Batch Size | 6 |
 | Learning Rate | 2e-4 |
-| Output | GGUF (q4_k_m) for Ollama |
+| Output | GGUF (q8_0) for Ollama |
 
 ## Scripts
 
