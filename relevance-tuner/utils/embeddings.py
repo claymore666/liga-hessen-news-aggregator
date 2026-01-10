@@ -45,6 +45,9 @@ ST_MODEL = os.environ.get("ST_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-
 # Nomic v2 MoE model (multilingual, 100 languages)
 NOMIC_V2_MODEL = "nomic-ai/nomic-embed-text-v2-moe"
 
+# BGE-M3 model (8192 context, 100+ languages, 1024 dims)
+BGE_M3_MODEL = "BAAI/bge-m3"
+
 
 class BaseEmbedder(ABC):
     """Abstract base class for embedders."""
@@ -302,12 +305,68 @@ class NomicV2Embedder(BaseEmbedder):
         return f"NomicV2Embedder({dim_str})"
 
 
+class BGEM3Embedder(BaseEmbedder):
+    """
+    BGE-M3 embedder from BAAI.
+
+    Features:
+    - 1024 dimensions
+    - 8192 token context (very long texts)
+    - 100+ languages (excellent multilingual)
+    - Supports dense, sparse, and multi-vector retrieval
+    - MIT license
+
+    We use dense embeddings for classification.
+    """
+
+    def __init__(self, max_length: int = 8000):
+        self.model_name = BGE_M3_MODEL
+        self.max_length = max_length  # Characters (8192 tokens ≈ 8000 chars for German)
+        self._model = None
+        self._embedding_dim = 1024
+
+    def _load_model(self):
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+            print(f"  Loading {self.model_name}...")
+            self._model = SentenceTransformer(self.model_name)
+        return self._model
+
+    @property
+    def embedding_dim(self) -> int:
+        return self._embedding_dim
+
+    def encode(
+        self,
+        texts: list[str],
+        show_progress_bar: bool = True,
+        batch_size: int = 8,  # Smaller batch for larger model
+    ) -> list[list[float]]:
+        model = self._load_model()
+
+        # Truncate very long texts
+        truncated = [t[: self.max_length] for t in texts]
+
+        embeddings = model.encode(
+            truncated,
+            show_progress_bar=show_progress_bar,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            batch_size=batch_size,
+        )
+
+        return embeddings.tolist()
+
+    def __repr__(self) -> str:
+        return f"BGEM3Embedder(max_length={self.max_length})"
+
+
 def get_embedder(backend: Optional[str] = None) -> BaseEmbedder:
     """
     Get an embedder based on the specified backend.
 
     Args:
-        backend: "ollama", "sentence-transformers", or "nomic-v2".
+        backend: "ollama", "sentence-transformers", "nomic-v2", or "bge-m3".
                  If None, uses EMBEDDING_BACKEND env var (default: ollama)
 
     Returns:
@@ -321,6 +380,8 @@ def get_embedder(backend: Optional[str] = None) -> BaseEmbedder:
         return SentenceTransformerEmbedder()
     elif backend in ("nomic-v2", "nomic-moe", "nomic2"):
         return NomicV2Embedder()
+    elif backend in ("bge-m3", "bgem3", "bge"):
+        return BGEM3Embedder()
     else:
         raise ValueError(f"Unknown embedding backend: {backend}")
 

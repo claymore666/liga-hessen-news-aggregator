@@ -38,13 +38,10 @@ from sklearn.preprocessing import LabelEncoder
 from config import (
     AK_CLASSES,
     DATA_DIR,
-    LR_C,
-    LR_MAX_ITER,
     MODELS_DIR,
     PRIORITY_LEVELS,
     RANDOM_SEED,
-    RF_MAX_DEPTH,
-    RF_N_ESTIMATORS,
+    get_backend_config,
 )
 from utils import get_embedder, load_test_data, load_training_data
 
@@ -62,28 +59,45 @@ MODEL_DIR = MODELS_DIR / "embedding"
 
 class EmbeddingClassifier:
     """
-    Hierarchical classifier using Ollama embeddings.
+    Hierarchical classifier using embeddings.
 
     Stage 1: Relevance (binary)
     Stage 2: Priority (4-class, only for relevant)
     Stage 3: AK (6-class, only for relevant)
+
+    Supports multiple embedding backends with backend-specific
+    classifier configurations.
     """
 
-    def __init__(self):
+    def __init__(self, backend_config: Optional[dict] = None):
+        """
+        Initialize classifier with backend-specific settings.
+
+        Args:
+            backend_config: Configuration dict from get_backend_config().
+                           If None, uses default settings.
+        """
         self.embedder = None  # Lazy load
+        self.backend_config = backend_config or {}
+
+        # Get classifier settings from config (with defaults)
+        lr_c = self.backend_config.get("lr_c", 1.0)
+        lr_max_iter = self.backend_config.get("lr_max_iter", 1000)
+        rf_n_estimators = self.backend_config.get("rf_n_estimators", 200)
+        rf_max_depth = self.backend_config.get("rf_max_depth", 15)
 
         # Stage 1: Relevance
         self.relevance_clf = LogisticRegression(
-            max_iter=LR_MAX_ITER,
+            max_iter=lr_max_iter,
             class_weight="balanced",
-            C=LR_C,
+            C=lr_c,
             random_state=RANDOM_SEED,
         )
 
         # Stage 2: Priority (RandomForest works well with embeddings)
         self.priority_clf = RandomForestClassifier(
-            n_estimators=RF_N_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH,
+            n_estimators=rf_n_estimators,
+            max_depth=rf_max_depth,
             class_weight="balanced",
             random_state=RANDOM_SEED,
             n_jobs=-1,
@@ -92,8 +106,8 @@ class EmbeddingClassifier:
 
         # Stage 3: AK
         self.ak_clf = RandomForestClassifier(
-            n_estimators=RF_N_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH,
+            n_estimators=rf_n_estimators,
+            max_depth=rf_max_depth,
             class_weight="balanced",
             random_state=RANDOM_SEED,
             n_jobs=-1,
@@ -257,28 +271,70 @@ class EmbeddingClassifier:
 
         return results
 
-    def save(self, path: Optional[Path] = None):
-        """Save model (without embedder - it will be reloaded)."""
+    def save(self, path: Optional[Path] = None, backend_name: Optional[str] = None):
+        """
+        Save model with backend-specific filename.
+
+        Args:
+            path: Directory to save to (default: MODEL_DIR)
+            backend_name: Backend identifier for filename (e.g., "bge-m3", "sentence-transformers")
+                         If None, uses generic name
+        """
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
 
         # Temporarily remove embedder (will reload on demand)
         embedder = self.embedder
+        embedder_repr = str(embedder) if embedder else "unknown"
         self.embedder = None
 
-        with open(path / "embedding_classifier.pkl", "wb") as f:
+        # Store backend info in the model for reference
+        self.backend_name = backend_name or "generic"
+        self.embedder_info = embedder_repr
+
+        # Backend-specific filename
+        if backend_name:
+            filename = f"embedding_classifier_{backend_name}.pkl"
+        else:
+            filename = "embedding_classifier.pkl"
+
+        filepath = path / filename
+        with open(filepath, "wb") as f:
             pickle.dump(self, f)
 
         self.embedder = embedder
-        print(f"  Model saved to: {path / 'embedding_classifier.pkl'}")
+        print(f"  Model saved to: {filepath}")
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> "EmbeddingClassifier":
-        """Load model."""
+    def load(cls, path: Optional[Path] = None, backend_name: Optional[str] = None) -> "EmbeddingClassifier":
+        """
+        Load model, optionally for a specific backend.
+
+        Args:
+            path: Directory to load from (default: MODEL_DIR)
+            backend_name: Backend identifier (e.g., "bge-m3"). If None, loads generic.
+        """
         path = Path(path) if path else MODEL_DIR
-        with open(path / "embedding_classifier.pkl", "rb") as f:
+
+        if backend_name:
+            filename = f"embedding_classifier_{backend_name}.pkl"
+        else:
+            filename = "embedding_classifier.pkl"
+
+        filepath = path / filename
+        with open(filepath, "rb") as f:
             clf = pickle.load(f)
         return clf
+
+    @classmethod
+    def list_available(cls, path: Optional[Path] = None) -> list[str]:
+        """List available saved models."""
+        path = Path(path) if path else MODEL_DIR
+        models = []
+        for f in path.glob("embedding_classifier_*.pkl"):
+            backend = f.stem.replace("embedding_classifier_", "")
+            models.append(backend)
+        return models
 
 
 # ============================================================================
@@ -383,9 +439,25 @@ def evaluate(
 
 
 def main():
+    import os
+
+    # Get backend from environment
+    backend_name = os.environ.get("EMBEDDING_BACKEND", "sentence-transformers")
+
+    # Get backend-specific configuration
+    try:
+        backend_config = get_backend_config(backend_name)
+    except ValueError:
+        print(f"Warning: Unknown backend '{backend_name}', using defaults")
+        backend_config = {}
+
     print("=" * 60)
-    print("Liga Embedding Classifier - Ollama (nomic-embed-text)")
+    print(f"Liga Embedding Classifier - {backend_name}")
     print("=" * 60)
+    print(f"  Status: {backend_config.get('status', 'unknown')}")
+    print(f"  Model: {backend_config.get('model', 'default')}")
+    print(f"  RF: n_estimators={backend_config.get('rf_n_estimators', 200)}, "
+          f"max_depth={backend_config.get('rf_max_depth', 15)}")
 
     # Load data using shared utilities
     print("\n[1/4] Loading data...")
@@ -410,9 +482,9 @@ def main():
     )
     print(f"  AK: {dict(ak_dist)}")
 
-    # Train
+    # Train with backend-specific config
     print("\n[2/4] Training classifier...")
-    clf = EmbeddingClassifier()
+    clf = EmbeddingClassifier(backend_config=backend_config)
     clf.fit(train_texts, train_rel, train_pri, train_ak)
 
     # Evaluate
@@ -431,26 +503,51 @@ def main():
     print(f"  Speed: {speed:.1f} items/sec ({1000/speed:.1f}ms per item)")
     print("  Note: Embedding is the bottleneck, sklearn prediction is instant")
 
-    # Save
+    # Save with backend-specific filename
     print("\n=== Saving Model ===")
-    clf.save()
+    clf.save(backend_name=backend_name)
+
+    # Save metrics for comparison
+    import json
+    from datetime import datetime
+
+    metrics_file = MODEL_DIR / "metrics.json"
+    all_metrics = {}
+    if metrics_file.exists():
+        with open(metrics_file) as f:
+            all_metrics = json.load(f)
+
+    all_metrics[backend_name] = {
+        "relevance_accuracy": round(metrics["relevance_accuracy"], 4),
+        "priority_accuracy": round(metrics["priority_accuracy"], 4),
+        "priority_within_one": round(metrics["priority_within_one"], 4),
+        "ak_accuracy": round(metrics["ak_accuracy"], 4),
+        "speed_items_per_sec": round(speed, 1),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    with open(metrics_file, "w") as f:
+        json.dump(all_metrics, f, indent=2)
+    print(f"  Metrics saved to: {metrics_file}")
 
     # Summary
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
+    print(f"Backend:                {backend_name}")
     print(f"Relevance accuracy:     {metrics['relevance_accuracy']:.1%}")
     print(f"Priority accuracy:      {metrics['priority_accuracy']:.1%}")
     print(f"Priority within-1:      {metrics['priority_within_one']:.1%}")
     print(f"AK accuracy:            {metrics['ak_accuracy']:.1%}")
     print(f"Speed:                  {speed:.1f} items/sec")
 
-    # Comparison with old model
-    print("\n=== COMPARISON (vs old paraphrase-MiniLM) ===")
-    print("                    Old (MiniLM)  New (nomic)")
-    print(f"  Relevance:         85.2%         {metrics['relevance_accuracy']:.1%}")
-    print(f"  AK:                55.3%         {metrics['ak_accuracy']:.1%}")
-    print("  Context:           500 chars     11,937 chars")
+    # Show all backends comparison if we have multiple
+    if len(all_metrics) > 1:
+        print("\n=== ALL BACKENDS COMPARISON ===")
+        print(f"{'Backend':<25} {'Relevance':>10} {'AK':>10} {'Speed':>12}")
+        print("-" * 60)
+        for name, m in sorted(all_metrics.items(), key=lambda x: -x[1]["relevance_accuracy"]):
+            print(f"{name:<25} {m['relevance_accuracy']:>9.1%} {m['ak_accuracy']:>9.1%} {m['speed_items_per_sec']:>9.1f}/s")
 
     # Examples
     print("\n=== Example Predictions ===")

@@ -141,3 +141,110 @@ URGENT_KEYWORDS = [
     "sofort", "dringend", "eilig", "frist", "deadline", "morgen",
     "heute", "akut", "notfall", "krise", "warnung",
 ]
+
+# ============================================================================
+# Embedding Backend Configurations
+# ============================================================================
+# Each backend has its own tunable parameters for both the embedding model
+# and the classifier on top of it.
+#
+# Status values:
+#   - "production": Known good, tested, recommended
+#   - "tested": Works, has metrics, may need tuning
+#   - "experimental": Untested or in development
+
+BACKEND_CONFIGS = {
+    "sentence-transformers": {
+        "status": "production",  # Best balance of accuracy and speed
+        "type": "sentence-transformers",
+        "model": "paraphrase-multilingual-MiniLM-L12-v2",
+        "embedding_dim": 384,
+        "max_length": 1500,  # Characters (~128 tokens)
+        # Classifier settings (tuned for 384-dim embeddings)
+        "lr_c": 0.5,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 100,
+        "rf_max_depth": 10,
+        # Known metrics (2026-01-10)
+        "known_metrics": {
+            "relevance_accuracy": 0.872,
+            "ak_accuracy": 0.632,
+            "speed_items_per_sec": 595,
+        },
+    },
+    "bge-m3": {
+        "status": "tested",  # Best relevance, slower
+        "type": "sentence-transformers",
+        "model": "BAAI/bge-m3",
+        "embedding_dim": 1024,
+        "max_length": 8000,  # Characters (8192 tokens)
+        # Classifier settings (tuned for 1024-dim embeddings)
+        "lr_c": 1.0,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 200,
+        "rf_max_depth": 20,  # Deeper for larger embeddings
+        # Known metrics (2026-01-10)
+        "known_metrics": {
+            "relevance_accuracy": 0.886,
+            "ak_accuracy": 0.553,
+            "speed_items_per_sec": 25.9,
+        },
+    },
+    "ollama": {
+        "status": "tested",  # Works but lower accuracy than sentence-transformers
+        "type": "ollama",
+        "model": "nomic-embed-text:137m-v1.5-fp16",
+        "embedding_dim": 768,
+        "max_length": 10000,  # Characters (8192 tokens)
+        "num_ctx": 8192,
+        # Classifier settings
+        "lr_c": 1.0,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 200,
+        "rf_max_depth": 15,
+        # Known metrics (2026-01-10)
+        "known_metrics": {
+            "relevance_accuracy": 0.718,
+            "ak_accuracy": 0.368,
+            "speed_items_per_sec": 37.1,
+        },
+    },
+    "nomic-v2": {
+        "status": "experimental",
+        "type": "sentence-transformers",
+        "model": "nomic-ai/nomic-embed-text-v2-moe",
+        "embedding_dim": 768,
+        "max_length": 2000,  # Characters (~512 tokens)
+        "task_prefix": "search_document: ",
+        # Classifier settings
+        "lr_c": 0.5,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 150,
+        "rf_max_depth": 15,
+    },
+    "jina-v3": {
+        "status": "experimental",
+        "type": "sentence-transformers",
+        "model": "jinaai/jina-embeddings-v3",
+        "embedding_dim": 1024,
+        "max_length": 8000,  # Characters (8192 tokens)
+        # Classifier settings
+        "lr_c": 1.0,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 200,
+        "rf_max_depth": 20,
+    },
+}
+
+# Default backend (production ready)
+DEFAULT_BACKEND = "sentence-transformers"
+
+
+def get_backend_config(backend_name: str) -> dict:
+    """Get configuration for a specific backend."""
+    if backend_name not in BACKEND_CONFIGS:
+        raise ValueError(
+            f"Unknown backend: {backend_name}. "
+            f"Available: {list(BACKEND_CONFIGS.keys())}"
+        )
+    return BACKEND_CONFIGS[backend_name].copy()

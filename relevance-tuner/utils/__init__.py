@@ -10,6 +10,7 @@ from .data_loading import (
     load_training_data,
 )
 from .embeddings import (
+    BGEM3Embedder,
     BaseEmbedder,
     NomicV2Embedder,
     OllamaEmbedder,
@@ -29,6 +30,7 @@ __all__ = [
     "OllamaEmbedder",
     "SentenceTransformerEmbedder",
     "NomicV2Embedder",
+    "BGEM3Embedder",
     "BaseEmbedder",
     "get_embedder",
     "get_embeddings",
