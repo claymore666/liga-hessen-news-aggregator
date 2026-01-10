@@ -1,1 +1,36 @@
+# Branch-specific files (prevent conflicts between checkouts)
+CLAUDE.md
+relevance-tuner/CLAUDE.md
+
+# Build artifacts
 llama.cpp/
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# Claude Code local settings
+.claude/
+
+# Large model files and training data (keep in relevance-tuner/.gitignore)
+# This root .gitignore covers any files accidentally placed at root level
+*.gguf
+*.safetensors
+*.bin
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.log
+*.tmp
+.DS_Store
+
+# News-aggregator specific (if not needed here)
+news-aggregator/backend/venv/
+news-aggregator/frontend/node_modules/
+news-aggregator/.env
