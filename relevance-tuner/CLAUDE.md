@@ -2,8 +2,17 @@
 
 ## CRITICAL RULES
 
-1. **Output format changes require explicit user approval** - Never modify the LLM output JSON schema (fields, structure) without asking first
-2. **Output changes require parser updates** - Any approved format change must also update the backend parser in `news-aggregator/backend/services/processor.py`
+1. **ALWAYS VERIFY MODEL SELECTION** - Before any LLM operation, check which model is active:
+   ```bash
+   curl -s "http://localhost:8000/api/llm/status" | jq '.model'
+   ```
+   - **Production model**: `qwen3:14b-q8_0` (base model with system prompt)
+   - **NOT recommended**: `liga-relevance` (fine-tuned, has quality issues)
+   - Model reverts to config default after Docker rebuild - ALWAYS re-check!
+   - When in doubt, ASK THE USER which model to use
+
+2. **Output format changes require explicit user approval** - Never modify the LLM output JSON schema (fields, structure) without asking first
+3. **Output changes require parser updates** - Any approved format change must also update the backend parser in `news-aggregator/backend/services/processor.py`
 
 ## Project Overview
 
@@ -132,7 +141,19 @@ python scripts/label_with_ollama.py --all --model qwen3:70b
 | `models/qwen3-trained/` | Fine-tuned model |
 | `scripts/` | Labeling and data scripts |
 
-## Ollama Models Used
+## Ollama Models
 
-- **Labeling**: `qwen3:32b` (recommended, ~5 items/min) or `qwen3:14b` (~16 items/min)
-- **Output**: `liga-relevance` (fine-tuned Qwen3-14B classifier)
+| Model | Purpose | Status |
+|-------|---------|--------|
+| `qwen3:14b-q8_0` | **Production inference** | ✅ Use this with system prompt |
+| `qwen3:32b` | Labeling training data | Good quality, slower |
+| `liga-relevance` | Fine-tuned classifier | ⚠️ NOT recommended (quality issues) |
+
+### Switching Models
+```bash
+# Check current model
+curl -s "http://localhost:8000/api/llm/status" | jq '.model'
+
+# Switch to base model (recommended)
+curl -X PUT "http://localhost:8000/api/llm/model" -H "Content-Type: application/json" -d '{"model": "qwen3:14b-q8_0"}'
+```
