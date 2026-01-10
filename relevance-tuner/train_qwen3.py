@@ -15,14 +15,14 @@ from trl import SFTTrainer, SFTConfig
 # Configuration
 # ============================================================================
 
-BASE_MODEL = "unsloth/Qwen3-14B-bnb-4bit"
+BASE_MODEL = "unsloth/Qwen3-14B"  # Full precision, load as 8-bit
 MAX_SEQ_LENGTH = 2048
 LORA_RANK = 16
 LORA_ALPHA = 16
 
 # Training
 EPOCHS = 3
-BATCH_SIZE = 6
+BATCH_SIZE = 4  # Reduced for 8-bit (uses more VRAM)
 GRADIENT_ACCUMULATION = 1  # No accumulation = no warning
 LEARNING_RATE = 2e-4
 
@@ -31,7 +31,7 @@ DATA_DIR = Path(__file__).parent / "data" / "final"
 OUTPUT_DIR = Path(__file__).parent / "models" / "qwen3-trained"
 
 # Ollama export
-OLLAMA_MODEL_NAME = "liga-relevance-q3"
+OLLAMA_MODEL_NAME = "liga-relevance"  # Based on Qwen3-14B, q8_0 quantization
 
 # System prompt for the classifier
 SYSTEM_PROMPT = """Du bist ein Nachrichtenanalyse-Assistent für die Liga der Freien Wohlfahrtspflege Hessen.
@@ -172,11 +172,12 @@ def main():
     print("=" * 60)
 
     # Load model
-    print("\n[1/5] Loading Qwen3-14B model...")
+    print("\n[1/5] Loading Qwen3-14B model (8-bit)...")
     model, tokenizer = FastLanguageModel.from_pretrained(
         BASE_MODEL,
         max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True,
+        load_in_4bit=False,
+        load_in_8bit=True,  # Use 8-bit instead of 4-bit
         dtype=None,  # Auto-detect
     )
 
