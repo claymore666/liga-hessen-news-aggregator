@@ -361,6 +361,61 @@ class BGEM3Embedder(BaseEmbedder):
         return f"BGEM3Embedder(max_length={self.max_length})"
 
 
+class JinaV3Embedder(BaseEmbedder):
+    """
+    Jina Embeddings v3 embedder.
+
+    Features:
+    - 1024 dimensions
+    - 8192 token context
+    - 89 languages (multilingual)
+    - Task-specific embeddings (retrieval, classification, etc.)
+    """
+
+    def __init__(self, max_length: int = 8000):
+        self.model_name = "jinaai/jina-embeddings-v3"
+        self.max_length = max_length
+        self._model = None
+        self._embedding_dim = 1024
+
+    def _load_model(self):
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+            print(f"  Loading {self.model_name}...")
+            self._model = SentenceTransformer(
+                self.model_name,
+                trust_remote_code=True,
+            )
+        return self._model
+
+    @property
+    def embedding_dim(self) -> int:
+        return self._embedding_dim
+
+    def encode(
+        self,
+        texts: list[str],
+        show_progress_bar: bool = True,
+        batch_size: int = 8,
+    ) -> list[list[float]]:
+        model = self._load_model()
+
+        truncated = [t[: self.max_length] for t in texts]
+
+        embeddings = model.encode(
+            truncated,
+            show_progress_bar=show_progress_bar,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            batch_size=batch_size,
+        )
+
+        return embeddings.tolist()
+
+    def __repr__(self) -> str:
+        return f"JinaV3Embedder(max_length={self.max_length})"
+
+
 def get_embedder(backend: Optional[str] = None) -> BaseEmbedder:
     """
     Get an embedder based on the specified backend.
@@ -382,6 +437,8 @@ def get_embedder(backend: Optional[str] = None) -> BaseEmbedder:
         return NomicV2Embedder()
     elif backend in ("bge-m3", "bgem3", "bge"):
         return BGEM3Embedder()
+    elif backend in ("jina-v3", "jina", "jina3"):
+        return JinaV3Embedder()
     else:
         raise ValueError(f"Unknown embedding backend: {backend}")
 

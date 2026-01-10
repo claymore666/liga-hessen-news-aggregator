@@ -12,6 +12,7 @@ from .data_loading import (
 from .embeddings import (
     BGEM3Embedder,
     BaseEmbedder,
+    JinaV3Embedder,
     NomicV2Embedder,
     OllamaEmbedder,
     SentenceTransformerEmbedder,
@@ -31,6 +32,7 @@ __all__ = [
     "SentenceTransformerEmbedder",
     "NomicV2Embedder",
     "BGEM3Embedder",
+    "JinaV3Embedder",
     "BaseEmbedder",
     "get_embedder",
     "get_embeddings",

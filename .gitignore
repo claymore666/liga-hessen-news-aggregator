@@ -14,6 +14,7 @@ venv/
 
 # Claude Code local settings
 .claude/
+.mcp.json
 
 # Large model files and training data (keep in relevance-tuner/.gitignore)
 # This root .gitignore covers any files accidentally placed at root level

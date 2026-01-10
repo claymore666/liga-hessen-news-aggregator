@@ -155,7 +155,7 @@ URGENT_KEYWORDS = [
 
 BACKEND_CONFIGS = {
     "sentence-transformers": {
-        "status": "production",  # Best balance of accuracy and speed
+        "status": "production",  # Fast, good baseline
         "type": "sentence-transformers",
         "model": "paraphrase-multilingual-MiniLM-L12-v2",
         "embedding_dim": 384,
@@ -167,13 +167,32 @@ BACKEND_CONFIGS = {
         "rf_max_depth": 10,
         # Known metrics (2026-01-10)
         "known_metrics": {
-            "relevance_accuracy": 0.872,
+            "relevance_accuracy": 0.859,
             "ak_accuracy": 0.632,
-            "speed_items_per_sec": 595,
+            "speed_items_per_sec": 675.2,
+        },
+    },
+    "nomic-v2": {
+        "status": "production",  # BEST accuracy (relevance + AK)
+        "type": "sentence-transformers",
+        "model": "nomic-ai/nomic-embed-text-v2-moe",
+        "embedding_dim": 768,
+        "max_length": 2000,  # Characters (~512 tokens)
+        "task_prefix": "search_document: ",  # Verified best prefix
+        # Classifier settings (tuned 2026-01-10)
+        "lr_c": 0.5,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 300,  # Tuned up from 150
+        "rf_max_depth": 30,  # Tuned up from 15
+        # Known metrics (2026-01-10)
+        "known_metrics": {
+            "relevance_accuracy": 0.899,
+            "ak_accuracy": 0.711,
+            "speed_items_per_sec": 32.9,
         },
     },
     "bge-m3": {
-        "status": "tested",  # Best relevance, slower
+        "status": "tested",  # Good relevance, longer context
         "type": "sentence-transformers",
         "model": "BAAI/bge-m3",
         "embedding_dim": 1024,
@@ -190,8 +209,26 @@ BACKEND_CONFIGS = {
             "speed_items_per_sec": 25.9,
         },
     },
+    "jina-v3": {
+        "status": "tested",  # Good accuracy, fast, long context
+        "type": "sentence-transformers",
+        "model": "jinaai/jina-embeddings-v3",
+        "embedding_dim": 1024,
+        "max_length": 8000,  # Characters (8192 tokens)
+        # Classifier settings
+        "lr_c": 1.0,
+        "lr_max_iter": 1000,
+        "rf_n_estimators": 200,
+        "rf_max_depth": 20,
+        # Known metrics (2026-01-10)
+        "known_metrics": {
+            "relevance_accuracy": 0.879,
+            "ak_accuracy": 0.579,
+            "speed_items_per_sec": 55.2,
+        },
+    },
     "ollama": {
-        "status": "tested",  # Works but lower accuracy than sentence-transformers
+        "status": "tested",  # Local-only option, lower accuracy
         "type": "ollama",
         "model": "nomic-embed-text:137m-v1.5-fp16",
         "embedding_dim": 768,
@@ -209,35 +246,10 @@ BACKEND_CONFIGS = {
             "speed_items_per_sec": 37.1,
         },
     },
-    "nomic-v2": {
-        "status": "experimental",
-        "type": "sentence-transformers",
-        "model": "nomic-ai/nomic-embed-text-v2-moe",
-        "embedding_dim": 768,
-        "max_length": 2000,  # Characters (~512 tokens)
-        "task_prefix": "search_document: ",
-        # Classifier settings
-        "lr_c": 0.5,
-        "lr_max_iter": 1000,
-        "rf_n_estimators": 150,
-        "rf_max_depth": 15,
-    },
-    "jina-v3": {
-        "status": "experimental",
-        "type": "sentence-transformers",
-        "model": "jinaai/jina-embeddings-v3",
-        "embedding_dim": 1024,
-        "max_length": 8000,  # Characters (8192 tokens)
-        # Classifier settings
-        "lr_c": 1.0,
-        "lr_max_iter": 1000,
-        "rf_n_estimators": 200,
-        "rf_max_depth": 20,
-    },
 }
 
-# Default backend (production ready)
-DEFAULT_BACKEND = "sentence-transformers"
+# Default backend (production ready - best accuracy)
+DEFAULT_BACKEND = "nomic-v2"
 
 
 def get_backend_config(backend_name: str) -> dict:
