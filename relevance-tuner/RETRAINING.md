@@ -74,18 +74,53 @@ python train_qwen3.py
 
 **Output**: `models/qwen3-trained/`
 
-### Step 5: Convert to GGUF
+### Step 5: Merge LoRA and Convert to GGUF
+
+**Important**: Unsloth's built-in merge is broken for 8-bit models. Use manual merge on CPU:
 
 ```bash
-cd models/qwen3-trained
-python -c "
-from unsloth import FastLanguageModel
-model, tokenizer = FastLanguageModel.from_pretrained('.')
-model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q8_0')
-"
+cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+source venv/bin/activate
+
+# Manual merge with PEFT (avoids Unsloth's broken 8-bit merge)
+python << 'EOF'
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+import torch
+import os
+
+print("Loading 16-bit base model on CPU...")
+base_model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen3-14B",
+    torch_dtype=torch.bfloat16,
+    device_map="cpu",  # Force CPU (GPU OOM with 16-bit)
+)
+
+tokenizer = AutoTokenizer.from_pretrained("models/qwen3-trained/lora_adapter")
+
+print("Loading LoRA adapter...")
+model = PeftModel.from_pretrained(base_model, "models/qwen3-trained/lora_adapter")
+
+print("Merging LoRA weights...")
+model = model.merge_and_unload()
+
+print("Saving merged model...")
+output_dir = "models/qwen3-trained/merged_manual"
+os.makedirs(output_dir, exist_ok=True)
+model.save_pretrained(output_dir)
+tokenizer.save_pretrained(output_dir)
+print(f"Merged model saved to {output_dir}")
+EOF
+
+# Convert to GGUF q8_0
+python llama.cpp/convert_hf_to_gguf.py models/qwen3-trained/merged_manual \
+  --outfile models/qwen3-trained/gguf/liga-relevance-q8_0.gguf \
+  --outtype q8_0
 ```
 
-**Output**: `models/qwen3-trained/gguf/liga-relevance-q8_0.gguf`
+**Duration**: ~5 min merge + ~1 min GGUF conversion
+
+**Output**: `models/qwen3-trained/gguf/liga-relevance-q8_0.gguf` (~15.7GB)
 
 ### Step 6: Deploy to Ollama
 
@@ -168,10 +203,17 @@ Expected output should include all defined fields (summary, detailed_analysis, e
 
 | Parameter | Value |
 |-----------|-------|
-| Base model | Qwen3-14B |
+| Base model | Qwen3-14B (8-bit quantized during training) |
 | Training method | LoRA (rank 16) |
-| Batch size | 6 |
+| Batch size | 4 |
 | Epochs | 3 |
-| Max sequence length | 4096 |
-| Quantization | Q4_K_M |
+| Max sequence length | 2048 |
+| Output quantization | q8_0 (15.7GB GGUF) |
 | Training examples | ~700 |
+
+## Known Issues
+
+See `TRAINING_ISSUES.md` for:
+- 4-bit merge corruption (SOLVED: use 8-bit training)
+- 8-bit Unsloth merge failure (SOLVED: manual PEFT merge)
+- GPU OOM during merge (SOLVED: use CPU)

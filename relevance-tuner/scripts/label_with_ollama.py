@@ -20,7 +20,7 @@ import requests
 # Configuration
 OLLAMA_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3:14b-q8_0"
-BATCH_SIZE = 10  # Items per LLM call (smaller for better accuracy)
+BATCH_SIZE = 10  # Items per LLM call
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -384,6 +384,10 @@ def label_items(items: list[dict], system_prompt: str, model: str, progress: Pro
 def merge_labels(original: dict, labels: Optional[dict]) -> dict:
     """Merge LLM labels back into original item structure."""
     result = original.copy()
+
+    # Ensure provenance exists
+    if "provenance" not in result:
+        result["provenance"] = {}
 
     if labels is None:
         # Mark as failed
