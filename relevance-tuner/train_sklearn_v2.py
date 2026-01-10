@@ -29,6 +29,7 @@ Usage:
 """
 
 import json
+import os
 import pickle
 import re
 import time
@@ -36,6 +37,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# Content length for text truncation (env var or default 6000)
+CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -286,7 +290,7 @@ class LigaFastClassifier:
                 - ak: str or None
                 - ak_confidence: float or None
         """
-        text = f"{title} {content[:2000]}"
+        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
         if source:
             text += f" Quelle: {source}"
 

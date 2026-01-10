@@ -23,6 +23,7 @@ Production:
 """
 
 import json
+import os
 import pickle
 import time
 from collections import Counter
@@ -30,6 +31,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# Content length for text truncation (env var or default 6000)
+CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics import accuracy_score, classification_report
 
@@ -161,7 +165,7 @@ class VectorDBClassifier:
         """
         Predict using k-NN voting.
         """
-        text = f"{title} {content[:1500]}"
+        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
         if source:
             text += f" Quelle: {source}"
 
@@ -246,7 +250,7 @@ class VectorDBClassifier:
         Args:
             filter_relevant: If True, only return relevant items. If False, only irrelevant.
         """
-        text = f"{title} {content[:1500]}"
+        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
         query = self._embed([text], show_progress=False)[0]
 
         # Get more neighbors if filtering

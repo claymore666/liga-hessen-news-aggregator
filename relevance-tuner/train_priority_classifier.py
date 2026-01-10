@@ -16,12 +16,16 @@ Production:
 """
 
 import json
+import os
 import pickle
 import time
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# Content length for text truncation (env var or default 6000)
+CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -115,7 +119,7 @@ class PriorityClassifier:
 
     def _prepare_text(self, title: str, content: str, source: Optional[str] = None) -> str:
         """Prepare text for classification."""
-        text = f"{title} {content[:2000]}"
+        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
         if source:
             text += f" Quelle: {source}"
         return text

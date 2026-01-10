@@ -16,6 +16,7 @@ Target accuracy:
 """
 
 import json
+import os
 import pickle
 import time
 from collections import Counter
@@ -23,6 +24,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# Content length for text truncation (env var or default 6000)
+CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -206,7 +210,7 @@ class LigaMLClassifier:
 
     def predict(self, title: str, content: str, source: Optional[str] = None) -> dict:
         """Predict for a single item."""
-        text = f"{title} {content[:2000]}"
+        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
         if source:
             text += f" Quelle: {source}"
 
