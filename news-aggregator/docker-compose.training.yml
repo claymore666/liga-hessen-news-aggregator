@@ -22,7 +22,7 @@ services:
       - LLM_ENABLED=false
       - INSTANCE_TYPE=training
       - OLLAMA_BASE_URL=http://gpu1:11434
-      - OLLAMA_MODEL=liga-relevance
+      - OLLAMA_MODEL=qwen3:14b-q8_0
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - training-data:/app/data
