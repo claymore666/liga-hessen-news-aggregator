@@ -199,6 +199,8 @@ class HealthCheckResponse(BaseModel):
     """Full system health status."""
 
     status: str
+    instance_type: str
+    llm_enabled: bool
     scheduler_running: bool
     scheduler_jobs: list[dict]
     llm_available: bool
@@ -265,6 +267,8 @@ async def get_system_health(
 
     return HealthCheckResponse(
         status=overall_status,
+        instance_type=settings.instance_type,
+        llm_enabled=settings.llm_enabled,
         scheduler_running=scheduler_running,
         scheduler_jobs=scheduler_jobs,
         llm_available=llm_available,

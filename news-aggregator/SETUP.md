@@ -117,31 +117,67 @@ npm run dev
 
 ## Production Deployment
 
+### Production Server
+
+| Property | Value |
+|----------|-------|
+| Host | VM 112 (docker-ai) at 192.168.0.124 |
+| SSH | `ssh kamienc@192.168.0.124` |
+| Project Path | `/home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator/` |
+| Compose File | `docker-compose.prod.yml` |
+| LLM Server | gpu1 (192.168.0.141:11434) with model `liga-relevance` |
+
+### Production Architecture
+
+| Component | Container | Port | Notes |
+|-----------|-----------|------|-------|
+| Backend | liga-news-backend | 8000 | Python/FastAPI |
+| Frontend | liga-news-frontend | 3001 | Vue 3 via nginx |
+| Database | SQLite | - | Volume: `liga-news-data` at `/app/data/liga_news.db` |
+| LLM | External | - | Ollama on gpu1 |
+
+### Deployment Commands
+
+```bash
+# SSH to production
+ssh kamienc@192.168.0.124
+
+# Navigate to project
+cd /home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator
+
+# Pull latest changes
+git pull origin main
+
+# Rebuild and restart (after code changes)
+sudo docker compose -f docker-compose.prod.yml build --no-cache
+sudo docker compose -f docker-compose.prod.yml up -d
+
+# Quick restart (no rebuild)
+sudo docker compose -f docker-compose.prod.yml up -d
+
+# Stop containers
+sudo docker compose -f docker-compose.prod.yml down
+
+# View logs
+sudo docker logs -f liga-news-backend
+sudo docker logs -f liga-news-frontend
+
+# Check status
+sudo docker ps -a | grep liga-news
+```
+
+### Data Persistence
+
+- **Volume**: `liga-news-data` mounted at `/app/data` in backend container
+- **Database**: SQLite at `/var/lib/docker/volumes/liga-news-data/_data/liga_news.db`
+- Data survives container rebuilds
+
 ### Security Checklist
 
 - [ ] Change `SECRET_KEY` in `.env`
 - [ ] Configure proper CORS origins
-- [ ] Set up HTTPS (reverse proxy)
 - [ ] Configure backup for SQLite database
 - [ ] Set appropriate log levels
-
-### Example Reverse Proxy (nginx)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name news.liga-hessen.de;
-
-    ssl_certificate /etc/letsencrypt/live/news.liga-hessen.de/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/news.liga-hessen.de/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
 
 ## Troubleshooting
 

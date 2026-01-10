@@ -1,5 +1,6 @@
 """RSS/Atom feed connector."""
 
+import logging
 from datetime import datetime
 from time import mktime
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field, HttpUrl
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 
+logger = logging.getLogger(__name__)
+
 
 class RSSConfig(BaseModel):
     """Configuration for RSS connector."""
@@ -17,6 +20,9 @@ class RSSConfig(BaseModel):
     url: HttpUrl = Field(..., description="Feed URL")
     custom_title: str | None = Field(
         default=None, description="Custom name for the feed (optional)"
+    )
+    follow_links: bool = Field(
+        default=True, description="Follow links to fetch full article content"
     )
 
 
@@ -41,6 +47,15 @@ class RSSConnector(BaseConnector):
         Returns:
             List of RawItem objects from the feed
         """
+        # Import article extractor if link following is enabled
+        article_extractor = None
+        if config.follow_links:
+            try:
+                from services.article_extractor import ArticleExtractor
+                article_extractor = ArticleExtractor()
+            except ImportError:
+                logger.warning("ArticleExtractor not available, disabling link following")
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 str(config.url),
@@ -66,14 +81,14 @@ class RSSConnector(BaseConnector):
                 except (ValueError, OverflowError):
                     pass
 
-            # Get content (prefer full content over summary)
-            content = ""
+            # Get RSS content (summary from feed)
+            rss_content = ""
             if hasattr(entry, "content") and entry.content:
-                content = entry.content[0].get("value", "")
+                rss_content = entry.content[0].get("value", "")
             elif hasattr(entry, "summary"):
-                content = entry.summary
+                rss_content = entry.summary
             elif hasattr(entry, "description"):
-                content = entry.description
+                rss_content = entry.description
 
             # Get link
             link = entry.get("link", "")
@@ -90,6 +105,21 @@ class RSSConnector(BaseConnector):
             if hasattr(entry, "tags"):
                 tags = [t.term for t in entry.tags if hasattr(t, "term")]
 
+            # Try to fetch full article content if link following is enabled
+            content = rss_content
+            article_fetched = False
+            if article_extractor and link:
+                try:
+                    article = await article_extractor.fetch_article(link)
+                    if article and article.content:
+                        # Combine RSS summary with full article
+                        feed_title = config.custom_title or feed.feed.get("title", "Unknown Feed")
+                        content = f"RSS-Zusammenfassung: {rss_content}\n\n--- Vollständiger Artikel von {article.source_domain} ---\n\n{article.content}"
+                        article_fetched = True
+                        logger.debug(f"Fetched full article from {link}: {len(article.content)} chars")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch article from {link}: {e}")
+
             items.append(
                 RawItem(
                     external_id=entry.get("id", link),
@@ -103,6 +133,7 @@ class RSSConnector(BaseConnector):
                         or feed.feed.get("title", "Unknown Feed"),
                         "feed_url": str(config.url),
                         "tags": tags,
+                        "article_extracted": article_fetched,
                     },
                 )
             )

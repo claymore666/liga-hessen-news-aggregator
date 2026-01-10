@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     app_name: str = "News Aggregator"
     debug: bool = False
 
+    # Instance identification
+    instance_type: str = "production"  # production | training | development
+
     # Database
     database_url: str = "sqlite+aiosqlite:///./data/news_aggregator.db"
 

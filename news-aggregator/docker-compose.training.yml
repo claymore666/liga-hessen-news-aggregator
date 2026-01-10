@@ -1,0 +1,42 @@
+# Training Data Collection Instance
+# Collects raw items without LLM processing for training data
+#
+# Usage:
+#   docker compose -f docker-compose.training.yml up -d
+#
+# This instance:
+# - Does NOT run LLM classification (LLM_ENABLED=false)
+# - Saves items with null summary/priority/detailed_analysis
+# - Uses separate database volume (liga-news-training-data)
+# - Runs on port 8001 to avoid conflicts with production
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: liga-news-backend-training
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/liga_news.db
+      - LLM_ENABLED=false
+      - INSTANCE_TYPE=training
+      - OLLAMA_BASE_URL=http://gpu1:11434
+      - OLLAMA_MODEL=qwen3:14b-q8_0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - training-data:/app/data
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  training-data:
+    name: liga-news-training-data

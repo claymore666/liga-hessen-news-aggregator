@@ -10,7 +10,56 @@ This file provides guidance to Claude Code when working with this repository.
 | API Docs (Swagger) | http://localhost:8000/docs |
 | OpenAPI JSON | http://localhost:8000/openapi.json |
 | Backend | http://localhost:8000 |
-| Frontend | http://localhost:3000 |
+| Frontend | http://localhost:3000 (dev) / http://localhost:3001 (prod) |
+
+## Production Deployment
+
+| Property | Value |
+|----------|-------|
+| Host | VM 112 (docker-ai) at 192.168.0.124 |
+| SSH | `ssh kamienc@192.168.0.124` |
+| Project Path | `/home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator/` |
+| Compose File | `docker-compose.prod.yml` |
+| LLM Server | gpu1 (192.168.0.141:11434) with model `liga-relevance` |
+
+### Production Architecture
+
+| Component | Container | Port | Notes |
+|-----------|-----------|------|-------|
+| Backend | liga-news-backend | 8000 | Python/FastAPI |
+| Frontend | liga-news-frontend | 3001 | Vue 3 via nginx |
+| Database | SQLite | - | Volume: `liga-news-data` at `/app/data/liga_news.db` |
+| LLM | External | - | Ollama on gpu1 |
+
+### Production Commands
+
+```bash
+# SSH to production
+ssh kamienc@192.168.0.124
+
+# Navigate to project
+cd /home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator
+
+# Pull latest changes
+git pull origin main
+
+# Rebuild and restart
+sudo docker compose -f docker-compose.prod.yml build --no-cache
+sudo docker compose -f docker-compose.prod.yml up -d
+
+# Quick restart (no rebuild)
+sudo docker compose -f docker-compose.prod.yml up -d
+
+# Stop containers
+sudo docker compose -f docker-compose.prod.yml down
+
+# View logs
+sudo docker logs -f liga-news-backend
+sudo docker logs -f liga-news-frontend
+
+# Check status
+sudo docker ps -a | grep liga-news
+```
 
 ## Development Guidelines
 

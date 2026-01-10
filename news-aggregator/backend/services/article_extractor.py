@@ -29,6 +29,11 @@ NEWS_DOMAINS = {
     # Government
     "bmas.de", "bmfsfj.de", "bmg.bund.de", "hessen.de",
     "soziales.hessen.de", "innen.hessen.de",
+    # Hessen politics
+    "hessischer-landtag.de", "cdu-hessen.de", "spd-hessen.de",
+    "gruene-hessen.de", "fdp-hessen.de", "dielinke-hessen.de",
+    "staatskanzlei.hessen.de", "kultusministerium.hessen.de",
+    "finanzministerium.hessen.de", "wirtschaft.hessen.de",
     # Wire services
     "dpa.de", "epd.de", "kna.de",
 }
