@@ -2,14 +2,16 @@
 """
 Liga Hessen Embedding-based Classifier
 
-Uses sentence-transformers embeddings instead of TF-IDF for better semantic understanding.
+Uses Ollama embeddings (nomic-embed-text) for semantic understanding.
 
 Benefits:
 - "Kita" and "Kindergarten" are similar (semantic)
 - "Pflege" and "Altenpflege" are similar
 - Works better with limited training data
+- 8192 token context (no content truncation needed)
+- 768-dimensional embeddings
 
-Model: paraphrase-multilingual-MiniLM-L12-v2 (German support, 384 dims)
+Model: nomic-embed-text:137m-v1.5-fp16 (via Ollama)
 
 Usage:
     python train_embedding_classifier.py
@@ -20,8 +22,6 @@ Production:
     result = clf.predict(title, content)
 """
 
-import json
-import os
 import pickle
 import time
 from collections import Counter
@@ -29,70 +29,73 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-# Content length for text truncation (env var or default 6000)
-CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
-from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.preprocessing import LabelEncoder
 
+# Import from central config and utilities
+from config import (
+    AK_CLASSES,
+    DATA_DIR,
+    LR_C,
+    LR_MAX_ITER,
+    MODELS_DIR,
+    PRIORITY_LEVELS,
+    RANDOM_SEED,
+    RF_MAX_DEPTH,
+    RF_N_ESTIMATORS,
+)
+from utils import get_embedder, load_test_data, load_training_data
+
 # ============================================================================
 # Configuration
 # ============================================================================
 
-DATA_DIR = Path(__file__).parent / "data" / "final"
-MODEL_DIR = Path(__file__).parent / "models" / "embedding"
-
-# Multilingual model with German support (384 dimensions)
-EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-
-PRIORITY_LEVELS = ["low", "medium", "high", "critical"]
-AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
+MODEL_DIR = MODELS_DIR / "embedding"
 
 
 # ============================================================================
 # Embedding Classifier
 # ============================================================================
 
+
 class EmbeddingClassifier:
     """
-    Hierarchical classifier using sentence-transformer embeddings.
+    Hierarchical classifier using Ollama embeddings.
 
     Stage 1: Relevance (binary)
     Stage 2: Priority (4-class, only for relevant)
     Stage 3: AK (6-class, only for relevant)
     """
 
-    def __init__(self, model_name: str = EMBEDDING_MODEL):
-        self.model_name = model_name
+    def __init__(self):
         self.embedder = None  # Lazy load
 
         # Stage 1: Relevance
         self.relevance_clf = LogisticRegression(
-            max_iter=1000,
+            max_iter=LR_MAX_ITER,
             class_weight="balanced",
-            C=1.0,
-            random_state=42,
+            C=LR_C,
+            random_state=RANDOM_SEED,
         )
 
         # Stage 2: Priority (RandomForest works well with embeddings)
         self.priority_clf = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=15,
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
             class_weight="balanced",
-            random_state=42,
+            random_state=RANDOM_SEED,
             n_jobs=-1,
         )
         self.priority_encoder = LabelEncoder()
 
         # Stage 3: AK
         self.ak_clf = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=15,
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
             class_weight="balanced",
-            random_state=42,
+            random_state=RANDOM_SEED,
             n_jobs=-1,
         )
         self.ak_encoder = LabelEncoder()
@@ -102,19 +105,16 @@ class EmbeddingClassifier:
     def _load_embedder(self):
         """Lazy load the embedding model."""
         if self.embedder is None:
-            print(f"  Loading embedding model: {self.model_name}")
-            self.embedder = SentenceTransformer(self.model_name)
+            print("  Loading embedder...")
+            self.embedder = get_embedder()  # Uses EMBEDDING_BACKEND env var
+            print(f"  Backend: {self.embedder}")
         return self.embedder
 
     def _embed(self, texts: list[str], show_progress: bool = True) -> np.ndarray:
-        """Embed texts using sentence-transformers."""
+        """Embed texts using OllamaEmbedder."""
         embedder = self._load_embedder()
-        return embedder.encode(
-            texts,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True,
-            normalize_embeddings=True,  # For cosine similarity
-        )
+        embeddings = embedder.encode(texts, show_progress_bar=show_progress)
+        return np.array(embeddings)
 
     def fit(
         self,
@@ -165,7 +165,8 @@ class EmbeddingClassifier:
 
     def predict(self, title: str, content: str, source: Optional[str] = None) -> dict:
         """Predict for a single item."""
-        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
+        # No truncation needed - OllamaEmbedder handles long texts via chunking
+        text = f"{title} {content}"
         if source:
             text += f" Quelle: {source}"
 
@@ -189,7 +190,9 @@ class EmbeddingClassifier:
             try:
                 priority_prob = self.priority_clf.predict_proba(X)[0]
                 priority_idx = np.argmax(priority_prob)
-                result["priority"] = self.priority_encoder.inverse_transform([priority_idx])[0]
+                result["priority"] = self.priority_encoder.inverse_transform(
+                    [priority_idx]
+                )[0]
                 result["priority_confidence"] = float(priority_prob[priority_idx])
             except Exception:
                 result["priority"] = "medium"
@@ -239,8 +242,12 @@ class EmbeddingClassifier:
 
                 for j, i in enumerate(relevant_indices):
                     priority_idx = np.argmax(priority_probs[j])
-                    results[i]["priority"] = self.priority_encoder.inverse_transform([priority_idx])[0]
-                    results[i]["priority_confidence"] = float(priority_probs[j, priority_idx])
+                    results[i]["priority"] = self.priority_encoder.inverse_transform(
+                        [priority_idx]
+                    )[0]
+                    results[i]["priority_confidence"] = float(
+                        priority_probs[j, priority_idx]
+                    )
 
                     ak_idx = np.argmax(ak_probs[j])
                     results[i]["ak"] = self.ak_encoder.inverse_transform([ak_idx])[0]
@@ -255,7 +262,7 @@ class EmbeddingClassifier:
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
 
-        # Temporarily remove embedder (too large to pickle, will reload)
+        # Temporarily remove embedder (will reload on demand)
         embedder = self.embedder
         self.embedder = None
 
@@ -275,51 +282,17 @@ class EmbeddingClassifier:
 
 
 # ============================================================================
-# Data Loading
-# ============================================================================
-
-def load_data(split: str) -> tuple[list[str], list[int], list[str], list[str]]:
-    """Load data from a split."""
-    texts = []
-    relevance = []
-    priorities = []
-    aks = []
-
-    path = DATA_DIR / f"{split}.jsonl"
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            inp = record["input"]
-            lab = record["labels"]
-
-            # Text: title + truncated content
-            text = f"{inp['title']} {inp['content'][:1500]}"
-            if inp.get("source"):
-                text += f" Quelle: {inp['source']}"
-            texts.append(text)
-
-            is_rel = 1 if lab["relevant"] else 0
-            relevance.append(is_rel)
-
-            priority = lab.get("priority") or "none"
-            if priority == "information":
-                priority = "low"
-            priorities.append(priority)
-
-            ak = lab.get("ak") or "none"
-            aks.append(ak)
-
-    return texts, relevance, priorities, aks
-
-
-# ============================================================================
 # Evaluation
 # ============================================================================
 
-def evaluate(clf: EmbeddingClassifier, texts: list[str], relevance: list[int],
-             priorities: list[str], aks: list[str]) -> dict:
+
+def evaluate(
+    clf: EmbeddingClassifier,
+    texts: list[str],
+    relevance: list[int],
+    priorities: list[str],
+    aks: list[str],
+) -> dict:
     """Evaluate the classifier."""
     predictions = clf.predict_batch(texts)
 
@@ -331,7 +304,11 @@ def evaluate(clf: EmbeddingClassifier, texts: list[str], relevance: list[int],
     rel_f1 = f1_score(y_true_rel, y_pred_rel)
 
     print("\n=== RELEVANCE (binary) ===")
-    print(classification_report(y_true_rel, y_pred_rel, target_names=["irrelevant", "relevant"]))
+    print(
+        classification_report(
+            y_true_rel, y_pred_rel, target_names=["irrelevant", "relevant"]
+        )
+    )
     print(f"Accuracy: {rel_acc:.1%}, F1: {rel_f1:.1%}")
 
     # Priority (on true relevant)
@@ -342,19 +319,30 @@ def evaluate(clf: EmbeddingClassifier, texts: list[str], relevance: list[int],
 
     if np.sum(eval_mask) > 0:
         y_true_priority = priorities_arr[eval_mask]
-        y_pred_priority = np.array([p["priority"] or "medium" for p in predictions])[eval_mask]
+        y_pred_priority = np.array([p["priority"] or "medium" for p in predictions])[
+            eval_mask
+        ]
 
         priority_acc = accuracy_score(y_true_priority, y_pred_priority)
         print("\n=== PRIORITY (4-class) ===")
-        print(classification_report(y_true_priority, y_pred_priority, labels=PRIORITY_LEVELS, zero_division=0))
+        print(
+            classification_report(
+                y_true_priority,
+                y_pred_priority,
+                labels=PRIORITY_LEVELS,
+                zero_division=0,
+            )
+        )
         print(f"Accuracy: {priority_acc:.1%}")
 
         # Within-1-level
         level_map = {p: i for i, p in enumerate(PRIORITY_LEVELS)}
-        within_one = np.mean([
-            abs(level_map[t] - level_map.get(p, 1)) <= 1
-            for t, p in zip(y_true_priority, y_pred_priority)
-        ])
+        within_one = np.mean(
+            [
+                abs(level_map[t] - level_map.get(p, 1)) <= 1
+                for t, p in zip(y_true_priority, y_pred_priority)
+            ]
+        )
         print(f"Within-1-level: {within_one:.1%}")
     else:
         priority_acc = 0
@@ -371,7 +359,11 @@ def evaluate(clf: EmbeddingClassifier, texts: list[str], relevance: list[int],
 
         ak_acc = accuracy_score(y_true_ak, y_pred_ak)
         print("\n=== AK (6-class) ===")
-        print(classification_report(y_true_ak, y_pred_ak, labels=AK_CLASSES, zero_division=0))
+        print(
+            classification_report(
+                y_true_ak, y_pred_ak, labels=AK_CLASSES, zero_division=0
+            )
+        )
         print(f"Accuracy: {ak_acc:.1%}")
     else:
         ak_acc = 0
@@ -389,39 +381,39 @@ def evaluate(clf: EmbeddingClassifier, texts: list[str], relevance: list[int],
 # Main
 # ============================================================================
 
+
 def main():
     print("=" * 60)
-    print("Liga Embedding Classifier - Sentence Transformers")
+    print("Liga Embedding Classifier - Ollama (nomic-embed-text)")
     print("=" * 60)
 
-    # Load data
+    # Load data using shared utilities
     print("\n[1/4] Loading data...")
-    train_texts, train_rel, train_pri, train_ak = load_data("train")
-    val_texts, val_rel, val_pri, val_ak = load_data("validation")
-    test_texts, test_rel, test_pri, test_ak = load_data("test")
+    train_texts, train_rel, train_pri, train_ak = load_training_data(
+        splits=["train", "validation"]
+    )
+    test_texts, test_rel, test_pri, test_ak = load_test_data()
 
-    # Combine train + val
-    all_texts = train_texts + val_texts
-    all_rel = train_rel + val_rel
-    all_pri = train_pri + val_pri
-    all_ak = train_ak + val_ak
-
-    print(f"  Training: {len(all_texts)} items")
+    print(f"  Training: {len(train_texts)} items")
     print(f"  Test: {len(test_texts)} items")
 
-    rel_count = sum(all_rel)
-    print(f"  Relevant: {rel_count} ({rel_count/len(all_rel)*100:.1f}%)")
+    rel_count = sum(train_rel)
+    print(f"  Relevant: {rel_count} ({rel_count/len(train_rel)*100:.1f}%)")
 
-    pri_dist = Counter([p for p, r in zip(all_pri, all_rel) if r and p in PRIORITY_LEVELS])
+    pri_dist = Counter(
+        [p for p, r in zip(train_pri, train_rel) if r and p in PRIORITY_LEVELS]
+    )
     print(f"  Priority: {dict(pri_dist)}")
 
-    ak_dist = Counter([a for a, r in zip(all_ak, all_rel) if r and a in AK_CLASSES])
+    ak_dist = Counter(
+        [a for a, r in zip(train_ak, train_rel) if r and a in AK_CLASSES]
+    )
     print(f"  AK: {dict(ak_dist)}")
 
     # Train
     print("\n[2/4] Training classifier...")
     clf = EmbeddingClassifier()
-    clf.fit(all_texts, all_rel, all_pri, all_ak)
+    clf.fit(train_texts, train_rel, train_pri, train_ak)
 
     # Evaluate
     print("\n[3/4] Evaluating on test set...")
@@ -437,7 +429,7 @@ def main():
     elapsed = time.perf_counter() - start
     speed = len(test_texts) / elapsed
     print(f"  Speed: {speed:.1f} items/sec ({1000/speed:.1f}ms per item)")
-    print(f"  Note: Embedding is the bottleneck, sklearn prediction is instant")
+    print("  Note: Embedding is the bottleneck, sklearn prediction is instant")
 
     # Save
     print("\n=== Saving Model ===")
@@ -453,28 +445,36 @@ def main():
     print(f"AK accuracy:            {metrics['ak_accuracy']:.1%}")
     print(f"Speed:                  {speed:.1f} items/sec")
 
-    # Comparison with TF-IDF
-    print("\n=== COMPARISON ===")
-    print("                    TF-IDF    Embeddings")
-    print(f"  Relevance:         83.9%     {metrics['relevance_accuracy']:.1%}")
-    print(f"  Priority:          63.2%     {metrics['priority_accuracy']:.1%}")
-    print(f"  AK:                39.5%     {metrics['ak_accuracy']:.1%}")
+    # Comparison with old model
+    print("\n=== COMPARISON (vs old paraphrase-MiniLM) ===")
+    print("                    Old (MiniLM)  New (nomic)")
+    print(f"  Relevance:         85.2%         {metrics['relevance_accuracy']:.1%}")
+    print(f"  AK:                55.3%         {metrics['ak_accuracy']:.1%}")
+    print("  Context:           500 chars     11,937 chars")
 
     # Examples
     print("\n=== Example Predictions ===")
     examples = [
-        ("Hessen kürzt Kita-Mittel um 50 Millionen Euro",
-         "Die Landesregierung plant Kürzungen bei der Kinderbetreuung.",
-         "hessenschau.de"),
-        ("Champions League: Bayern München gewinnt",
-         "Mit 3:0 siegte Bayern gegen den italienischen Meister.",
-         "sport1.de"),
-        ("Neue Pflegeheime brauchen mehr Personal",
-         "Das Sozialministerium fordert bessere Personalausstattung in der Altenpflege.",
-         "tagesschau.de"),
-        ("Flüchtlingsunterkünfte in Frankfurt überfüllt",
-         "Die Erstaufnahme meldet Kapazitätsengpässe bei der Unterbringung.",
-         "fr.de"),
+        (
+            "Hessen kürzt Kita-Mittel um 50 Millionen Euro",
+            "Die Landesregierung plant Kürzungen bei der Kinderbetreuung.",
+            "hessenschau.de",
+        ),
+        (
+            "Champions League: Bayern München gewinnt",
+            "Mit 3:0 siegte Bayern gegen den italienischen Meister.",
+            "sport1.de",
+        ),
+        (
+            "Neue Pflegeheime brauchen mehr Personal",
+            "Das Sozialministerium fordert bessere Personalausstattung in der Altenpflege.",
+            "tagesschau.de",
+        ),
+        (
+            "Flüchtlingsunterkünfte in Frankfurt überfüllt",
+            "Die Erstaufnahme meldet Kapazitätsengpässe bei der Unterbringung.",
+            "fr.de",
+        ),
     ]
 
     for title, content, source in examples:

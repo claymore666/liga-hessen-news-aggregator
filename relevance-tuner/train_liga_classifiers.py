@@ -15,8 +15,6 @@ Target accuracy:
 - AK: 80-95%
 """
 
-import json
-import os
 import pickle
 import time
 from collections import Counter
@@ -24,37 +22,36 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-# Content length for text truncation (env var or default 6000)
-CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.preprocessing import LabelEncoder
 
+# Import from central config and utilities
+from config import (
+    AK_CLASSES,
+    IRRELEVANT_KEYWORDS,
+    LIGA_KEYWORDS,
+    LR_C,
+    LR_MAX_ITER,
+    MODELS_DIR,
+    PRIORITY_LEVELS,
+    RANDOM_SEED,
+    RF_MAX_DEPTH,
+    RF_N_ESTIMATORS,
+    TFIDF_MAX_DF,
+    TFIDF_MAX_FEATURES,
+    TFIDF_MIN_DF,
+    TFIDF_NGRAM_RANGE,
+)
+from utils import load_test_data, load_training_data
+
 # ============================================================================
 # Configuration
 # ============================================================================
 
-DATA_DIR = Path(__file__).parent / "data" / "final"
-MODEL_DIR = Path(__file__).parent / "models" / "liga_ml"
-
-PRIORITY_LEVELS = ["low", "medium", "high", "critical"]
-AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
-
-# Domain-specific keywords
-LIGA_KEYWORDS = [
-    "liga", "wohlfahrt", "awo", "caritas", "diakonie", "drk", "paritätisch",
-    "hessen", "hessisch", "landesregierung", "landtag", "wiesbaden",
-    "pflege", "kita", "migration", "flucht", "inklusion", "eingliederung",
-    "sozial", "förderung", "gesetz", "reform", "haushalt",
-]
-
-SPORT_KEYWORDS = [
-    "fußball", "bundesliga", "champions", "sport", "tennis", "olympia",
-    "mannschaft", "trainer", "spieler", "tor", "sieg", "niederlage",
-]
+MODEL_DIR = MODELS_DIR / "liga_ml"
 
 
 # ============================================================================
@@ -74,7 +71,7 @@ def extract_features(texts: list[str]) -> np.ndarray:
         text_lower = text.lower()
         features.append([
             count_keywords(text, LIGA_KEYWORDS),
-            count_keywords(text, SPORT_KEYWORDS),
+            count_keywords(text, IRRELEVANT_KEYWORDS),  # Sports, celebrities, etc.
             len(text),
             text_lower.count("hessen"),
             1 if "liga" in text_lower else 0,
@@ -97,39 +94,39 @@ class LigaMLClassifier:
     """
 
     def __init__(self):
-        # Shared TF-IDF vectorizer
+        # Shared TF-IDF vectorizer (config values)
         self.tfidf = TfidfVectorizer(
-            max_features=2000,
-            ngram_range=(1, 2),
-            min_df=2,
-            max_df=0.9,
+            max_features=TFIDF_MAX_FEATURES,
+            ngram_range=TFIDF_NGRAM_RANGE,
+            min_df=TFIDF_MIN_DF,
+            max_df=TFIDF_MAX_DF,
             sublinear_tf=True,
         )
 
         # Stage 1: Relevance classifier (binary)
         self.relevance_clf = LogisticRegression(
-            max_iter=1000,
+            max_iter=LR_MAX_ITER,
             class_weight="balanced",
-            C=0.5,
-            random_state=42,
+            C=LR_C,
+            random_state=RANDOM_SEED,
         )
 
         # Stage 2: Priority classifier (multi-class)
         self.priority_clf = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
             class_weight="balanced",
-            random_state=42,
+            random_state=RANDOM_SEED,
             n_jobs=-1,
         )
         self.priority_encoder = LabelEncoder()
 
         # Stage 3: AK classifier (multi-class)
         self.ak_clf = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
             class_weight="balanced",
-            random_state=42,
+            random_state=RANDOM_SEED,
             n_jobs=-1,
         )
         self.ak_encoder = LabelEncoder()
@@ -210,7 +207,8 @@ class LigaMLClassifier:
 
     def predict(self, title: str, content: str, source: Optional[str] = None) -> dict:
         """Predict for a single item."""
-        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
+        # TF-IDF handles any text length
+        text = f"{title} {content}"
         if source:
             text += f" Quelle: {source}"
 
@@ -319,47 +317,6 @@ class LigaMLClassifier:
 
 
 # ============================================================================
-# Data Loading
-# ============================================================================
-
-def load_data(split: str) -> tuple[list[str], list[int], list[str], list[str]]:
-    """Load data from a split."""
-    texts = []
-    relevance = []
-    priorities = []
-    aks = []
-
-    path = DATA_DIR / f"{split}.jsonl"
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            inp = record["input"]
-            lab = record["labels"]
-
-            text = f"{inp['title']} {inp['content'][:2000]}"
-            if inp.get("source"):
-                text += f" Quelle: {inp['source']}"
-            texts.append(text)
-
-            is_rel = 1 if lab["relevant"] else 0
-            relevance.append(is_rel)
-
-            # Priority
-            priority = lab.get("priority") or "none"
-            if priority == "information":
-                priority = "low"
-            priorities.append(priority)
-
-            # AK
-            ak = lab.get("ak") or "none"
-            aks.append(ak)
-
-    return texts, relevance, priorities, aks
-
-
-# ============================================================================
 # Evaluation
 # ============================================================================
 
@@ -436,39 +393,34 @@ def evaluate(clf: LigaMLClassifier, texts: list[str], relevance: list[int],
 
 def main():
     print("=" * 60)
-    print("Liga ML Classifier - Hierarchical Training")
+    print("Liga ML Classifier - Hierarchical Training (TF-IDF)")
     print("=" * 60)
 
-    # Load data
+    # Load data using shared utilities
     print("\n[1/4] Loading data...")
-    train_texts, train_rel, train_pri, train_ak = load_data("train")
-    val_texts, val_rel, val_pri, val_ak = load_data("validation")
-    test_texts, test_rel, test_pri, test_ak = load_data("test")
+    train_texts, train_rel, train_pri, train_ak = load_training_data(
+        splits=["train", "validation"]
+    )
+    test_texts, test_rel, test_pri, test_ak = load_test_data()
 
-    # Combine train + val
-    all_texts = train_texts + val_texts
-    all_rel = train_rel + val_rel
-    all_pri = train_pri + val_pri
-    all_ak = train_ak + val_ak
-
-    print(f"  Training: {len(all_texts)} items")
+    print(f"  Training: {len(train_texts)} items")
     print(f"  Test: {len(test_texts)} items")
 
     # Show distribution
-    rel_count = sum(all_rel)
-    print(f"\n  Relevance: {rel_count} relevant ({rel_count/len(all_rel)*100:.1f}%), "
-          f"{len(all_rel)-rel_count} irrelevant ({(len(all_rel)-rel_count)/len(all_rel)*100:.1f}%)")
+    rel_count = sum(train_rel)
+    print(f"\n  Relevance: {rel_count} relevant ({rel_count/len(train_rel)*100:.1f}%), "
+          f"{len(train_rel)-rel_count} irrelevant ({(len(train_rel)-rel_count)/len(train_rel)*100:.1f}%)")
 
-    pri_dist = Counter([p for p, r in zip(all_pri, all_rel) if r and p in PRIORITY_LEVELS])
+    pri_dist = Counter([p for p, r in zip(train_pri, train_rel) if r and p in PRIORITY_LEVELS])
     print(f"  Priority: {dict(pri_dist)}")
 
-    ak_dist = Counter([a for a, r in zip(all_ak, all_rel) if r and a in AK_CLASSES])
+    ak_dist = Counter([a for a, r in zip(train_ak, train_rel) if r and a in AK_CLASSES])
     print(f"  AK: {dict(ak_dist)}")
 
     # Train
     print("\n[2/4] Training classifiers...")
     clf = LigaMLClassifier()
-    clf.fit(all_texts, all_rel, all_pri, all_ak)
+    clf.fit(train_texts, train_rel, train_pri, train_ak)
 
     # Evaluate
     print("\n[3/4] Evaluating on test set...")

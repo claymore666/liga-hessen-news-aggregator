@@ -22,8 +22,6 @@ Production:
     similar = clf.find_similar(title, content, k=5)
 """
 
-import json
-import os
 import pickle
 import time
 from collections import Counter
@@ -31,23 +29,17 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-# Content length for text truncation (env var or default 6000)
-CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics import accuracy_score, classification_report
+
+# Import from central config and utilities
+from config import AK_CLASSES, MODELS_DIR, PRIORITY_LEVELS
+from utils import get_embedder, load_test_data, load_training_data
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-DATA_DIR = Path(__file__).parent / "data" / "final"
-MODEL_DIR = Path(__file__).parent / "models" / "vectordb"
-
-EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-
-PRIORITY_LEVELS = ["low", "medium", "high", "critical"]
-AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
+MODEL_DIR = MODELS_DIR / "vectordb"
 
 # k-NN parameters
 K_RELEVANCE = 7   # neighbors for relevance vote
@@ -67,12 +59,11 @@ class VectorDBClassifier:
     by finding the k most similar items and voting.
     """
 
-    def __init__(self, model_name: str = EMBEDDING_MODEL):
-        self.model_name = model_name
+    def __init__(self):
         self.embedder = None  # Lazy load
 
         # Storage
-        self.embeddings: Optional[np.ndarray] = None  # (N, 384)
+        self.embeddings: Optional[np.ndarray] = None
         self.texts: list[str] = []
         self.relevance: list[int] = []  # 0 or 1
         self.priorities: list[str] = []  # "low", "medium", etc.
@@ -84,19 +75,20 @@ class VectorDBClassifier:
     def _load_embedder(self):
         """Lazy load embedding model."""
         if self.embedder is None:
-            print(f"  Loading embedding model: {self.model_name}")
-            self.embedder = SentenceTransformer(self.model_name)
+            print("  Loading embedder...")
+            self.embedder = get_embedder()  # Uses EMBEDDING_BACKEND env var
+            print(f"  Backend: {self.embedder}")
         return self.embedder
 
     def _embed(self, texts: list[str], show_progress: bool = True) -> np.ndarray:
         """Embed texts."""
         embedder = self._load_embedder()
-        return embedder.encode(
-            texts,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        embeddings = embedder.encode(texts, show_progress_bar=show_progress)
+        # Normalize for cosine similarity
+        embeddings = np.array(embeddings)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1  # Avoid division by zero
+        return embeddings / norms
 
     def _cosine_similarity(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -165,7 +157,8 @@ class VectorDBClassifier:
         """
         Predict using k-NN voting.
         """
-        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
+        # No truncation needed - embedder handles long texts
+        text = f"{title} {content}"
         if source:
             text += f" Quelle: {source}"
 
@@ -250,7 +243,8 @@ class VectorDBClassifier:
         Args:
             filter_relevant: If True, only return relevant items. If False, only irrelevant.
         """
-        text = f"{title} {content[:CONTENT_MAX_LENGTH]}"
+        # No truncation needed - embedder handles long texts
+        text = f"{title} {content}"
         query = self._embed([text], show_progress=False)[0]
 
         # Get more neighbors if filtering
@@ -330,46 +324,6 @@ class VectorDBClassifier:
         path = Path(path) if path else MODEL_DIR
         with open(path / "vectordb_classifier.pkl", "rb") as f:
             return pickle.load(f)
-
-
-# ============================================================================
-# Data Loading
-# ============================================================================
-
-def load_data(split: str) -> tuple[list[str], list[int], list[str], list[str], list[dict]]:
-    """Load data with metadata."""
-    texts, relevance, priorities, aks, metadata = [], [], [], [], []
-
-    path = DATA_DIR / f"{split}.jsonl"
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            inp = record["input"]
-            lab = record["labels"]
-
-            text = f"{inp['title']} {inp['content'][:1500]}"
-            if inp.get("source"):
-                text += f" Quelle: {inp['source']}"
-            texts.append(text)
-
-            relevance.append(1 if lab["relevant"] else 0)
-
-            priority = lab.get("priority") or "none"
-            if priority == "information":
-                priority = "low"
-            priorities.append(priority)
-
-            aks.append(lab.get("ak") or "none")
-
-            metadata.append({
-                "title": inp["title"],
-                "source": inp.get("source"),
-                "date": inp.get("date"),
-            })
-
-    return texts, relevance, priorities, aks, metadata
 
 
 # ============================================================================
@@ -479,26 +433,20 @@ def main():
     print("Liga Vector DB Classifier - k-NN with Embeddings")
     print("=" * 60)
 
-    # Load data
+    # Load data using shared utilities
     print("\n[1/5] Loading data...")
-    train_texts, train_rel, train_pri, train_ak, train_meta = load_data("train")
-    val_texts, val_rel, val_pri, val_ak, val_meta = load_data("validation")
-    test_texts, test_rel, test_pri, test_ak, test_meta = load_data("test")
+    train_texts, train_rel, train_pri, train_ak = load_training_data(
+        splits=["train", "validation"]
+    )
+    test_texts, test_rel, test_pri, test_ak = load_test_data()
 
-    # Combine train + val for database
-    all_texts = train_texts + val_texts
-    all_rel = train_rel + val_rel
-    all_pri = train_pri + val_pri
-    all_ak = train_ak + val_ak
-    all_meta = train_meta + val_meta
-
-    print(f"  Database: {len(all_texts)} items")
+    print(f"  Database: {len(train_texts)} items")
     print(f"  Test: {len(test_texts)} items")
 
     # Build database
     print("\n[2/5] Building vector database...")
     clf = VectorDBClassifier()
-    clf.fit(all_texts, all_rel, all_pri, all_ak, all_meta)
+    clf.fit(train_texts, train_rel, train_pri, train_ak)
 
     # Evaluate
     print("\n[3/5] Evaluating on test set...")
