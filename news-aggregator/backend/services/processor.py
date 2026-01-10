@@ -30,8 +30,13 @@ PRIORITÄTEN:
 - medium: Beobachten - Politische Debatten, Studien, Ankündigungen
 - low: Zur Kenntnis - Hintergrundberichte, Porträts
 
-RELEVANT wenn: Wohlfahrtsverbände, soziale Einrichtungen, Sozialpolitik, Haushalt/Kürzungen, Pflege, Kita, Migration, Behinderung, Armut, Fachkräftemangel im Sozialbereich.
-NICHT RELEVANT: Reiner Sport, Entertainment, Kriminalität ohne Sozialbezug, Wetter, internationale Politik ohne DE-Bezug.
+RELEVANT wenn: Wohlfahrtsverbände, soziale Einrichtungen, Sozialpolitik in Deutschland/Hessen, Haushalt/Kürzungen, Pflege, Kita, Migration in DE, Behinderung, Armut, Fachkräftemangel im Sozialbereich.
+NICHT RELEVANT (relevant=false, priority=null):
+- Reiner Sport, Entertainment, Prominente
+- Kriminalität ohne Sozialbezug
+- Wetter, Verkehr, Unfälle
+- Internationale Politik (USA, Brasilien, etc.) OHNE direkten Bezug zu deutscher Sozialpolitik
+- Ausländische Innenpolitik (Bolsonaro, Trump, etc.) ist NICHT relevant für die Liga
 
 AUSGABE als valides JSON:
 {
@@ -108,7 +113,7 @@ class ItemProcessor:
 
 TITEL: {item.title}
 
-INHALT: {item.content[:3000]}
+INHALT: {item.content[:6000]}
 
 Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
 
@@ -148,7 +153,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
         date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 
         prompt = f"""Titel: {item.title}
-Inhalt: {item.content[:3000]}
+Inhalt: {item.content[:6000]}
 Quelle: {source_name}
 Datum: {date_str}"""
 

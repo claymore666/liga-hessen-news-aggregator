@@ -573,6 +573,8 @@ async def reprocess_items(
     source_id: int | None = Query(None, description="Only reprocess items from this source"),
     channel_id: int | None = Query(None, description="Only reprocess items from this channel"),
     connector_type: str | None = Query(None, description="Only reprocess items from this connector type (e.g., x_scraper, rss)"),
+    priority: Priority | None = Query(None, description="Only reprocess items with this priority"),
+    exclude_low: bool = Query(False, description="Exclude LOW priority items (reprocess only relevant items)"),
     limit: int = Query(100, ge=1, le=1000, description="Max items to reprocess"),
     force: bool = Query(False, description="Reprocess even if already has LLM analysis"),
     db: AsyncSession = Depends(get_db),
@@ -594,6 +596,12 @@ async def reprocess_items(
             query = query.where(Channel.source_id == source_id)
         if connector_type is not None:
             query = query.where(Channel.connector_type == connector_type)
+
+    # Filter by priority
+    if priority is not None:
+        query = query.where(Item.priority == priority)
+    elif exclude_low:
+        query = query.where(Item.priority != Priority.LOW)
 
     # When not forcing, only select items without LLM analysis
     # Use SQLite JSON extract to check if key exists
