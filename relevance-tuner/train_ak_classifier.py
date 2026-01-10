@@ -2,8 +2,8 @@
 """
 Liga Hessen AK (Arbeitskreis) Classifier
 
-Dedicated sklearn model for AK assignment.
-Classes: irrelevant, AK1, AK2, AK3, AK4, AK5, QAG
+Dedicated sklearn model for AK assignment using sentence embeddings.
+Classes: AK1, AK2, AK3, AK4, AK5, QAG (only for relevant items)
 
 AK Definitions:
 - AK1: Grundsatz und Sozialpolitik (general social policy)
@@ -21,6 +21,9 @@ Production:
     clf = AKClassifier.load()
     result = clf.predict(title, content)
     # result = {"ak": "AK3", "confidence": 0.75, "probabilities": {...}}
+
+Note: This classifier is for RELEVANT items only. Use a separate relevance
+classifier first, then apply this for AK assignment.
 """
 
 import json
@@ -31,13 +34,13 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-# Content length for text truncation (env var or default 6000)
-CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sentence_transformers import SentenceTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
+
+# Content length for text truncation (env var or default 6000)
+CONTENT_MAX_LENGTH = int(os.environ.get("CONTENT_MAX_LENGTH", 6000))
 
 # ============================================================================
 # Configuration
@@ -46,8 +49,11 @@ from sklearn.preprocessing import LabelEncoder
 DATA_DIR = Path(__file__).parent / "data" / "final"
 MODEL_DIR = Path(__file__).parent / "models" / "ak"
 
-# AK classes
-AK_CLASSES = ["irrelevant", "AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
+# AK classes (no irrelevant - this is for relevant items only)
+AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
+
+# Embedding model
+EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # Keywords per AK for feature engineering
 AK_KEYWORDS = {
@@ -133,27 +139,29 @@ def extract_ak_features(texts: list[str]) -> np.ndarray:
 
 class AKClassifier:
     """
-    Fast AK (Arbeitskreis) classifier for Liga news items.
+    AK (Arbeitskreis) classifier using sentence embeddings.
 
-    Predicts: irrelevant, AK1, AK2, AK3, AK4, AK5, QAG
+    Predicts: AK1, AK2, AK3, AK4, AK5, QAG (for relevant items only)
+
+    Uses paraphrase-multilingual-MiniLM-L12-v2 embeddings with LogisticRegression.
+    Achieved 71.1% accuracy in experiments (vs 39.5% with TF-IDF).
     """
 
     def __init__(self):
-        self.tfidf = TfidfVectorizer(
-            max_features=3000,
-            ngram_range=(1, 2),
-            min_df=2,
-            max_df=0.9,
-            sublinear_tf=True,
-        )
+        self.embedding_model = None  # Lazy load
         self.clf = LogisticRegression(
-            max_iter=500,
-            solver="saga",
+            max_iter=1000,
             class_weight="balanced",
             random_state=42,
         )
         self.label_encoder = LabelEncoder()
         self.is_fitted = False
+
+    def _load_embedding_model(self):
+        """Lazy load embedding model."""
+        if self.embedding_model is None:
+            print(f"  Loading embedding model: {EMBEDDING_MODEL}")
+            self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
     def _prepare_text(self, title: str, content: str, source: Optional[str] = None) -> str:
         """Prepare text for classification."""
@@ -162,26 +170,22 @@ class AKClassifier:
             text += f" Quelle: {source}"
         return text
 
-    def _extract_features(self, texts: list[str]) -> np.ndarray:
-        """Extract combined TF-IDF and AK-specific features."""
-        tfidf_features = self.tfidf.transform(texts).toarray()
-        custom_features = extract_ak_features(texts)
-        return np.hstack([tfidf_features, custom_features])
+    def _get_embeddings(self, texts: list[str]) -> np.ndarray:
+        """Get embeddings for texts."""
+        self._load_embedding_model()
+        return self.embedding_model.encode(texts, show_progress_bar=len(texts) > 10)
 
     def fit(self, texts: list[str], aks: list[str]):
         """
         Train the classifier.
 
         Args:
-            texts: List of text strings
-            aks: List of AK labels (irrelevant/AK1/.../QAG)
+            texts: List of text strings (relevant items only)
+            aks: List of AK labels (AK1/.../QAG)
         """
-        print("  Fitting TF-IDF vectorizer...")
-        self.tfidf.fit(texts)
-
-        print("  Extracting features...")
-        X = self._extract_features(texts)
-        print(f"  Feature matrix: {X.shape}")
+        print("  Computing embeddings...")
+        X = self._get_embeddings(texts)
+        print(f"  Embedding matrix: {X.shape}")
 
         print("  Encoding labels...")
         self.label_encoder.fit(AK_CLASSES)
@@ -205,7 +209,7 @@ class AKClassifier:
 
     def predict_text(self, text: str) -> dict:
         """Predict from combined text."""
-        X = self._extract_features([text])
+        X = self._get_embeddings([text])
         proba = self.clf.predict_proba(X)[0]
         pred_idx = np.argmax(proba)
 
@@ -225,7 +229,7 @@ class AKClassifier:
 
     def predict_batch(self, texts: list[str]) -> list[dict]:
         """Predict for multiple texts efficiently."""
-        X = self._extract_features(texts)
+        X = self._get_embeddings(texts)
         proba = self.clf.predict_proba(X)
         pred_indices = np.argmax(proba, axis=1)
 
@@ -243,11 +247,15 @@ class AKClassifier:
         return results
 
     def save(self, path: Optional[Path] = None):
-        """Save model to disk."""
+        """Save model to disk (without embedding model - it's loaded on demand)."""
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
+        # Don't save the embedding model - it's large and loaded on demand
+        embedding_model = self.embedding_model
+        self.embedding_model = None
         with open(path / "ak_classifier.pkl", "wb") as f:
             pickle.dump(self, f)
+        self.embedding_model = embedding_model
         print(f"  Model saved to: {path / 'ak_classifier.pkl'}")
 
     @classmethod
@@ -263,7 +271,7 @@ class AKClassifier:
 # ============================================================================
 
 def load_data() -> tuple[list[str], list[str]]:
-    """Load and prepare training data."""
+    """Load and prepare training data (relevant items only)."""
     texts = []
     aks = []
 
@@ -277,24 +285,25 @@ def load_data() -> tuple[list[str], list[str]]:
                 inp = record["input"]
                 lab = record["labels"]
 
+                # Only include relevant items
+                if not lab["relevant"]:
+                    continue
+
                 # Prepare text
-                text = f"{inp['title']} {inp['content'][:2000]}"
+                text = f"{inp['title']} {inp['content'][:CONTENT_MAX_LENGTH]}"
                 if inp.get("source"):
                     text += f" Quelle: {inp['source']}"
                 texts.append(text)
 
-                # Determine AK
-                if not lab["relevant"]:
-                    ak = "irrelevant"
-                else:
-                    ak = lab.get("ak") or "QAG"  # Default to QAG for unknown
+                # Get AK
+                ak = lab.get("assigned_ak") or lab.get("ak") or "QAG"
                 aks.append(ak)
 
     return texts, aks
 
 
 def load_test_data() -> tuple[list[str], list[str]]:
-    """Load test data."""
+    """Load test data (relevant items only)."""
     texts = []
     aks = []
 
@@ -307,15 +316,16 @@ def load_test_data() -> tuple[list[str], list[str]]:
             inp = record["input"]
             lab = record["labels"]
 
-            text = f"{inp['title']} {inp['content'][:2000]}"
+            # Only include relevant items
+            if not lab["relevant"]:
+                continue
+
+            text = f"{inp['title']} {inp['content'][:CONTENT_MAX_LENGTH]}"
             if inp.get("source"):
                 text += f" Quelle: {inp['source']}"
             texts.append(text)
 
-            if not lab["relevant"]:
-                ak = "irrelevant"
-            else:
-                ak = lab.get("ak") or "QAG"
+            ak = lab.get("assigned_ak") or lab.get("ak") or "QAG"
             aks.append(ak)
 
     return texts, aks
@@ -326,7 +336,7 @@ def load_test_data() -> tuple[list[str], list[str]]:
 # ============================================================================
 
 def evaluate(clf: AKClassifier, texts: list[str], true_aks: list[str]) -> dict:
-    """Evaluate classifier performance."""
+    """Evaluate classifier performance on relevant items."""
     predictions = clf.predict_batch(texts)
     pred_aks = [p["ak"] for p in predictions]
 
@@ -342,33 +352,15 @@ def evaluate(clf: AKClassifier, texts: list[str], true_aks: list[str]) -> dict:
     # Confusion matrix
     cm = confusion_matrix(true_aks, pred_aks, labels=AK_CLASSES)
     print("\nConfusion Matrix:")
-    print(f"{'':>12} " + " ".join(f"{p:>8}" for p in AK_CLASSES))
+    print(f"{'':>8} " + " ".join(f"{p:>6}" for p in AK_CLASSES))
     for i, p in enumerate(AK_CLASSES):
-        print(f"{p:>12} " + " ".join(f"{cm[i,j]:>8}" for j in range(len(AK_CLASSES))))
-
-    # Binary relevance accuracy
-    true_binary = [0 if a == "irrelevant" else 1 for a in true_aks]
-    pred_binary = [0 if a == "irrelevant" else 1 for a in pred_aks]
-    binary_acc = accuracy_score(true_binary, pred_binary)
-
-    # AK-only accuracy (excluding irrelevant)
-    relevant_mask = [a != "irrelevant" for a in true_aks]
-    if sum(relevant_mask) > 0:
-        true_relevant = [a for a, m in zip(true_aks, relevant_mask) if m]
-        pred_relevant = [a for a, m in zip(pred_aks, relevant_mask) if m]
-        ak_only_acc = accuracy_score(true_relevant, pred_relevant)
-    else:
-        ak_only_acc = 0
+        print(f"{p:>8} " + " ".join(f"{cm[i,j]:>6}" for j in range(len(AK_CLASSES))))
 
     print(f"\n=== Summary ===")
-    print(f"  Overall accuracy: {accuracy:.1%}")
-    print(f"  Binary relevance accuracy: {binary_acc:.1%}")
-    print(f"  AK-only accuracy (relevant items): {ak_only_acc:.1%}")
+    print(f"  AK accuracy: {accuracy:.1%}")
 
     return {
         "accuracy": accuracy,
-        "binary_accuracy": binary_acc,
-        "ak_only_accuracy": ak_only_acc,
     }
 
 
@@ -392,11 +384,12 @@ def benchmark_speed(clf: AKClassifier, texts: list[str], n_runs: int = 5) -> flo
 
 def main():
     print("=" * 60)
-    print("Liga Hessen AK Classifier")
+    print("Liga Hessen AK Classifier (Embeddings)")
     print("=" * 60)
+    print("Note: This classifier is for RELEVANT items only.")
 
     # Load data
-    print("\n[1/4] Loading training data...")
+    print("\n[1/4] Loading training data (relevant items only)...")
     train_texts, train_aks = load_data()
     test_texts, test_aks = load_test_data()
 
@@ -409,7 +402,8 @@ def main():
     print(f"\n  AK distribution (train):")
     for ak in AK_CLASSES:
         count = dist.get(ak, 0)
-        print(f"    {ak:>12}: {count:>4} ({count/len(train_aks)*100:.1f}%)")
+        pct = count/len(train_aks)*100 if train_aks else 0
+        print(f"    {ak:>8}: {count:>4} ({pct:.1f}%)")
 
     # Train
     print("\n[2/4] Training classifier...")
