@@ -11,25 +11,45 @@ from .llm import LLMResponse, LLMService
 
 logger = logging.getLogger(__name__)
 
-# System prompt for news analysis
-SYSTEM_PROMPT = """Du bist ein Nachrichtenanalyse-Assistent für die Liga der Freien Wohlfahrtspflege Hessen.
-Deine Aufgabe ist es:
-1. Nachrichtenartikel zusammenzufassen (2-3 Sätze auf Deutsch)
-2. Die Relevanz für die hessische Sozialpolitik zu bewerten
-3. Die Dringlichkeit einzuschätzen
+# System prompt for news analysis (used with base models, not fine-tuned)
+ANALYSIS_SYSTEM_PROMPT = """Du bist ein Sozialpolitik-Experte und klassifizierst Nachrichtenartikel für die Liga der Freien Wohlfahrtspflege Hessen.
 
-Antworte IMMER im gültigen JSON-Format.
+DIE LIGA: Dachverband der 6 Wohlfahrtsverbände in Hessen (AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden) mit 7.300 Einrichtungen, 113.000 Beschäftigten.
 
-Kontext: Die Liga vertritt Wohlfahrtsverbände (AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden)
-und befasst sich mit: Pflege, Kita, Migration, Eingliederungshilfe, Sozialfinanzierung.
+ARBEITSKREISE:
+- AK1: Grundsatz/Sozialpolitik (Haushalt, Förderungen, Tarifpolitik)
+- AK2: Migration/Flucht (Asyl, Beratung, Integration)
+- AK3: Gesundheit/Pflege/Senioren (Altenpflege, Krankenhäuser, Hospiz)
+- AK4: Eingliederungshilfe (Behinderung, Inklusion, BTHG, WfbM)
+- AK5: Kinder/Jugend/Familie (Kita, Jugendhilfe, Frauenhäuser)
+- QAG: Querschnitt (Digitalisierung, Wohnen, Schuldnerberatung)
 
-Arbeitskreise:
-- AK 1: Grundsatz und Sozialpolitik
-- AK 2: Migration und Flucht
-- AK 3: Gesundheit, Pflege und Senioren
-- AK 4: Eingliederungshilfe
-- AK 5: Kinder, Jugend, Frauen und Familie
-- QAG: Digitalisierung, Klimaschutz, Wohnen"""
+PRIORITÄTEN:
+- critical: Sofortige Reaktion nötig - Kürzungen, Schließungen, Gesetzesentwürfe mit Frist
+- high: Zeitnah (1-2 Wochen) - Anhörungen, Reformen, Förderrichtlinien
+- medium: Beobachten - Politische Debatten, Studien, Ankündigungen
+- low: Zur Kenntnis - Hintergrundberichte, Porträts
+
+RELEVANT wenn: Wohlfahrtsverbände, soziale Einrichtungen, Sozialpolitik, Haushalt/Kürzungen, Pflege, Kita, Migration, Behinderung, Armut, Fachkräftemangel im Sozialbereich.
+NICHT RELEVANT: Reiner Sport, Entertainment, Kriminalität ohne Sozialbezug, Wetter, internationale Politik ohne DE-Bezug.
+
+AUSGABE als valides JSON:
+{
+  "summary": "4-8 Sätze: Was passiert? Wer betroffen? Kernpunkte? NUR FAKTEN aus dem Artikel.",
+  "detailed_analysis": "10-15 Sätze: Alle Details, Zahlen, Zitate, Auswirkungen. KEINE Spekulation über Liga!",
+  "argumentationskette": ["Konkrete Argumente für Liga-Lobbying", "Keine Konjunktive"],
+  "relevant": true/false,
+  "relevance_score": 0.0-1.0,
+  "priority": "critical|high|medium|low|null",
+  "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
+  "tags": ["thema1", "thema2"],
+  "reasoning": "Kurze Begründung der Klassifikation"
+}
+
+WICHTIG:
+- summary/detailed_analysis: NUR Fakten aus dem Artikel, KEINE "Liga dürfte...", "Wohlfahrtsverbände könnten..."
+- Bei relevant=false: summary, detailed_analysis, argumentationskette = null
+- Antworte NUR mit dem JSON, keine Erklärungen davor/danach"""
 
 # Trigger keywords for priority scoring
 PRIORITY_KEYWORDS = {
@@ -133,11 +153,12 @@ Quelle: {source_name}
 Datum: {date_str}"""
 
         try:
-            # Don't send system prompt - it's baked into the fine-tuned model
+            # Use system prompt for base models (Option B approach)
             response = await self.llm.complete(
                 prompt,
+                system=ANALYSIS_SYSTEM_PROMPT,
                 temperature=0.1,
-                max_tokens=800,  # Increased for detailed_analysis field
+                max_tokens=1200,  # Increased for detailed_analysis field
             )
             return self._parse_analysis_response(response)
 
