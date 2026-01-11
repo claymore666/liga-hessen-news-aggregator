@@ -1,0 +1,27 @@
+services:
+  classifier:
+    build: .
+    container_name: liga-classifier
+    ports:
+      - "8082:8082"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      # Cache HuggingFace models to avoid re-downloading
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      # Model file (can be updated without rebuild)
+      - ./models:/app/models
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
