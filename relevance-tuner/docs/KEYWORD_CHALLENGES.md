@@ -175,12 +175,55 @@ def classify_with_context(text, keyword, embedder):
     return max(similarities, key=similarities.get)
 ```
 
+## Keywords Removed from config.py (2026-01-11)
+
+**Status:** The keyword dictionaries (`AK_KEYWORDS`, `LIGA_KEYWORDS`, `HESSEN_KEYWORDS`, `IRRELEVANT_KEYWORDS`, `URGENT_KEYWORDS`) have been **removed from config.py** because they are not used in the production system.
+
+### Production Architecture
+
+The current production pipeline does NOT use keyword-based classification:
+
+1. **Relevance**: Semantic embedding classifier (NomicV2 + RandomForest)
+2. **Priority & AK**: LLM-based (qwen3 with LABELING_PROMPT.md)
+
+Keywords for priority scoring are defined separately in `news-aggregator/backend/services/processor.py` as `PRIORITY_KEYWORDS`.
+
+### Legacy Code
+
+The old TF-IDF classifier (`train_liga_classifiers.py`) still uses keywords, but they are now defined locally in that file rather than imported from config.py. This script is not used in production.
+
+### Reference: Keyword Analysis
+
+The analysis below is preserved for reference if keyword-based classification is ever revisited.
+
+<details>
+<summary>Archived Keyword Analysis (click to expand)</summary>
+
+#### Critical Ambiguity Issues
+
+| Keyword | Problem |
+|---------|---------|
+| `liga` | Matches "Bundesliga" (football) |
+| `werkstatt` | Matches car repair shops |
+| `reform`, `förderung` | Too generic |
+| `integration` | Tech context |
+| `therapie`, `reha` | Wellness/sports |
+
+#### Recommended Keyword Improvements (if ever used)
+
+- Use compound forms: `liga der freien wohlfahrtspflege` instead of `liga`
+- Use specific terms: `behindertenwerkstatt` instead of `werkstatt`
+- Add sports blocklist: `bundesliga`, `dfb`, `spieltag`, etc.
+
+</details>
+
 ## Next Steps
 
 1. **Implement contextual keyword matching** - Add co-occurrence rules for ambiguous keywords
 2. **Test on production data** - Measure improvement in classification accuracy
 3. **Consider hybrid approach** - Combine keyword context with embedding classifier
 4. **Expand training data** - Use contextual matching to find better AK3/AK4 examples
+5. **Apply keyword efficiency fixes** - Implement priority 1 changes from audit above
 
 ## Related Files
 
@@ -190,4 +233,4 @@ def classify_with_context(text, keyword, embedder):
 
 ---
 *Created: 2026-01-11*
-*Last updated: 2026-01-11*
+*Last updated: 2026-01-11 (keywords removed from config.py - not used in production)*
