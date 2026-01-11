@@ -89,8 +89,8 @@ class ArticleExtractor:
             parsed = urlparse(url)
             domain = parsed.netloc.lower()
 
-            # Skip Twitter/X internal links
-            if domain in ("x.com", "twitter.com", "t.co", "pic.twitter.com"):
+            # Skip Twitter/X internal links (but keep t.co - these redirect to articles)
+            if domain in ("x.com", "twitter.com", "pic.twitter.com"):
                 continue
 
             # Skip patterns we don't want
