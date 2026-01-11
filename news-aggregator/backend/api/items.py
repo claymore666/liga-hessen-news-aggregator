@@ -26,6 +26,7 @@ async def list_items(
     priority: Priority | None = None,
     is_read: bool | None = None,
     is_starred: bool | None = None,
+    is_archived: bool | None = Query(None, description="Filter by archive status (default: exclude archived)"),
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
@@ -39,6 +40,8 @@ async def list_items(
 
     By default, only shows relevant items (critical, high, medium priority).
     Set relevant_only=false to include all items including LOW priority.
+    By default, archived items are excluded. Set is_archived=true to show only archived,
+    or is_archived=false to explicitly exclude them.
     """
     query = select(Item).options(
         selectinload(Item.channel).selectinload(Channel.source)
@@ -59,6 +62,11 @@ async def list_items(
         query = query.where(Item.is_read == is_read)
     if is_starred is not None:
         query = query.where(Item.is_starred == is_starred)
+    if is_archived is not None:
+        query = query.where(Item.is_archived == is_archived)
+    else:
+        # By default, exclude archived items
+        query = query.where(Item.is_archived == False)  # noqa: E712
     if since is not None:
         query = query.where(Item.published_at >= since)
     if until is not None:
@@ -233,6 +241,23 @@ async def mark_as_read(
 
     item.is_read = True
     return {"status": "ok"}
+
+
+@router.post("/items/{item_id}/archive")
+async def toggle_archive(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str | bool]:
+    """Toggle archive status of an item."""
+    query = select(Item).where(Item.id == item_id)
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item.is_archived = not item.is_archived
+    return {"status": "ok", "is_archived": item.is_archived}
 
 
 @router.post("/items/{item_id}/reprocess")

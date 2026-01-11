@@ -67,7 +67,8 @@ const hasActiveFilters = computed(() => {
     itemsStore.filters.connector_type ||
     itemsStore.filters.assigned_ak ||
     itemsStore.filters.search ||
-    itemsStore.filters.is_read !== null
+    itemsStore.filters.is_read !== null ||
+    itemsStore.filters.is_archived !== null
   )
 })
 
@@ -175,6 +176,16 @@ const handleFilterChange = (key: string, value: string | number | boolean | null
         <option value="">Alle Status</option>
         <option value="false">Ungelesen</option>
         <option value="true">Gelesen</option>
+      </select>
+
+      <!-- Archive -->
+      <select
+        class="input text-xs py-1.5 w-auto"
+        :value="itemsStore.filters.is_archived ?? ''"
+        @change="handleFilterChange('is_archived', ($event.target as HTMLSelectElement).value === '' ? null : ($event.target as HTMLSelectElement).value === 'true')"
+      >
+        <option value="">Aktiv</option>
+        <option value="true">Archiviert</option>
       </select>
 
       <!-- Arbeitskreis -->

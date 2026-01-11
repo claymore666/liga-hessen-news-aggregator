@@ -198,16 +198,7 @@ const handleToggleRead = async () => {
 
 const handleArchive = async () => {
   if (selectedItem.value) {
-    const currentIndex = itemsStore.items.findIndex(i => i.id === selectedItem.value!.id)
     await itemsStore.archiveItem(selectedItem.value.id)
-    // Select next item
-    if (itemsStore.items.length > 0) {
-      const nextIndex = Math.min(currentIndex, itemsStore.items.length - 1)
-      selectItem(itemsStore.items[nextIndex].id)
-      focusedIndex.value = nextIndex
-    } else {
-      selectedItemId.value = null
-    }
   }
 }
 

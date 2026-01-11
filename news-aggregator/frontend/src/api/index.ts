@@ -39,6 +39,7 @@ export const itemsApi = {
     channel_id?: number
     is_read?: boolean
     is_starred?: boolean
+    is_archived?: boolean
     since?: string
     until?: string
     connector_type?: string
@@ -53,7 +54,7 @@ export const itemsApi = {
   markRead: (id: number) => api.post(`/items/${id}/mark-read`),
   markUnread: (id: number) => api.post(`/items/${id}/mark-unread`),
   bulkMarkRead: (ids: number[]) => api.post('/items/bulk-mark-read', { ids }),
-  archive: (id: number) => api.post(`/items/${id}/archive`)
+  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`)
 }
 
 export const rulesApi = {

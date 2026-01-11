@@ -159,8 +159,9 @@ const toggleRelevance = () => {
         </button>
         <button
           type="button"
-          class="p-1.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-100 transition-colors"
-          title="Archivieren"
+          class="p-1.5 rounded transition-colors"
+          :class="item.is_archived ? 'text-orange-600 bg-orange-100 hover:bg-orange-200' : 'text-gray-500 hover:text-red-600 hover:bg-red-100'"
+          :title="item.is_archived ? 'Wiederherstellen' : 'Archivieren'"
           @click="emit('archive')"
         >
           <ArchiveBoxIcon class="h-5 w-5" />

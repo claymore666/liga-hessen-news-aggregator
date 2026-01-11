@@ -13,6 +13,7 @@ export const useItemsStore = defineStore('items', () => {
     priority: null as Priority | null,
     source_id: null as number | null,
     is_read: null as boolean | null,
+    is_archived: null as boolean | null,
     connector_type: null as string | null,
     assigned_ak: null as string | null,
     sort_by: 'date' as string,
@@ -40,6 +41,7 @@ export const useItemsStore = defineStore('items', () => {
         priority: filters.value.priority || undefined,
         source_id: filters.value.source_id || undefined,
         is_read: filters.value.is_read ?? undefined,
+        is_archived: filters.value.is_archived ?? undefined,
         connector_type: filters.value.connector_type || undefined,
         assigned_ak: filters.value.assigned_ak || undefined,
         sort_by: filters.value.sort_by,
@@ -110,11 +112,17 @@ export const useItemsStore = defineStore('items', () => {
 
   async function archiveItem(id: number) {
     try {
-      await itemsApi.archive(id)
-      items.value = items.value.filter((i) => i.id !== id)
-      if (currentItem.value?.id === id) currentItem.value = null
+      const response = await itemsApi.archive(id)
+      const newArchivedState = response.data.is_archived
+      // Update in items list
+      const item = items.value.find((i) => i.id === id)
+      if (item) item.is_archived = newArchivedState
+      // Update currentItem
+      if (currentItem.value?.id === id) {
+        currentItem.value.is_archived = newArchivedState
+      }
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to archive item'
+      error.value = e instanceof Error ? e.message : 'Failed to toggle archive'
       throw e
     }
   }
@@ -155,6 +163,7 @@ export const useItemsStore = defineStore('items', () => {
       priority: null,
       source_id: null,
       is_read: null,
+      is_archived: null,
       connector_type: null,
       assigned_ak: null,
       sort_by: 'date',
