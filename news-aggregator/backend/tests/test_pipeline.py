@@ -250,14 +250,14 @@ class TestPipeline:
         """Test score to priority conversion."""
         pipeline = Pipeline(db_session)
 
-        assert pipeline._score_to_priority(95) == Priority.CRITICAL
-        assert pipeline._score_to_priority(90) == Priority.CRITICAL
-        assert pipeline._score_to_priority(85) == Priority.HIGH
-        assert pipeline._score_to_priority(70) == Priority.HIGH
-        assert pipeline._score_to_priority(60) == Priority.MEDIUM
-        assert pipeline._score_to_priority(40) == Priority.MEDIUM
-        assert pipeline._score_to_priority(30) == Priority.LOW
-        assert pipeline._score_to_priority(0) == Priority.LOW
+        assert pipeline._score_to_priority(95) == Priority.HIGH
+        assert pipeline._score_to_priority(90) == Priority.HIGH
+        assert pipeline._score_to_priority(85) == Priority.MEDIUM
+        assert pipeline._score_to_priority(70) == Priority.MEDIUM
+        assert pipeline._score_to_priority(60) == Priority.LOW
+        assert pipeline._score_to_priority(51) == Priority.LOW
+        assert pipeline._score_to_priority(50) == Priority.NONE
+        assert pipeline._score_to_priority(0) == Priority.NONE
 
     @pytest.mark.asyncio
     async def test_process_items(self, db_session: AsyncSession):
@@ -304,7 +304,7 @@ class TestPipeline:
         normal_item = next(i for i in new_items if i.external_id == "2")
 
         assert urgent_item.priority_score > normal_item.priority_score
-        assert urgent_item.priority in [Priority.HIGH, Priority.CRITICAL]
+        assert urgent_item.priority in [Priority.HIGH, Priority.MEDIUM]
 
     @pytest.mark.asyncio
     async def test_process_skips_duplicates(self, db_session: AsyncSession):

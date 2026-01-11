@@ -223,12 +223,12 @@ class TestUpdateRule:
     ):
         """Update rule target priority."""
         response = await client.patch(
-            f"/api/rules/{rule_in_db.id}", json={"target_priority": "critical"}
+            f"/api/rules/{rule_in_db.id}", json={"target_priority": "high"}
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["target_priority"] == "critical"
+        assert data["target_priority"] == "high"
 
     @pytest.mark.asyncio
     async def test_update_rule_order(self, client: AsyncClient, rule_in_db: Rule):

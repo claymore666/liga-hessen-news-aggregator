@@ -39,6 +39,7 @@ export const itemsApi = {
     channel_id?: number
     is_read?: boolean
     is_starred?: boolean
+    is_archived?: boolean
     since?: string
     until?: string
     connector_type?: string
@@ -49,11 +50,11 @@ export const itemsApi = {
     relevant_only?: boolean
   }) => api.get<PaginatedResponse<Item>>('/items', { params }),
   get: (id: number) => api.get<Item>(`/items/${id}`),
-  update: (id: number, data: Partial<Item>) => api.put<Item>(`/items/${id}`, data),
+  update: (id: number, data: Partial<Item>) => api.patch<Item>(`/items/${id}`, data),
   markRead: (id: number) => api.post(`/items/${id}/mark-read`),
   markUnread: (id: number) => api.post(`/items/${id}/mark-unread`),
   bulkMarkRead: (ids: number[]) => api.post('/items/bulk-mark-read', { ids }),
-  archive: (id: number) => api.post(`/items/${id}/archive`)
+  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`)
 }
 
 export const rulesApi = {

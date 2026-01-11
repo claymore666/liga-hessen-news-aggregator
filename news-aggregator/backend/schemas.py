@@ -144,6 +144,10 @@ class ItemResponse(ItemBase, BaseSchema):
     priority_score: int
     is_read: bool
     is_starred: bool
+    is_archived: bool = False
+    assigned_ak: str | None = None
+    is_manually_reviewed: bool = False
+    reviewed_at: datetime | None = None
     notes: str | None
     metadata_: dict[str, Any] = Field(default_factory=dict, serialization_alias="metadata")
 
@@ -153,12 +157,14 @@ class ItemUpdate(BaseModel):
 
     is_read: bool | None = None
     is_starred: bool | None = None
+    is_archived: bool | None = None
+    assigned_ak: str | None = None
     notes: str | None = None
     # Admin fields for manual corrections
     content: str | None = None
     summary: str | None = None
     detailed_analysis: str | None = None
-    priority: str | None = None  # "critical", "high", "medium", "low"
+    priority: str | None = None  # "high", "medium", "low", "none"
 
 
 class ItemListResponse(BaseModel):
@@ -232,11 +238,11 @@ class StatsResponse(BaseModel):
     """Dashboard statistics."""
 
     total_items: int
-    relevant_items: int  # Items with priority != LOW (Liga-relevant)
+    relevant_items: int  # Items with priority != NONE (Liga-relevant)
     unread_items: int
     starred_items: int
-    critical_items: int
-    high_priority_items: int
+    high_items: int  # High priority count
+    medium_items: int  # Medium priority count
     sources_count: int
     channels_count: int  # New: total number of channels
     enabled_sources: int

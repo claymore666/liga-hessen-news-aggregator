@@ -18,7 +18,7 @@ router = APIRouter(prefix="/email", tags=["email"])
 class SendBriefingRequest(BaseModel):
     """Request to send a briefing email."""
     recipients: list[EmailStr]
-    min_priority: Priority = Priority.LOW
+    min_priority: Priority = Priority.NONE
     hours_back: int = 24
     include_read: bool = False
 
@@ -32,7 +32,7 @@ class SendBriefingResponse(BaseModel):
 
 class PreviewBriefingRequest(BaseModel):
     """Request to preview a briefing."""
-    min_priority: Priority = Priority.LOW
+    min_priority: Priority = Priority.NONE
     hours_back: int = 24
     include_read: bool = False
 
@@ -67,10 +67,10 @@ async def send_briefing(
 
     # Filter by minimum priority
     priority_values = {
-        Priority.CRITICAL: 4,
         Priority.HIGH: 3,
         Priority.MEDIUM: 2,
         Priority.LOW: 1,
+        Priority.NONE: 0,
     }
     min_priority_value = priority_values[request.min_priority]
     valid_priorities = [p for p, v in priority_values.items() if v >= min_priority_value]
@@ -124,10 +124,10 @@ async def preview_briefing(
 
     # Filter by minimum priority
     priority_values = {
-        Priority.CRITICAL: 4,
         Priority.HIGH: 3,
         Priority.MEDIUM: 2,
         Priority.LOW: 1,
+        Priority.NONE: 0,
     }
     min_priority_value = priority_values[request.min_priority]
     valid_priorities = [p for p, v in priority_values.items() if v >= min_priority_value]

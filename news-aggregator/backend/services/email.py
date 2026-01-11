@@ -20,20 +20,20 @@ class EmailConfig(BaseModel):
     subject_prefix: str = "[Liga News]"
     include_summary: bool = True
     include_content: bool = False
-    min_priority: Priority = Priority.LOW
+    min_priority: Priority = Priority.NONE
 
 
 class BriefingEmail:
     """Generates and sends briefing emails."""
 
     PRIORITY_LABELS = {
-        Priority.CRITICAL: "🔴 EILIG",
-        Priority.HIGH: "🟠 WICHTIG",
-        Priority.MEDIUM: "🟡 BEOBACHTEN",
-        Priority.LOW: "🔵 INFORMATION",
+        Priority.HIGH: "🔴 WICHTIG",
+        Priority.MEDIUM: "🟠 BEOBACHTEN",
+        Priority.LOW: "🟡 NIEDRIG",
+        Priority.NONE: "🔵 INFORMATION",
     }
 
-    PRIORITY_ORDER = [Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW]
+    PRIORITY_ORDER = [Priority.HIGH, Priority.MEDIUM, Priority.LOW, Priority.NONE]
 
     def __init__(self, config: EmailConfig):
         self.config = config
@@ -114,10 +114,10 @@ class BriefingEmail:
         grouped = self._group_by_priority(items)
 
         priority_colors = {
-            Priority.CRITICAL: "#dc2626",
-            Priority.HIGH: "#ea580c",
-            Priority.MEDIUM: "#ca8a04",
-            Priority.LOW: "#16a34a",
+            Priority.HIGH: "#dc2626",      # red
+            Priority.MEDIUM: "#ea580c",    # orange
+            Priority.LOW: "#ca8a04",       # yellow
+            Priority.NONE: "#2563eb",      # blue
         }
 
         html = f'''<!DOCTYPE html>

@@ -362,16 +362,16 @@ async def reprocess_unprocessed_items(limit: int = 100) -> int:
                 item.summary = analysis.get("summary")
                 item.detailed_analysis = analysis.get("detailed_analysis")
 
-                # Map priority string to enum
+                # Map priority string to enum (critical→high, high→medium, medium→low, low→none)
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if llm_priority == "critical":
-                    item.priority = Priority.CRITICAL
-                elif llm_priority == "high":
                     item.priority = Priority.HIGH
-                elif llm_priority == "medium":
+                elif llm_priority == "high":
                     item.priority = Priority.MEDIUM
-                else:
+                elif llm_priority == "medium":
                     item.priority = Priority.LOW
+                else:
+                    item.priority = Priority.NONE
 
                 item.priority_score = int(analysis.get("relevance_score", 0) * 100)
 

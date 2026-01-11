@@ -132,7 +132,7 @@ class Pipeline:
                     if not should_process:
                         # Mark as irrelevant, skip LLM but still store
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
-                        item.priority = Priority.LOW
+                        item.priority = Priority.NONE
                         item.priority_score = 10
                         skip_llm = True
                 except Exception as e:
@@ -153,22 +153,23 @@ class Pipeline:
                     # New model returns "priority", old model used "priority_suggestion"
                     llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
 
-                    # If LLM says not relevant, force low priority
+                    # If LLM says not relevant, force none priority
                     if analysis.get("relevant") is False:
                         llm_priority = "low"
 
+                    # Map LLM output to new priority system (critical→high, high→medium, medium→low, low→none)
                     if llm_priority == "critical":
-                        item.priority = Priority.CRITICAL
+                        item.priority = Priority.HIGH
                         item.priority_score = max(item.priority_score, 90)
                     elif llm_priority == "high":
-                        item.priority = Priority.HIGH
+                        item.priority = Priority.MEDIUM
                         item.priority_score = max(item.priority_score, 70)
                     elif llm_priority == "medium":
-                        item.priority = Priority.MEDIUM
-                        # Keep keyword-based score for medium
-                    else:
-                        # null or "low" = LOW (not relevant or low priority)
                         item.priority = Priority.LOW
+                        # Keep keyword-based score for low
+                    else:
+                        # null or "low" = NONE (not relevant)
+                        item.priority = Priority.NONE
                         item.priority_score = min(item.priority_score, 40)
 
                     # Set summary from analysis
@@ -403,19 +404,19 @@ class Pipeline:
         """Convert numeric score to priority level.
 
         Base score is 50. Items must have keyword matches to be relevant.
-        - >= 90: CRITICAL (major budget/structural issues)
-        - >= 70: HIGH (legislation, reforms)
-        - > 50: MEDIUM (has some Liga-relevant keywords)
-        - <= 50: LOW (no relevant keyword matches - not Liga-relevant)
+        - >= 90: HIGH (major issues, urgent)
+        - >= 70: MEDIUM (legislation, reforms)
+        - > 50: LOW (has some Liga-relevant keywords)
+        - <= 50: NONE (no relevant keyword matches - not Liga-relevant)
         """
         if score >= 90:
-            return Priority.CRITICAL
-        elif score >= 70:
             return Priority.HIGH
-        elif score > 50:
+        elif score >= 70:
             return Priority.MEDIUM
-        else:
+        elif score > 50:
             return Priority.LOW
+        else:
+            return Priority.NONE
 
 
 async def process_items(

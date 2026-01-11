@@ -26,6 +26,7 @@ async def list_items(
     priority: Priority | None = None,
     is_read: bool | None = None,
     is_starred: bool | None = None,
+    is_archived: bool | None = Query(None, description="Filter by archive status (default: exclude archived)"),
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
@@ -37,8 +38,10 @@ async def list_items(
 ) -> ItemListResponse:
     """List items with filtering and pagination.
 
-    By default, only shows relevant items (critical, high, medium priority).
-    Set relevant_only=false to include all items including LOW priority.
+    By default, only shows relevant items (high, medium, low priority).
+    Set relevant_only=false to include all items including NONE priority.
+    By default, archived items are excluded. Set is_archived=true to show only archived,
+    or is_archived=false to explicitly exclude them.
     """
     query = select(Item).options(
         selectinload(Item.channel).selectinload(Channel.source)
@@ -54,11 +57,16 @@ async def list_items(
         query = query.where(Item.priority == priority)
     elif relevant_only:
         # Exclude LOW priority items (not Liga-relevant)
-        query = query.where(Item.priority != Priority.LOW)
+        query = query.where(Item.priority != Priority.NONE)
     if is_read is not None:
         query = query.where(Item.is_read == is_read)
     if is_starred is not None:
         query = query.where(Item.is_starred == is_starred)
+    if is_archived is not None:
+        query = query.where(Item.is_archived == is_archived)
+    else:
+        # By default, exclude archived items
+        query = query.where(Item.is_archived == False)  # noqa: E712
     if since is not None:
         query = query.where(Item.published_at >= since)
     if until is not None:
@@ -74,9 +82,10 @@ async def list_items(
             query = query.join(Channel)
         query = query.where(Channel.connector_type == connector_type)
     if assigned_ak is not None:
-        # Filter by assigned_ak in metadata.llm_analysis.assigned_ak
+        # Filter by assigned_ak column (or fall back to metadata for legacy items)
         query = query.where(
-            func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak
+            (Item.assigned_ak == assigned_ak) |
+            (func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak)
         )
 
     # Get total count
@@ -85,12 +94,12 @@ async def list_items(
 
     # Apply ordering based on sort_by parameter
     if sort_by == "priority":
-        # Priority order: critical > high > medium > low
+        # Priority order: high > medium > low > none
         priority_order = case(
-            (Item.priority == "critical", 1),
-            (Item.priority == "high", 2),
-            (Item.priority == "medium", 3),
-            (Item.priority == "low", 4),
+            (Item.priority == "high", 1),
+            (Item.priority == "medium", 2),
+            (Item.priority == "low", 3),
+            (Item.priority == "none", 4),
             else_=5,
         )
         if sort_order == "asc":
@@ -157,7 +166,11 @@ async def update_item(
     update: ItemUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
-    """Update an item (read status, starred, notes, content, summary, priority)."""
+    """Update an item (read status, starred, notes, content, summary, priority).
+
+    When priority or assigned_ak is changed, the item is marked as manually reviewed.
+    This creates verified training data for classification.
+    """
     query = (
         select(Item)
         .where(Item.id == item_id)
@@ -170,27 +183,42 @@ async def update_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     update_data = update.model_dump(exclude_unset=True)
+    manually_reviewed = False
 
     # Handle priority conversion from string to enum
     if "priority" in update_data:
         priority_str = update_data.pop("priority")
         if priority_str:
             priority_map = {
-                "critical": Priority.CRITICAL,
                 "high": Priority.HIGH,
                 "medium": Priority.MEDIUM,
                 "low": Priority.LOW,
+                "none": Priority.NONE,
             }
             if priority_str.lower() in priority_map:
-                item.priority = priority_map[priority_str.lower()]
+                new_priority = priority_map[priority_str.lower()]
+                if item.priority != new_priority:
+                    item.priority = new_priority
+                    manually_reviewed = True
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid priority: {priority_str}. Must be critical, high, medium, or low."
+                    detail=f"Invalid priority: {priority_str}. Must be high, medium, low, or none."
                 )
+
+    # Check if assigned_ak is being changed
+    if "assigned_ak" in update_data:
+        new_ak = update_data.get("assigned_ak")
+        if item.assigned_ak != new_ak:
+            manually_reviewed = True
 
     for key, value in update_data.items():
         setattr(item, key, value)
+
+    # Mark as manually reviewed if priority or AK was changed
+    if manually_reviewed:
+        item.is_manually_reviewed = True
+        item.reviewed_at = datetime.utcnow()
 
     await db.flush()
     await db.refresh(item)
@@ -213,6 +241,23 @@ async def mark_as_read(
 
     item.is_read = True
     return {"status": "ok"}
+
+
+@router.post("/items/{item_id}/archive")
+async def toggle_archive(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str | bool]:
+    """Toggle archive status of an item."""
+    query = select(Item).where(Item.id == item_id)
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item.is_archived = not item.is_archived
+    return {"status": "ok", "is_archived": item.is_archived}
 
 
 @router.post("/items/{item_id}/reprocess")
@@ -529,16 +574,17 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
                 # New model returns "priority", old model used "priority_suggestion"
+                # Map LLM output to new priority system: critical→high, high→medium, medium→low, low→none
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if llm_priority == "critical":
-                    item.priority = Priority.CRITICAL
-                elif llm_priority == "high":
                     item.priority = Priority.HIGH
-                elif llm_priority == "medium":
+                elif llm_priority == "high":
                     item.priority = Priority.MEDIUM
-                else:
-                    # null or "low" = LOW (not relevant or low priority)
+                elif llm_priority == "medium":
                     item.priority = Priority.LOW
+                else:
+                    # null or "low" = NONE (not relevant)
+                    item.priority = Priority.NONE
 
                 # Store analysis metadata
                 item.metadata_ = {
@@ -601,7 +647,7 @@ async def reprocess_items(
     if priority is not None:
         query = query.where(Item.priority == priority)
     elif exclude_low:
-        query = query.where(Item.priority != Priority.LOW)
+        query = query.where(Item.priority != Priority.NONE)
 
     # When not forcing, only select items without LLM analysis
     # Use SQLite JSON extract to check if key exists

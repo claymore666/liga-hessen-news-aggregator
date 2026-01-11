@@ -293,14 +293,14 @@ class TestItemProcessor:
         )
         return item
 
-    def test_calculate_keyword_score_critical(self, processor, sample_item):
-        """Critical keywords should increase score significantly."""
+    def test_calculate_keyword_score_high(self, processor, sample_item):
+        """High priority keywords should increase score significantly."""
         score, priority = processor.calculate_keyword_score(sample_item)
 
-        # Should match "kürzungen" (critical keyword)
+        # Should match "kürzungen" (high priority keyword)
         assert score > 50
         from models import Priority
-        assert priority in [Priority.HIGH, Priority.CRITICAL]
+        assert priority in [Priority.HIGH, Priority.MEDIUM]
 
     def test_calculate_keyword_score_no_match(self, processor):
         """Items without keywords should have base score."""
