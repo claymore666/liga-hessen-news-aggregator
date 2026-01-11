@@ -91,16 +91,35 @@ AK_KEYWORDS = {
         "asylbewerber", "asylverfahren", "duldung", "bleiberecht", "einbürgerung",
     ],
     "AK3": [  # Gesundheit, Pflege und Senioren
+        # Core terms
         "pflege", "pflegekraft", "altenpflege", "pflegeheim", "krankenhaus",
         "gesundheit", "demenz", "senioren", "häusliche pflege", "pflegedienst",
         "pflegeversicherung", "pflegestufe", "pflegegrad", "pflegebedürftig",
         "kranken", "patient", "altersheim", "hospiz", "palliativ", "therapie",
+        # Healthcare system (added 2026-01-11)
+        "klinik", "gesundheitsversorgung", "gesundheitswesen",
+        "pflegereform", "pflegestützpunkt", "kurzzeitpflege",
+        # Elderly care (added 2026-01-11)
+        "geriatrie", "seniorenpolitik", "seniorenarbeit", "altenarbeit",
+        "pflegende angehörige",
+        # Mental health (added 2026-01-11)
+        "psychisch krank", "psychiatrie",
+        # Addiction - specific compounds only (added 2026-01-11)
+        "suchthilfe", "suchtberatung", "suchtprävention", "suchterkrankung",
+        # Rehabilitation (added 2026-01-11)
+        "rehabilitation", "reha",
     ],
     "AK4": [  # Eingliederungshilfe
+        # Core terms
         "eingliederungshilfe", "behinderung", "behindert", "inklusion", "teilhabe",
         "werkstatt", "barrierefreiheit", "bthg", "bundesteilhabegesetz",
         "schwerbehindert", "teilhabeplan", "persönliches budget", "wfbm",
         "assistenz", "förderung", "selbstbestimmung", "un-brk",
+        # Organizations and rights (added 2026-01-11)
+        "lebenshilfe", "behindertenhilfe", "behindertenrecht",
+        # Participation services (added 2026-01-11)
+        "teilhabeleistung", "teilhabeberatung", "eutb",
+        "schwerbehindertenausweis",
     ],
     "AK5": [  # Kinder, Jugend, Frauen und Familie
         "kita", "kindergarten", "kinderbetreuung", "jugend", "jugendhilfe",
