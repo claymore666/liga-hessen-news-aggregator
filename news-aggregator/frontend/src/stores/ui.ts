@@ -19,14 +19,17 @@ export const useUiStore = defineStore('ui', () => {
   // Sidebar width in pixels
   const sidebarWidth = computed(() => sidebarCollapsed.value ? 64 : 256)
 
-  // Extra space available when collapsed (256 - 64 = 192px)
-  // 50% of this goes to message list
-  const messageListExtraWidth = computed(() => sidebarCollapsed.value ? 96 : 0)
+  // Grid template columns for the two-column layout
+  // When collapsed: 1/3 inbox, 2/3 detail (using fr units)
+  // When expanded: fixed 400px inbox, rest for detail
+  const messageListGridColumns = computed(() =>
+    sidebarCollapsed.value ? '1fr 2fr' : 'minmax(0, 400px) 1fr'
+  )
 
   return {
     sidebarCollapsed,
     sidebarWidth,
-    messageListExtraWidth,
+    messageListGridColumns,
     toggleSidebar,
     setSidebarCollapsed
   }

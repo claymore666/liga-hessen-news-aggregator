@@ -15,8 +15,8 @@ const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
 const uiStore = useUiStore()
 
-// Message list width: 400px base + 96px when sidebar collapsed
-const messageListWidth = computed(() => 400 + uiStore.messageListExtraWidth)
+// Grid columns: 1/3-2/3 when sidebar collapsed, fixed 400px otherwise
+const gridColumns = computed(() => uiStore.messageListGridColumns)
 
 const page = ref(1)
 const pageSize = 50
@@ -262,13 +262,13 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- Two-column layout -->
+    <!-- Two-column layout (stacked on mobile, side-by-side on lg+) -->
     <div
-      class="flex-1 grid grid-cols-1 gap-4 min-h-0 transition-all duration-300"
-      :style="{ gridTemplateColumns: `minmax(0, ${messageListWidth}px) 1fr` }"
+      class="flex-1 grid gap-4 min-h-0 transition-all duration-300 grid-cols-1 lg:grid-cols-[var(--grid-cols)]"
+      :style="{ '--grid-cols': gridColumns } as any"
     >
       <!-- Left Column: List -->
-      <div class="flex flex-col min-h-0 rounded-lg border border-blue-300 overflow-hidden">
+      <div class="flex flex-col min-h-0 rounded-lg border border-blue-300 overflow-hidden max-h-[50vh] lg:max-h-none">
         <!-- Filters -->
         <FilterBar
           :selected-count="selectedIds.length"
