@@ -71,6 +71,10 @@ class EmbeddingClassifier:
     Combines NomicV2 embeddings with sklearn RandomForest.
     """
 
+    # Label mappings (integer class index to string label)
+    PRIORITY_LABELS = ["critical", "high", "medium", "low"]
+    AK_LABELS = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
+
     def __init__(self):
         self.embedder = NomicV2Embedder()
         self.relevance_clf = None
@@ -132,16 +136,14 @@ class EmbeddingClassifier:
         if is_relevant and self.priority_clf and self.ak_clf:
             # Priority
             priority_proba = self.priority_clf.predict_proba(embedding)[0]
-            priority_idx = np.argmax(priority_proba)
-            priority = self.priority_clf.classes_[priority_idx]
-            result["priority"] = priority
+            priority_idx = int(np.argmax(priority_proba))
+            result["priority"] = self.PRIORITY_LABELS[priority_idx]
             result["priority_confidence"] = float(priority_proba[priority_idx])
 
             # AK
             ak_proba = self.ak_clf.predict_proba(embedding)[0]
-            ak_idx = np.argmax(ak_proba)
-            ak = self.ak_clf.classes_[ak_idx]
-            result["ak"] = ak
+            ak_idx = int(np.argmax(ak_proba))
+            result["ak"] = self.AK_LABELS[ak_idx]
             result["ak_confidence"] = float(ak_proba[ak_idx])
 
         return result
