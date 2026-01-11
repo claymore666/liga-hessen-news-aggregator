@@ -57,7 +57,7 @@ async def list_items(
         query = query.where(Item.priority == priority)
     elif relevant_only:
         # Exclude LOW priority items (not Liga-relevant)
-        query = query.where(Item.priority != Priority.LOW)
+        query = query.where(Item.priority != Priority.NONE)
     if is_read is not None:
         query = query.where(Item.is_read == is_read)
     if is_starred is not None:
@@ -190,10 +190,10 @@ async def update_item(
         priority_str = update_data.pop("priority")
         if priority_str:
             priority_map = {
-                "critical": Priority.CRITICAL,
                 "high": Priority.HIGH,
                 "medium": Priority.MEDIUM,
                 "low": Priority.LOW,
+                "none": Priority.NONE,
             }
             if priority_str.lower() in priority_map:
                 new_priority = priority_map[priority_str.lower()]
@@ -574,16 +574,17 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
                 # New model returns "priority", old model used "priority_suggestion"
+                # Map LLM output to new priority system: critical→high, high→medium, medium→low, low→none
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if llm_priority == "critical":
-                    item.priority = Priority.CRITICAL
-                elif llm_priority == "high":
                     item.priority = Priority.HIGH
-                elif llm_priority == "medium":
+                elif llm_priority == "high":
                     item.priority = Priority.MEDIUM
-                else:
-                    # null or "low" = LOW (not relevant or low priority)
+                elif llm_priority == "medium":
                     item.priority = Priority.LOW
+                else:
+                    # null or "low" = NONE (not relevant)
+                    item.priority = Priority.NONE
 
                 # Store analysis metadata
                 item.metadata_ = {
@@ -646,7 +647,7 @@ async def reprocess_items(
     if priority is not None:
         query = query.where(Item.priority == priority)
     elif exclude_low:
-        query = query.where(Item.priority != Priority.LOW)
+        query = query.where(Item.priority != Priority.NONE)
 
     # When not forcing, only select items without LLM analysis
     # Use SQLite JSON extract to check if key exists

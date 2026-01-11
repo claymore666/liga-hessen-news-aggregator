@@ -61,15 +61,6 @@ useKeyboardShortcuts([
   },
   {
     key: '1',
-    description: 'Priorität: Kritisch',
-    action: () => {
-      if (selectedItem.value) {
-        handlePriorityChange('critical')
-      }
-    }
-  },
-  {
-    key: '2',
     description: 'Priorität: Hoch',
     action: () => {
       if (selectedItem.value) {
@@ -78,7 +69,7 @@ useKeyboardShortcuts([
     }
   },
   {
-    key: '3',
+    key: '2',
     description: 'Priorität: Mittel',
     action: () => {
       if (selectedItem.value) {
@@ -87,11 +78,20 @@ useKeyboardShortcuts([
     }
   },
   {
-    key: '4',
+    key: '3',
     description: 'Priorität: Niedrig',
     action: () => {
       if (selectedItem.value) {
         handlePriorityChange('low')
+      }
+    }
+  },
+  {
+    key: '4',
+    description: 'Priorität: Keine',
+    action: () => {
+      if (selectedItem.value) {
+        handlePriorityChange('none')
       }
     }
   },
@@ -118,8 +118,8 @@ useKeyboardShortcuts([
     description: 'Relevanz umschalten',
     action: () => {
       if (selectedItem.value) {
-        const isRelevant = selectedItem.value.priority !== 'low'
-        handlePriorityChange(isRelevant ? 'low' : 'medium')
+        const isRelevant = selectedItem.value.priority !== 'none'
+        handlePriorityChange(isRelevant ? 'none' : 'low')
       }
     }
   }

@@ -21,10 +21,10 @@ const emit = defineEmits<{
 }>()
 
 const priorities: { value: Priority; label: string; shortcut: string }[] = [
-  { value: 'critical', label: 'Kritisch', shortcut: '1' },
-  { value: 'high', label: 'Hoch', shortcut: '2' },
-  { value: 'medium', label: 'Mittel', shortcut: '3' },
-  { value: 'low', label: 'Niedrig', shortcut: '4' }
+  { value: 'high', label: 'Hoch', shortcut: '1' },
+  { value: 'medium', label: 'Mittel', shortcut: '2' },
+  { value: 'low', label: 'Niedrig', shortcut: '3' },
+  { value: 'none', label: 'Keine', shortcut: '4' }
 ]
 
 const arbeitskreise = [
@@ -36,7 +36,7 @@ const arbeitskreise = [
   { value: 'QAG', label: 'QAG' }
 ]
 
-const isRelevant = computed(() => props.item.priority !== 'low')
+const isRelevant = computed(() => props.item.priority !== 'none')
 
 const setPriority = (priority: Priority) => {
   if (props.item.priority !== priority) {
@@ -51,9 +51,9 @@ const setAk = (ak: string) => {
 
 const toggleRelevance = () => {
   if (isRelevant.value) {
-    emit('update:priority', 'low')
+    emit('update:priority', 'none')
   } else {
-    emit('update:priority', 'medium')
+    emit('update:priority', 'low')
   }
 }
 </script>
@@ -71,10 +71,10 @@ const toggleRelevance = () => {
           class="px-2 py-1 text-xs font-medium rounded transition-all"
           :class="[
             item.priority === p.value
-              ? p.value === 'critical' ? 'bg-red-600 text-white ring-2 ring-red-300'
-                : p.value === 'high' ? 'bg-orange-500 text-white ring-2 ring-orange-300'
-                : p.value === 'medium' ? 'bg-yellow-500 text-white ring-2 ring-yellow-300'
-                : 'bg-green-600 text-white ring-2 ring-green-300'
+              ? p.value === 'high' ? 'bg-red-600 text-white ring-2 ring-red-300'
+                : p.value === 'medium' ? 'bg-orange-500 text-white ring-2 ring-orange-300'
+                : p.value === 'low' ? 'bg-yellow-500 text-white ring-2 ring-yellow-300'
+                : 'bg-blue-600 text-white ring-2 ring-blue-300'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
           ]"
           :title="`${p.label} (${p.shortcut})`"

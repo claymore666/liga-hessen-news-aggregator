@@ -1,4 +1,4 @@
-export type Priority = 'critical' | 'high' | 'medium' | 'low'
+export type Priority = 'high' | 'medium' | 'low' | 'none'
 export type ConnectorType = 'rss' | 'html' | 'bluesky' | 'twitter' | 'pdf' | 'mastodon' | 'x_scraper' | 'telegram' | 'instagram' | 'instagram_scraper' | 'google_alerts'
 export type RuleType = 'keyword' | 'regex' | 'semantic'
 

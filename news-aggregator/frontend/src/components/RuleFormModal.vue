@@ -49,10 +49,10 @@ const ruleTypes: { value: RuleType; label: string; description: string }[] = [
 
 const priorities: { value: Priority | null; label: string }[] = [
   { value: null, label: 'Keine Änderung' },
-  { value: 'critical', label: 'Kritisch' },
   { value: 'high', label: 'Hoch' },
   { value: 'medium', label: 'Mittel' },
-  { value: 'low', label: 'Niedrig' }
+  { value: 'low', label: 'Niedrig' },
+  { value: 'none', label: 'Keine' }
 ]
 
 const save = async () => {

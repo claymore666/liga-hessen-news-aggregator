@@ -33,10 +33,10 @@ class ConnectorType(str, Enum):
 class Priority(str, Enum):
     """Item priority levels."""
 
-    CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    NONE = "none"  # Not relevant
 
 
 class RuleType(str, Enum):
@@ -196,7 +196,7 @@ class Item(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     content_hash: Mapped[str] = mapped_column(String(64))
-    priority: Mapped[Priority] = mapped_column(String(20), default=Priority.MEDIUM)
+    priority: Mapped[Priority] = mapped_column(String(20), default=Priority.LOW)
     priority_score: Mapped[int] = mapped_column(default=50)
     is_read: Mapped[bool] = mapped_column(default=False)
     is_starred: Mapped[bool] = mapped_column(default=False)

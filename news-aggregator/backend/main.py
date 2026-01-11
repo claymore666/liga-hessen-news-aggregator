@@ -58,6 +58,26 @@ async def run_migrations() -> None:
                   AND assigned_ak IS NULL
             """))
 
+        # Migrate priority values: critical→high, high→medium, medium→low, low→none
+        # Check if any items still have old priority values ('critical' only exists in old system)
+        result = await conn.execute(text(
+            "SELECT COUNT(*) FROM items WHERE priority = 'critical'"
+        ))
+        needs_migration = result.scalar()
+
+        if needs_migration and needs_migration > 0:
+            logging.info("Migration: Converting priority values (critical→high, high→medium, medium→low, low→none)")
+            # Use temp values to avoid conflicts during cascading migration
+            await conn.execute(text("UPDATE items SET priority = '_high' WHERE priority = 'critical'"))
+            await conn.execute(text("UPDATE items SET priority = '_medium' WHERE priority = 'high'"))
+            await conn.execute(text("UPDATE items SET priority = '_low' WHERE priority = 'medium'"))
+            await conn.execute(text("UPDATE items SET priority = 'none' WHERE priority = 'low'"))
+            # Now rename temp values to final values
+            await conn.execute(text("UPDATE items SET priority = 'high' WHERE priority = '_high'"))
+            await conn.execute(text("UPDATE items SET priority = 'medium' WHERE priority = '_medium'"))
+            await conn.execute(text("UPDATE items SET priority = 'low' WHERE priority = '_low'"))
+            logging.info("Migration: Priority values converted successfully")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
