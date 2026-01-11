@@ -118,8 +118,9 @@ class Pipeline:
             # 4. Apply rules and calculate priority (keyword-based first pass)
             await self._apply_rules(item)
 
-            # 5. Pre-filter with embedding classifier (skip clearly irrelevant items)
+            # 5. Pre-filter with embedding classifier (skip LLM for clearly irrelevant items)
             pre_filter_result = None
+            skip_llm = False
             if self.relevance_filter and not self.training_mode:
                 try:
                     should_process, pre_filter_result = await self.relevance_filter.should_process(
@@ -128,14 +129,16 @@ class Pipeline:
                         source=channel.source.name if channel.source else "",
                     )
                     if not should_process:
-                        # Skip this item entirely - clearly irrelevant
+                        # Mark as irrelevant, skip LLM but still store
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
-                        continue
+                        item.priority = Priority.LOW
+                        item.priority_score = 10
+                        skip_llm = True
                 except Exception as e:
                     logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
 
-            # 6. LLM-based categorization and summarization (no filtering)
-            if self.processor and not self.training_mode:
+            # 6. LLM-based categorization and summarization (skip if pre-filtered)
+            if self.processor and not self.training_mode and not skip_llm:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
                     # Pass source_name since item.channel relationship isn't loaded yet
