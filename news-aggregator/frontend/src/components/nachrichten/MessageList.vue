@@ -31,7 +31,7 @@ const formatTime = (date: string | null) => {
       Keine Nachrichten gefunden
     </div>
     <ul v-else>
-      <li v-for="(item, index) in items" :key="item.id">
+      <li v-for="(item, index) in items" :key="`${item.id}-${item.is_read}`">
         <div
           class="flex items-center py-1.5 px-3 transition-colors cursor-pointer border-l-4"
           :class="[
