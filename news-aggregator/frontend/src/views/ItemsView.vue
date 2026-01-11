@@ -87,10 +87,10 @@ useKeyboardShortcuts([
 
 const priorities = [
   { value: '', label: 'Alle Prioritäten' },
-  { value: 'critical', label: 'Kritisch' },
   { value: 'high', label: 'Hoch' },
   { value: 'medium', label: 'Mittel' },
-  { value: 'low', label: 'Niedrig' }
+  { value: 'low', label: 'Niedrig' },
+  { value: 'none', label: 'Keine' }
 ]
 
 const connectorTypes = [

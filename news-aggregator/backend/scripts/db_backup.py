@@ -11,8 +11,8 @@ Usage:
     # Export items from the last 7 days
     python db_backup.py items --since 2024-01-01 -o recent.jsonl
 
-    # Export only high/critical priority items
-    python db_backup.py items --priority high,critical -o important.jsonl
+    # Export only high priority items
+    python db_backup.py items --priority high -o important.jsonl
 
     # Export items from specific connector types
     python db_backup.py items --connector-type rss,x_scraper -o social.jsonl
@@ -286,7 +286,7 @@ def main():
     items_parser.add_argument("--output", "-o", required=True, help="Output file path")
     items_parser.add_argument("--since", help="Export items since date (YYYY-MM-DD)")
     items_parser.add_argument("--until", help="Export items until date (YYYY-MM-DD)")
-    items_parser.add_argument("--priority", help="Filter by priorities (comma-separated: low,medium,high,critical)")
+    items_parser.add_argument("--priority", help="Filter by priorities (comma-separated: none,low,medium,high)")
     items_parser.add_argument("--connector-type", help="Filter by connector types (comma-separated)")
     items_parser.add_argument("--source-id", help="Filter by source IDs (comma-separated)")
     items_parser.add_argument("--no-llm", action="store_true", help="Exclude LLM analysis fields")

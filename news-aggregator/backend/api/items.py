@@ -38,8 +38,8 @@ async def list_items(
 ) -> ItemListResponse:
     """List items with filtering and pagination.
 
-    By default, only shows relevant items (critical, high, medium priority).
-    Set relevant_only=false to include all items including LOW priority.
+    By default, only shows relevant items (high, medium, low priority).
+    Set relevant_only=false to include all items including NONE priority.
     By default, archived items are excluded. Set is_archived=true to show only archived,
     or is_archived=false to explicitly exclude them.
     """
@@ -94,12 +94,12 @@ async def list_items(
 
     # Apply ordering based on sort_by parameter
     if sort_by == "priority":
-        # Priority order: critical > high > medium > low
+        # Priority order: high > medium > low > none
         priority_order = case(
-            (Item.priority == "critical", 1),
-            (Item.priority == "high", 2),
-            (Item.priority == "medium", 3),
-            (Item.priority == "low", 4),
+            (Item.priority == "high", 1),
+            (Item.priority == "medium", 2),
+            (Item.priority == "low", 3),
+            (Item.priority == "none", 4),
             else_=5,
         )
         if sort_order == "asc":
@@ -203,7 +203,7 @@ async def update_item(
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid priority: {priority_str}. Must be critical, high, medium, or low."
+                    detail=f"Invalid priority: {priority_str}. Must be high, medium, low, or none."
                 )
 
     # Check if assigned_ak is being changed
