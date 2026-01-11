@@ -69,7 +69,7 @@ const formatTime = (date: string | null) => {
             <span class="hidden lg:inline max-w-20 truncate">{{ item.source?.name ?? '' }}</span>
             <span class="text-gray-400">{{ formatTime(item.published_at) }}</span>
             <span
-              v-if="item.assigned_ak || item.metadata?.llm_analysis?.assigned_ak"
+              v-if="(item.assigned_ak || item.metadata?.llm_analysis?.assigned_ak) && item.priority !== 'none'"
               class="rounded bg-purple-200 px-1 py-0.5 text-[10px] font-medium text-purple-800"
             >
               {{ item.assigned_ak || item.metadata?.llm_analysis?.assigned_ak }}
