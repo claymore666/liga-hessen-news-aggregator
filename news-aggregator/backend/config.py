@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     classifier_url: str = "http://gpu1:8082"
     classifier_threshold: float = 0.8  # Skip LLM if irrelevant confidence > this
     classifier_enabled: bool = True
+    classifier_use_priority: bool = False  # Use classifier priority instead of LLM
+    classifier_use_ak: bool = False  # Use classifier AK instead of LLM
 
     # Scheduler
     fetch_interval_minutes: int = 30

@@ -79,10 +79,17 @@ AK_DEFINITIONS = {
 # Keywords per AK for feature engineering
 AK_KEYWORDS = {
     "AK1": [  # Grundsatz und Sozialpolitik
+        # Core terms
         "sozialpolitik", "sozialstaat", "wohlfahrt", "gemeinnützig", "ehrenamt",
         "bürgerengagement", "zivilgesellschaft", "soziale arbeit", "träger",
         "verband", "freie wohlfahrtspflege", "sozialgesetzgebung", "grundsatz",
         "reform", "haushalt", "finanzierung", "förderung", "landesregierung",
+        # Liga organizations (added 2026-01-11)
+        "liga der freien wohlfahrtspflege", "spitzenverband", "dachverband",
+        "awo", "caritas", "diakonie", "drk", "paritätisch",
+        # Policy positions (added 2026-01-11)
+        "positionspapier", "stellungnahme", "forderung", "kümmern statt kürzen",
+        "sozialkürzung", "sparmaßnahme", "kommunalwahl",
     ],
     "AK2": [  # Migration und Flucht
         "migration", "flucht", "flüchtling", "asyl", "geflüchtete", "zuwanderung",
@@ -129,10 +136,15 @@ AK_KEYWORDS = {
         "schwangerschaftskonflikt", "frühe hilfen", "frauenberatung",
     ],
     "QAG": [  # Querschnitt
+        # Core terms
         "digitalisierung", "klimaschutz", "wohnen", "wohnungsnot", "obdachlos",
         "wohnungslos", "sozialraum", "nachbarschaft", "quartier", "energiearmut",
         "nachhaltigkeit", "mobilität", "ländlicher raum", "stadtentwicklung",
         "armut", "armutsbericht", "existenzsicherung", "grundsicherung",
+        # Homeless support (added 2026-01-11)
+        "kältebus", "kältehilfe", "wärmestube", "notunterkunft", "notschlafstelle",
+        "straßensozialarbeit", "obdachlosenhilfe", "wohnungslosenhilfe",
+        "tagesaufenthalt", "suppenküche",
     ],
 }
 

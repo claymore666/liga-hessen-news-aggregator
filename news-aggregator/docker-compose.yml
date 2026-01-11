@@ -16,6 +16,8 @@ services:
       - CLASSIFIER_URL=http://gpu1:8082
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
+      - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}  # Use classifier priority instead of LLM
+      - CLASSIFIER_USE_AK=${CLASSIFIER_USE_AK:-false}  # Use classifier AK instead of LLM
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - backend-data:/app/data

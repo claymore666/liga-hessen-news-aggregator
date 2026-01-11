@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, Item, Priority, Rule, RuleType
+from config import settings
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
@@ -197,8 +198,37 @@ class Pipeline:
                 item.metadata_["pre_filter"] = {
                     "relevance_confidence": pre_filter_result.get("relevance_confidence"),
                     "ak_suggestion": pre_filter_result.get("ak"),
+                    "ak_confidence": pre_filter_result.get("ak_confidence"),
                     "priority_suggestion": pre_filter_result.get("priority"),
+                    "priority_confidence": pre_filter_result.get("priority_confidence"),
                 }
+
+                # 7a. Optionally use classifier priority instead of LLM
+                if settings.classifier_use_priority and pre_filter_result.get("priority"):
+                    clf_priority = pre_filter_result["priority"]
+                    if clf_priority == "critical":
+                        item.priority = Priority.CRITICAL
+                        item.priority_score = 90
+                    elif clf_priority == "high":
+                        item.priority = Priority.HIGH
+                        item.priority_score = 70
+                    elif clf_priority == "medium":
+                        item.priority = Priority.MEDIUM
+                        item.priority_score = 50
+                    else:
+                        item.priority = Priority.LOW
+                        item.priority_score = 30
+                    logger.debug(f"Using classifier priority: {clf_priority}")
+
+                # 7b. Optionally use classifier AK instead of LLM
+                if settings.classifier_use_ak and pre_filter_result.get("ak"):
+                    clf_ak = pre_filter_result["ak"]
+                    # Store in metadata (AK is stored in llm_analysis.assigned_ak)
+                    if "llm_analysis" not in item.metadata_:
+                        item.metadata_["llm_analysis"] = {}
+                    item.metadata_["llm_analysis"]["assigned_ak"] = clf_ak
+                    item.metadata_["llm_analysis"]["ak_source"] = "classifier"
+                    logger.debug(f"Using classifier AK: {clf_ak}")
 
             # 8. Add to database
             self.db.add(item)
