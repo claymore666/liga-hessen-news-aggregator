@@ -74,9 +74,10 @@ async def list_items(
             query = query.join(Channel)
         query = query.where(Channel.connector_type == connector_type)
     if assigned_ak is not None:
-        # Filter by assigned_ak in metadata.llm_analysis.assigned_ak
+        # Filter by assigned_ak column (or fall back to metadata for legacy items)
         query = query.where(
-            func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak
+            (Item.assigned_ak == assigned_ak) |
+            (func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak)
         )
 
     # Get total count
@@ -157,7 +158,11 @@ async def update_item(
     update: ItemUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
-    """Update an item (read status, starred, notes, content, summary, priority)."""
+    """Update an item (read status, starred, notes, content, summary, priority).
+
+    When priority or assigned_ak is changed, the item is marked as manually reviewed.
+    This creates verified training data for classification.
+    """
     query = (
         select(Item)
         .where(Item.id == item_id)
@@ -170,6 +175,7 @@ async def update_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     update_data = update.model_dump(exclude_unset=True)
+    manually_reviewed = False
 
     # Handle priority conversion from string to enum
     if "priority" in update_data:
@@ -182,15 +188,29 @@ async def update_item(
                 "low": Priority.LOW,
             }
             if priority_str.lower() in priority_map:
-                item.priority = priority_map[priority_str.lower()]
+                new_priority = priority_map[priority_str.lower()]
+                if item.priority != new_priority:
+                    item.priority = new_priority
+                    manually_reviewed = True
             else:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid priority: {priority_str}. Must be critical, high, medium, or low."
                 )
 
+    # Check if assigned_ak is being changed
+    if "assigned_ak" in update_data:
+        new_ak = update_data.get("assigned_ak")
+        if item.assigned_ak != new_ak:
+            manually_reviewed = True
+
     for key, value in update_data.items():
         setattr(item, key, value)
+
+    # Mark as manually reviewed if priority or AK was changed
+    if manually_reviewed:
+        item.is_manually_reviewed = True
+        item.reviewed_at = datetime.utcnow()
 
     await db.flush()
     await db.refresh(item)

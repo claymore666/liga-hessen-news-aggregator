@@ -12,13 +12,13 @@ const router = createRouter({
     {
       path: '/items',
       name: 'items',
-      component: () => import('../views/ItemsView.vue'),
+      component: () => import('../views/NachrichtenView.vue'),
       meta: { title: 'Nachrichten' }
     },
     {
       path: '/items/:id',
       name: 'item-detail',
-      component: () => import('../views/ItemDetailView.vue'),
+      component: () => import('../views/NachrichtenView.vue'),
       meta: { title: 'Nachricht' }
     },
     {

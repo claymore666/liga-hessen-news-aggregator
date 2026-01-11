@@ -144,6 +144,10 @@ class ItemResponse(ItemBase, BaseSchema):
     priority_score: int
     is_read: bool
     is_starred: bool
+    is_archived: bool = False
+    assigned_ak: str | None = None
+    is_manually_reviewed: bool = False
+    reviewed_at: datetime | None = None
     notes: str | None
     metadata_: dict[str, Any] = Field(default_factory=dict, serialization_alias="metadata")
 
@@ -153,6 +157,8 @@ class ItemUpdate(BaseModel):
 
     is_read: bool | None = None
     is_starred: bool | None = None
+    is_archived: bool | None = None
+    assigned_ak: str | None = None
     notes: str | None = None
     # Admin fields for manual corrections
     content: str | None = None

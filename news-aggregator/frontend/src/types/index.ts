@@ -96,8 +96,11 @@ export interface Item {
   priority: Priority
   priority_score: number
   is_read: boolean
+  is_starred: boolean
   is_archived: boolean
   assigned_ak: string | null
+  is_manually_reviewed: boolean
+  reviewed_at: string | null
   tags: string[]
   metadata?: ItemMetadata
   created_at: string

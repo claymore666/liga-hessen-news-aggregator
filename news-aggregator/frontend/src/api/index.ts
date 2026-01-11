@@ -49,7 +49,7 @@ export const itemsApi = {
     relevant_only?: boolean
   }) => api.get<PaginatedResponse<Item>>('/items', { params }),
   get: (id: number) => api.get<Item>(`/items/${id}`),
-  update: (id: number, data: Partial<Item>) => api.put<Item>(`/items/${id}`, data),
+  update: (id: number, data: Partial<Item>) => api.patch<Item>(`/items/${id}`, data),
   markRead: (id: number) => api.post(`/items/${id}/mark-read`),
   markUnread: (id: number) => api.post(`/items/${id}/mark-unread`),
   bulkMarkRead: (ids: number[]) => api.post('/items/bulk-mark-read', { ids }),

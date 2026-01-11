@@ -119,6 +119,33 @@ export const useItemsStore = defineStore('items', () => {
     }
   }
 
+  async function updateItem(id: number, data: Partial<Item>) {
+    // Optimistic update
+    const item = items.value.find((i) => i.id === id)
+    const backup = item ? { ...item } : null
+    if (item) Object.assign(item, data)
+    if (currentItem.value?.id === id) {
+      Object.assign(currentItem.value, data)
+    }
+
+    try {
+      const response = await itemsApi.update(id, data)
+      // Update with server response
+      if (item) Object.assign(item, response.data)
+      if (currentItem.value?.id === id) {
+        currentItem.value = response.data
+      }
+    } catch (e) {
+      // Rollback on error
+      if (item && backup) Object.assign(item, backup)
+      if (currentItem.value?.id === id && backup) {
+        Object.assign(currentItem.value, backup)
+      }
+      error.value = e instanceof Error ? e.message : 'Failed to update item'
+      throw e
+    }
+  }
+
   function setFilter(key: keyof typeof filters.value, value: unknown) {
     filters.value[key] = value as never
   }
@@ -153,6 +180,7 @@ export const useItemsStore = defineStore('items', () => {
     markAsUnread,
     bulkMarkAsRead,
     archiveItem,
+    updateItem,
     setFilter,
     clearFilters
   }
