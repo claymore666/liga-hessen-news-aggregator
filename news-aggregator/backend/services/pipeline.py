@@ -205,21 +205,23 @@ class Pipeline:
                 }
 
                 # 7a. Optionally use classifier priority instead of LLM
+                # Map classifier output to new priority system (critical→high, high→medium, medium→low, low→none)
                 if settings.classifier_use_priority and pre_filter_result.get("priority"):
                     clf_priority = pre_filter_result["priority"]
                     if clf_priority == "critical":
-                        item.priority = Priority.CRITICAL
+                        item.priority = Priority.HIGH
                         item.priority_score = 90
                     elif clf_priority == "high":
-                        item.priority = Priority.HIGH
+                        item.priority = Priority.MEDIUM
                         item.priority_score = 70
                     elif clf_priority == "medium":
-                        item.priority = Priority.MEDIUM
+                        item.priority = Priority.LOW
                         item.priority_score = 50
                     else:
-                        item.priority = Priority.LOW
+                        # "low" or unknown → NONE (not relevant)
+                        item.priority = Priority.NONE
                         item.priority_score = 30
-                    logger.debug(f"Using classifier priority: {clf_priority}")
+                    logger.debug(f"Using classifier priority: {clf_priority} -> {item.priority.value}")
 
                 # 7b. Optionally use classifier AK instead of LLM
                 if settings.classifier_use_ak and pre_filter_result.get("ak"):
