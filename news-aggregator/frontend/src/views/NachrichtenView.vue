@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { useItemsStore, useSourcesStore } from '@/stores'
+import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
 import { ArrowPathIcon } from '@heroicons/vue/24/outline'
 import FilterBar from '@/components/nachrichten/FilterBar.vue'
 import MessageList from '@/components/nachrichten/MessageList.vue'
@@ -13,6 +13,10 @@ import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 const route = useRoute()
 const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
+const uiStore = useUiStore()
+
+// Message list width: 400px base + 96px when sidebar collapsed
+const messageListWidth = computed(() => 400 + uiStore.messageListExtraWidth)
 
 const page = ref(1)
 const pageSize = 50
@@ -259,7 +263,10 @@ onMounted(async () => {
     </div>
 
     <!-- Two-column layout -->
-    <div class="flex-1 grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-4 min-h-0">
+    <div
+      class="flex-1 grid grid-cols-1 gap-4 min-h-0 transition-all duration-300"
+      :style="{ gridTemplateColumns: `minmax(0, ${messageListWidth}px) 1fr` }"
+    >
       <!-- Left Column: List -->
       <div class="flex flex-col min-h-0 rounded-lg border border-blue-300 overflow-hidden">
         <!-- Filters -->
