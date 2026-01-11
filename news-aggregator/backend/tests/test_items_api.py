@@ -41,26 +41,27 @@ class TestListItems:
     async def test_list_items_relevant_only_default(
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
-        """By default, excludes LOW priority items."""
+        """By default, excludes NONE priority items (not Liga-relevant)."""
         response = await client.get("/api/items")
 
         assert response.status_code == 200
         data = response.json()
-        # Should exclude LOW priority items
+        # Should exclude NONE priority items (only HIGH, MEDIUM, LOW are shown)
         for item in data["items"]:
-            assert item["priority"] != "low"
+            assert item["priority"] != "none"
 
     @pytest.mark.asyncio
     async def test_list_items_relevant_only_false(
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
-        """Can include LOW priority items."""
+        """Can include NONE priority items when relevant_only=false."""
         response = await client.get("/api/items", params={"relevant_only": False})
 
         assert response.status_code == 200
         data = response.json()
         priorities = [item["priority"] for item in data["items"]]
-        assert "low" in priorities
+        # Should include all priorities including NONE
+        assert "none" in priorities
 
     @pytest.mark.asyncio
     async def test_list_items_pagination(

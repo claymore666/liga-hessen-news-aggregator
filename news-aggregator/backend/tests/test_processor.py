@@ -369,10 +369,10 @@ class TestAnalyzeMethod:
 
     @pytest.mark.asyncio
     async def test_analyze_truncates_long_content(self, processor):
-        """Analyze should truncate content longer than 2000 chars."""
+        """Analyze should truncate content longer than 6000 chars."""
         item = MagicMock()
         item.title = "Test"
-        item.content = "A" * 5000  # Long content
+        item.content = "A" * 10000  # Long content (exceeds 6000 char limit)
         item.source = None
         item.published_at = None
 
@@ -388,8 +388,8 @@ class TestAnalyzeMethod:
 
         call_args = processor.llm.complete.call_args
         prompt = call_args[0][0]
-        # Content should be truncated to 2000 chars
-        assert len(prompt) < 5000
+        # Content should be truncated to 6000 chars (plus title/source/date overhead ~100 chars)
+        assert len(prompt) < 7000
 
     @pytest.mark.asyncio
     async def test_analyze_returns_default_on_llm_error(self, processor):
