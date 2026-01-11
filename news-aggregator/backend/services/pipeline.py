@@ -16,6 +16,7 @@ from models import Channel, Item, Priority, Rule, RuleType
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
+    from services.relevance_filter import RelevanceFilter
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class Pipeline:
         self,
         db: AsyncSession,
         processor: ItemProcessor | None = None,
+        relevance_filter: "RelevanceFilter | None" = None,
         training_mode: bool = False,
     ):
         """Initialize pipeline.
@@ -50,11 +52,13 @@ class Pipeline:
         Args:
             db: Database session
             processor: Optional LLM processor for summarization and semantic rules
+            relevance_filter: Optional pre-filter for relevance classification
             training_mode: If True, disables filtering (age, keyword, LLM relevance)
                           for training data collection. Only deduplication remains.
         """
         self.db = db
         self.processor = processor
+        self.relevance_filter = relevance_filter
         self.training_mode = training_mode
         self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
@@ -114,7 +118,23 @@ class Pipeline:
             # 4. Apply rules and calculate priority (keyword-based first pass)
             await self._apply_rules(item)
 
-            # 5. LLM-based categorization and summarization (no filtering)
+            # 5. Pre-filter with embedding classifier (skip clearly irrelevant items)
+            pre_filter_result = None
+            if self.relevance_filter and not self.training_mode:
+                try:
+                    should_process, pre_filter_result = await self.relevance_filter.should_process(
+                        title=normalized.title,
+                        content=normalized.content,
+                        source=channel.source.name if channel.source else "",
+                    )
+                    if not should_process:
+                        # Skip this item entirely - clearly irrelevant
+                        logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
+                        continue
+                except Exception as e:
+                    logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
+
+            # 6. LLM-based categorization and summarization (no filtering)
             if self.processor and not self.training_mode:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
@@ -169,7 +189,15 @@ class Pipeline:
                 except Exception as e:
                     logger.warning(f"LLM analysis failed for item: {e}")
 
-            # 7. Add to database
+            # 7. Store pre-filter result in metadata if available
+            if pre_filter_result:
+                item.metadata_["pre_filter"] = {
+                    "relevance_confidence": pre_filter_result.get("relevance_confidence"),
+                    "ak_suggestion": pre_filter_result.get("ak"),
+                    "priority_suggestion": pre_filter_result.get("priority"),
+                }
+
+            # 8. Add to database
             self.db.add(item)
             new_items.append(item)
 
@@ -340,6 +368,7 @@ async def process_items(
     raw_items: list[RawItem],
     channel: Channel,
     processor: "ItemProcessor | None" = None,
+    relevance_filter: "RelevanceFilter | None" = None,
     training_mode: bool = False,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
@@ -349,10 +378,16 @@ async def process_items(
         raw_items: List of raw items from connector
         channel: Channel the items came from
         processor: Optional LLM processor for summarization and semantic rules
+        relevance_filter: Optional pre-filter for relevance classification
         training_mode: If True, disables filtering for training data collection
 
     Returns:
         List of newly created Item objects
     """
-    pipeline = Pipeline(db, processor=processor, training_mode=training_mode)
+    pipeline = Pipeline(
+        db,
+        processor=processor,
+        relevance_filter=relevance_filter,
+        training_mode=training_mode,
+    )
     return await pipeline.process(raw_items, channel)

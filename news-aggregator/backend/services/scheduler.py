@@ -80,9 +80,20 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     from connectors import ConnectorRegistry
     from services.pipeline import Pipeline
     from services.processor import ItemProcessor, create_processor_from_settings
+    from services.relevance_filter import create_relevance_filter
 
     mode_str = " (training)" if training_mode else ""
     logger.info(f"Fetching channel {channel_id}{mode_str}")
+
+    # Try to create relevance pre-filter (optional, skip in training mode)
+    relevance_filter = None
+    if not training_mode and settings.classifier_enabled:
+        try:
+            relevance_filter = await create_relevance_filter()
+            if relevance_filter:
+                logger.debug("Relevance pre-filter initialized")
+        except Exception as e:
+            logger.warning(f"Relevance pre-filter not available: {e}")
 
     # Try to create LLM processor (optional, skip in training mode for speed)
     processor: ItemProcessor | None = None
@@ -128,8 +139,8 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
 
             logger.info(f"Connector returned {len(raw_items)} raw items from channel {channel_id}")
 
-            # Process through pipeline (with optional LLM processor)
-            pipeline = Pipeline(db, processor=processor, training_mode=training_mode)
+            # Process through pipeline (with optional LLM processor and pre-filter)
+            pipeline = Pipeline(db, processor=processor, relevance_filter=relevance_filter, training_mode=training_mode)
             new_items = await pipeline.process(raw_items, channel)
 
             channel.last_fetch_at = datetime.utcnow()

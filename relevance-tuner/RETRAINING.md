@@ -44,7 +44,7 @@ Edit `LABELING_PROMPT.md` with new output format, then update all files listed a
 ### Step 2: Relabel Training Data
 
 ```bash
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 source venv/bin/activate
 
 # Use larger model for better quality labels
@@ -150,7 +150,7 @@ curl -X POST "http://localhost:8000/api/items/reprocess?force=true"
 **One command to do everything** (runs ~5 hours total):
 
 ```bash
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 ./scripts/full_retrain.sh
 ```
 

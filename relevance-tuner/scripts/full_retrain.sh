@@ -3,7 +3,7 @@
 # Usage: ./scripts/full_retrain.sh [--model qwen3:32b]
 
 set -e
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 source venv/bin/activate
 
 MODEL="${2:-qwen3:32b}"
@@ -25,7 +25,7 @@ echo "[0/7] Preparing environment..."
 echo "  Stopping news-aggregator backend..."
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
 docker compose stop backend 2>/dev/null || true
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 
 # Unload Ollama models
 echo "  Unloading Ollama models..."
@@ -78,7 +78,7 @@ print('Converting to GGUF (q8_0)...')
 model.save_pretrained_gguf('gguf', tokenizer, quantization_method='q8_0')
 print('Done!')
 " 2>&1 | tee "$LOG_DIR/gguf.log"
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 echo "  GGUF conversion complete!"
 
 # Step 5: Deploy to Ollama
@@ -86,7 +86,7 @@ echo ""
 echo "[5/7] Deploying to Ollama..."
 cd models/qwen3-trained/gguf
 ollama create liga-relevance -f Modelfile 2>&1 | tee "$LOG_DIR/ollama.log"
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 echo "  Deployed to Ollama!"
 
 # Step 6: Start backend
@@ -95,7 +95,7 @@ echo "[6/7] Starting news-aggregator backend..."
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
 docker compose up -d backend
 sleep 15
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 echo "  Backend started!"
 
 # Step 7: Reprocess items

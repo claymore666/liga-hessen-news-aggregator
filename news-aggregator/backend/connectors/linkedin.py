@@ -391,7 +391,7 @@ class LinkedInConnector(BaseConnector):
 Verlinkter Artikel von {article.source_domain}:
 {article.title or 'Unbekannter Titel'}
 
-{article.content[:4000]}"""
+{article.content}"""
                                 logger.info(f"Fetched article from {article.source_domain} ({len(article.content)} chars)")
                                 break  # Only use first valid article
                         except Exception as e:

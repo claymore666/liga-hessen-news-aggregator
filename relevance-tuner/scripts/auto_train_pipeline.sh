@@ -2,7 +2,7 @@
 # Auto-training pipeline - runs after relabeling completes
 
 set -e
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 source venv/bin/activate
 
 LOG="/tmp/auto_train_pipeline.log"

@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     openrouter_model: str = "mistralai/mistral-7b-instruct:free"
     openrouter_timeout: int = 60
 
+    # Relevance Pre-filter (embedding classifier)
+    classifier_url: str = "http://gpu1:8082"
+    classifier_threshold: float = 0.8  # Skip LLM if irrelevant confidence > this
+    classifier_enabled: bool = True
+
     # Scheduler
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
