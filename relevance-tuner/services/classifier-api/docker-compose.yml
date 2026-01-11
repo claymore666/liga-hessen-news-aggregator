@@ -19,9 +19,15 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
       # Model file (can be updated without rebuild)
       - ./models:/app/models
+      # Vector store persistent data
+      - vectordb-data:/app/data/vectordb
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  vectordb-data:
+    name: liga-classifier-vectordb

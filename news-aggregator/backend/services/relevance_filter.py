@@ -112,6 +112,134 @@ class RelevanceFilter:
             logger.debug(f"Failed to get classifier health: {e}")
             return None
 
+    async def index_item(
+        self,
+        item_id: str,
+        title: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """
+        Index an item in the vector store for semantic search.
+
+        Args:
+            item_id: Unique identifier
+            title: Item title
+            content: Item content
+            metadata: Optional metadata (source, priority, ak, etc.)
+
+        Returns:
+            True if indexed, False if already exists or error
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/index",
+                    json={
+                        "id": item_id,
+                        "title": title,
+                        "content": content,
+                        "metadata": metadata,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("indexed", 0) > 0
+        except Exception as e:
+            logger.warning(f"Failed to index item {item_id}: {e}")
+            return False
+
+    async def index_items_batch(self, items: list[dict]) -> int:
+        """
+        Batch index multiple items.
+
+        Args:
+            items: List of dicts with keys: id, title, content, metadata (optional)
+
+        Returns:
+            Number of items indexed
+        """
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    f"{self.base_url}/index/batch",
+                    json={"items": items},
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("indexed", 0)
+        except Exception as e:
+            logger.warning(f"Failed to batch index items: {e}")
+            return 0
+
+    async def search(
+        self,
+        query: str,
+        n_results: int = 10,
+        source: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Semantic search for items matching a query.
+
+        Args:
+            query: Search query text
+            n_results: Number of results to return
+            source: Optional source filter
+
+        Returns:
+            List of results with id, title, score, metadata
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/search",
+                    json={
+                        "query": query,
+                        "n_results": n_results,
+                        "source": source,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("results", [])
+        except Exception as e:
+            logger.warning(f"Search failed: {e}")
+            return []
+
+    async def find_similar(
+        self,
+        item_id: str,
+        n_results: int = 5,
+        exclude_same_source: bool = True,
+    ) -> list[dict]:
+        """
+        Find items similar to a given item.
+
+        Args:
+            item_id: ID of the item to find similar items for
+            n_results: Number of results to return
+            exclude_same_source: Whether to exclude items from same source
+
+        Returns:
+            List of similar items with id, title, score, metadata
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/similar",
+                    json={
+                        "item_id": item_id,
+                        "n_results": n_results,
+                        "exclude_same_source": exclude_same_source,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("results", [])
+        except Exception as e:
+            logger.warning(f"Similar search failed: {e}")
+            return []
+
 
 async def create_relevance_filter() -> Optional[RelevanceFilter]:
     """

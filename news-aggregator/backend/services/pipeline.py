@@ -208,6 +208,28 @@ class Pipeline:
             await self.db.flush()
             logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
 
+            # 9. Index items in vector store for semantic search (async, non-blocking)
+            if self.relevance_filter and not self.training_mode:
+                try:
+                    items_to_index = [
+                        {
+                            "id": str(item.id),
+                            "title": item.title,
+                            "content": item.content,
+                            "metadata": {
+                                "source": channel.source.name if channel.source else "",
+                                "priority": item.priority.value if item.priority else None,
+                                "channel_id": str(channel.id),
+                            },
+                        }
+                        for item in new_items
+                    ]
+                    indexed = await self.relevance_filter.index_items_batch(items_to_index)
+                    if indexed > 0:
+                        logger.info(f"Indexed {indexed} items in vector store")
+                except Exception as e:
+                    logger.warning(f"Failed to index items in vector store: {e}")
+
         return new_items
 
     def _normalize_content(self, raw: RawItem) -> RawItem:

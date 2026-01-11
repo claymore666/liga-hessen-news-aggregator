@@ -1,12 +1,15 @@
 """
 Embedding Classifier for production deployment.
 Wraps NomicV2Embedder + sklearn RandomForest classifiers.
+Includes VectorStore for semantic search and similarity.
 """
 
 import pickle
 from pathlib import Path
 from typing import Optional
 
+import chromadb
+from chromadb.config import Settings
 import numpy as np
 import torch
 
@@ -159,4 +162,235 @@ class EmbeddingClassifier:
             "embedding_dim": self.embedder.embedding_dim,
             "gpu_available": self.is_gpu_available(),
             "gpu_name": torch.cuda.get_device_name(0) if self.is_gpu_available() else None,
+        }
+
+
+class VectorStore:
+    """
+    ChromaDB-based vector store for semantic search and similarity.
+    Uses the same NomicV2 embeddings as the classifier.
+    """
+
+    def __init__(self, embedder: NomicV2Embedder, persist_dir: str = "/app/data/vectordb"):
+        """
+        Initialize vector store.
+
+        Args:
+            embedder: NomicV2Embedder instance (shared with classifier)
+            persist_dir: Directory for persistent storage
+        """
+        self.embedder = embedder
+        self.persist_dir = persist_dir
+
+        # Initialize ChromaDB with persistent storage
+        Path(persist_dir).mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
+
+        # Get or create collection
+        self.collection = self.client.get_or_create_collection(
+            name="news_items",
+            metadata={"hnsw:space": "cosine"},
+        )
+
+        print(f"VectorStore initialized: {self.collection.count()} items in collection")
+
+    def add_item(
+        self,
+        item_id: str,
+        title: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """
+        Add or update an item in the vector store.
+
+        Args:
+            item_id: Unique identifier (e.g., database ID)
+            title: Item title
+            content: Item content
+            metadata: Optional metadata (source, priority, ak, etc.)
+
+        Returns:
+            True if added, False if already exists
+        """
+        # Check if already exists
+        existing = self.collection.get(ids=[item_id])
+        if existing["ids"]:
+            return False  # Already indexed
+
+        # Generate embedding
+        text = f"{title} {content}"
+        embedding = self.embedder.encode([text], show_progress_bar=False)[0]
+
+        # Prepare metadata
+        meta = metadata or {}
+        meta["title"] = title[:500]  # Truncate for storage
+
+        # Add to collection
+        self.collection.add(
+            ids=[item_id],
+            embeddings=[embedding],
+            metadatas=[meta],
+            documents=[text[:2000]],  # Store truncated text
+        )
+
+        return True
+
+    def add_items_batch(
+        self,
+        items: list[dict],
+    ) -> int:
+        """
+        Add multiple items in batch.
+
+        Args:
+            items: List of dicts with keys: id, title, content, metadata (optional)
+
+        Returns:
+            Number of items added
+        """
+        # Filter out existing items
+        ids = [str(item["id"]) for item in items]
+        existing = set(self.collection.get(ids=ids)["ids"])
+        new_items = [item for item in items if str(item["id"]) not in existing]
+
+        if not new_items:
+            return 0
+
+        # Generate embeddings
+        texts = [f"{item['title']} {item['content']}" for item in new_items]
+        embeddings = self.embedder.encode(texts, show_progress_bar=len(texts) > 10)
+
+        # Prepare data
+        ids = [str(item["id"]) for item in new_items]
+        metadatas = []
+        documents = []
+        for item in new_items:
+            meta = item.get("metadata", {}) or {}
+            meta["title"] = item["title"][:500]
+            metadatas.append(meta)
+            documents.append(texts[new_items.index(item)][:2000])
+
+        # Add to collection
+        self.collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            documents=documents,
+        )
+
+        return len(new_items)
+
+    def search(
+        self,
+        query: str,
+        n_results: int = 10,
+        filter_metadata: Optional[dict] = None,
+    ) -> list[dict]:
+        """
+        Semantic search for items matching a query.
+
+        Args:
+            query: Search query text
+            n_results: Number of results to return
+            filter_metadata: Optional filter (e.g., {"source": "hr"})
+
+        Returns:
+            List of results with id, title, score, metadata
+        """
+        # Generate query embedding
+        embedding = self.embedder.encode([query], show_progress_bar=False)[0]
+
+        # Search
+        results = self.collection.query(
+            query_embeddings=[embedding],
+            n_results=n_results,
+            where=filter_metadata,
+            include=["metadatas", "documents", "distances"],
+        )
+
+        # Format results
+        items = []
+        for i in range(len(results["ids"][0])):
+            items.append({
+                "id": results["ids"][0][i],
+                "title": results["metadatas"][0][i].get("title", ""),
+                "score": 1 - results["distances"][0][i],  # Convert distance to similarity
+                "metadata": results["metadatas"][0][i],
+                "snippet": results["documents"][0][i][:300] if results["documents"] else "",
+            })
+
+        return items
+
+    def find_similar(
+        self,
+        item_id: str,
+        n_results: int = 5,
+        exclude_same_source: bool = True,
+    ) -> list[dict]:
+        """
+        Find items similar to a given item.
+
+        Args:
+            item_id: ID of the item to find similar items for
+            n_results: Number of results to return
+            exclude_same_source: Whether to exclude items from same source
+
+        Returns:
+            List of similar items with id, title, score, metadata
+        """
+        # Get the item's embedding
+        item = self.collection.get(
+            ids=[item_id],
+            include=["embeddings", "metadatas"],
+        )
+
+        if not item["ids"]:
+            return []
+
+        embedding = item["embeddings"][0]
+        item_source = item["metadatas"][0].get("source", "")
+
+        # Search for similar (request extra to filter)
+        results = self.collection.query(
+            query_embeddings=[embedding],
+            n_results=n_results + 10,  # Get extra for filtering
+            include=["metadatas", "documents", "distances"],
+        )
+
+        # Format and filter results
+        items = []
+        for i in range(len(results["ids"][0])):
+            result_id = results["ids"][0][i]
+
+            # Skip the query item itself
+            if result_id == item_id:
+                continue
+
+            # Optionally skip same source
+            result_source = results["metadatas"][0][i].get("source", "")
+            if exclude_same_source and result_source == item_source:
+                continue
+
+            items.append({
+                "id": result_id,
+                "title": results["metadatas"][0][i].get("title", ""),
+                "score": 1 - results["distances"][0][i],
+                "metadata": results["metadatas"][0][i],
+                "snippet": results["documents"][0][i][:300] if results["documents"] else "",
+            })
+
+            if len(items) >= n_results:
+                break
+
+        return items
+
+    def get_stats(self) -> dict:
+        """Get vector store statistics."""
+        return {
+            "total_items": self.collection.count(),
+            "persist_dir": self.persist_dir,
         }
