@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, computed } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
 import { ArrowPathIcon } from '@heroicons/vue/24/outline'
@@ -23,6 +23,30 @@ const pageSize = 50
 const selectedItemId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
 const focusedIndex = ref(-1)
+
+// Auto-read timer (3 seconds)
+let readTimer: ReturnType<typeof setTimeout> | null = null
+
+const clearReadTimer = () => {
+  if (readTimer) {
+    clearTimeout(readTimer)
+    readTimer = null
+  }
+}
+
+const startReadTimer = (id: number) => {
+  clearReadTimer()
+  readTimer = setTimeout(async () => {
+    const item = itemsStore.items.find(i => i.id === id)
+    if (item && !item.is_read && selectedItemId.value === id) {
+      await itemsStore.markAsRead(id)
+    }
+  }, 3000)
+}
+
+onUnmounted(() => {
+  clearReadTimer()
+})
 
 const selectedItem = computed(() => itemsStore.currentItem)
 
@@ -140,9 +164,9 @@ const loadItems = async () => {
 const selectItem = async (id: number) => {
   selectedItemId.value = id
   await itemsStore.fetchItem(id)
-  // Mark as read when selected
+  // Start 3-second timer to mark as read
   if (selectedItem.value && !selectedItem.value.is_read) {
-    await itemsStore.markAsRead(id)
+    startReadTimer(id)
   }
 }
 
