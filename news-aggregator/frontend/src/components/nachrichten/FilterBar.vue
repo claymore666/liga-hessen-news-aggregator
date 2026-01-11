@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useItemsStore, useSourcesStore } from '@/stores'
 import {
   MagnifyingGlassIcon,
@@ -8,6 +8,7 @@ import {
   CheckIcon
 } from '@heroicons/vue/24/outline'
 import type { Priority } from '@/types'
+import { startOfDay, subDays, isMonday } from 'date-fns'
 
 const props = defineProps<{
   selectedCount: number
@@ -24,6 +25,37 @@ const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
 
 const searchQuery = ref(itemsStore.filters.search ?? '')
+
+// Date range presets
+const datePresets = [
+  { value: '1d', label: '1T' },
+  { value: '3d', label: '3T' },
+  { value: '1w', label: '1W' },
+  { value: '1m', label: '1M' },
+  { value: 'all', label: 'Alle' }
+]
+
+// Default: 3 days on Monday (weekend news), 1 day otherwise
+const defaultPreset = computed(() => isMonday(new Date()) ? '3d' : '1d')
+const selectedDatePreset = ref<string>(defaultPreset.value)
+
+// Calculate since date from preset
+const calculateSinceDate = (preset: string): string | null => {
+  if (preset === 'all') return null
+  const daysMap: Record<string, number> = { '1d': 1, '3d': 3, '1w': 7, '1m': 30 }
+  const days = daysMap[preset]
+  if (!days) return null
+  const startDate = startOfDay(subDays(new Date(), days))
+  return startDate.toISOString()
+}
+
+// Apply date preset
+const applyDatePreset = (preset: string) => {
+  selectedDatePreset.value = preset
+  const since = calculateSinceDate(preset)
+  itemsStore.setFilter('since', since)
+  emit('search')
+}
 
 const priorities: { value: Priority; label: string; color: string }[] = [
   { value: 'high', label: 'H', color: 'bg-red-500 hover:bg-red-600' },
@@ -66,7 +98,8 @@ const hasActiveFilters = computed(() => {
     itemsStore.filters.assigned_aks.length > 0 ||
     itemsStore.filters.search ||
     itemsStore.filters.is_read !== null ||
-    itemsStore.filters.is_archived !== null
+    itemsStore.filters.is_archived !== null ||
+    (selectedDatePreset.value && selectedDatePreset.value !== defaultPreset.value)
   )
 })
 
@@ -109,7 +142,8 @@ const applySearch = () => {
 const clearAllFilters = () => {
   searchQuery.value = ''
   itemsStore.clearFilters()
-  emit('search')
+  // Reset to default date preset
+  applyDatePreset(defaultPreset.value)
 }
 
 const toggleSortOrder = () => {
@@ -122,6 +156,12 @@ const handleFilterChange = (key: string, value: string | number | boolean | null
   itemsStore.setFilter(key as keyof typeof itemsStore.filters, value)
   emit('search')
 }
+
+// Apply default date preset on mount
+onMounted(() => {
+  const since = calculateSinceDate(defaultPreset.value)
+  itemsStore.setFilter('since', since)
+})
 </script>
 
 <template>
@@ -160,6 +200,22 @@ const handleFilterChange = (key: string, value: string | number | boolean | null
           @keyup.enter="applySearch"
         />
         <MagnifyingGlassIcon class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+      </div>
+
+      <!-- Date Range Presets -->
+      <div class="flex items-center gap-0.5">
+        <button
+          v-for="preset in datePresets"
+          :key="preset.value"
+          type="button"
+          class="px-1.5 py-0.5 text-xs font-medium rounded transition-all"
+          :class="selectedDatePreset === preset.value
+            ? 'bg-blue-600 hover:bg-blue-700 text-white'
+            : 'bg-gray-200 text-gray-600 hover:bg-gray-300'"
+          @click="applyDatePreset(preset.value)"
+        >
+          {{ preset.label }}
+        </button>
       </div>
 
       <!-- Connector Type -->
@@ -272,14 +328,14 @@ const handleFilterChange = (key: string, value: string | number | boolean | null
       </button>
 
       <!-- Select All -->
-      <label class="flex items-center gap-1.5 ml-1">
+      <label class="flex items-center gap-1.5 ml-1" title="Alle auswählen">
         <input
           type="checkbox"
           class="rounded border-gray-300 h-3.5 w-3.5"
           :checked="selectedCount === itemsStore.items.length && itemsStore.items.length > 0"
           @change="emit('select-all')"
         />
-        <span class="text-xs text-white">Alle</span>
+        <span class="text-xs text-white">Alle auswählen</span>
       </label>
 
       <!-- Result count -->
