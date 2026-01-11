@@ -23,7 +23,7 @@ async def list_items(
     page_size: int = Query(20, ge=1, le=100),
     source_id: int | None = None,
     channel_id: int | None = None,
-    priority: Priority | None = None,
+    priority: str | None = Query(None, description="Filter by priority (single value or comma-separated: high,medium)"),
     is_read: bool | None = None,
     is_starred: bool | None = None,
     is_archived: bool | None = Query(None, description="Filter by archive status (default: exclude archived)"),
@@ -32,7 +32,7 @@ async def list_items(
     search: str | None = None,
     relevant_only: bool = Query(True, description="Exclude LOW priority items (not Liga-relevant)"),
     connector_type: str | None = Query(None, description="Filter by connector type (rss, x_scraper, etc.)"),
-    assigned_ak: str | None = Query(None, description="Filter by Arbeitskreis (AK1-5, QAG)"),
+    assigned_ak: str | None = Query(None, description="Filter by Arbeitskreis (comma-separated: AK1,AK2,AK3)"),
     sort_by: str = Query("date", description="Sort by: date, priority, source"),
     sort_order: str = Query("desc", description="Sort order: asc, desc"),
 ) -> ItemListResponse:
@@ -54,7 +54,12 @@ async def list_items(
         # Filter by source through channel
         query = query.join(Channel).where(Channel.source_id == source_id)
     if priority is not None:
-        query = query.where(Item.priority == priority)
+        # Support comma-separated priority values
+        priority_values = [p.strip() for p in priority.split(",") if p.strip()]
+        if len(priority_values) == 1:
+            query = query.where(Item.priority == priority_values[0])
+        elif len(priority_values) > 1:
+            query = query.where(Item.priority.in_(priority_values))
     elif relevant_only:
         # Exclude LOW priority items (not Liga-relevant)
         query = query.where(Item.priority != Priority.NONE)
@@ -82,11 +87,23 @@ async def list_items(
             query = query.join(Channel)
         query = query.where(Channel.connector_type == connector_type)
     if assigned_ak is not None:
-        # Filter by assigned_ak column (or fall back to metadata for legacy items)
-        query = query.where(
-            (Item.assigned_ak == assigned_ak) |
-            (func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == assigned_ak)
-        )
+        # Support comma-separated AK values
+        ak_values = [ak.strip() for ak in assigned_ak.split(",") if ak.strip()]
+        if len(ak_values) == 1:
+            # Filter by assigned_ak column (or fall back to metadata for legacy items)
+            query = query.where(
+                (Item.assigned_ak == ak_values[0]) |
+                (func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == ak_values[0])
+            )
+        elif len(ak_values) > 1:
+            # Multiple AKs - use IN clause
+            from sqlalchemy import or_
+            query = query.where(
+                or_(
+                    Item.assigned_ak.in_(ak_values),
+                    func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak").in_(ak_values)
+                )
+            )
 
     # Get total count
     count_query = select(func.count()).select_from(query.subquery())

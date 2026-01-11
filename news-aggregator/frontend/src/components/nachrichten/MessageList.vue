@@ -2,6 +2,7 @@
 import type { Item } from '@/types'
 import PriorityBadge from '@/components/PriorityBadge.vue'
 import SourceIcon from '@/components/SourceIcon.vue'
+import { CheckCircleIcon } from '@heroicons/vue/24/solid'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 
@@ -50,6 +51,13 @@ const formatTime = (date: string | null) => {
             :checked="selectedIds.includes(item.id)"
             @click.stop
             @change="emit('toggle-check', item.id)"
+          />
+
+          <!-- Reviewed indicator -->
+          <CheckCircleIcon
+            v-if="item.is_manually_reviewed"
+            class="h-3.5 w-3.5 text-green-500 flex-shrink-0 mr-1"
+            title="Manuell überprüft"
           />
 
           <!-- Priority badge -->

@@ -14,6 +14,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import PriorityBadge from '@/components/PriorityBadge.vue'
 import SourceIcon from '@/components/SourceIcon.vue'
+import type { Priority } from '@/types'
 import { formatDistanceToNow, startOfDay, subDays, subWeeks, subMonths, isMonday } from 'date-fns'
 import { de } from 'date-fns/locale'
 
@@ -27,14 +28,15 @@ const searchQuery = ref('')
 const page = ref(1)
 const pageSize = 50
 
-// Filter options
-const priorities = [
-  { value: '', label: 'Alle Prioritäten' },
-  { value: 'high', label: 'Hoch' },
-  { value: 'medium', label: 'Mittel' },
-  { value: 'low', label: 'Niedrig' },
-  { value: 'none', label: 'Keine' }
+// Filter options - Toggle button style
+const priorityButtons: { value: Priority; label: string; color: string }[] = [
+  { value: 'high', label: 'H', color: 'bg-red-500 hover:bg-red-600' },
+  { value: 'medium', label: 'M', color: 'bg-orange-500 hover:bg-orange-600' },
+  { value: 'low', label: 'L', color: 'bg-yellow-500 hover:bg-yellow-600' },
+  { value: 'none', label: 'N', color: 'bg-gray-400 hover:bg-gray-500' }
 ]
+
+const akButtons = ['AK1', 'AK2', 'AK3', 'AK4', 'AK5', 'QAG']
 
 const connectorTypes = [
   { value: '', label: 'Alle Typen' },
@@ -48,15 +50,15 @@ const connectorTypes = [
   { value: 'instagram_scraper', label: 'Instagram' }
 ]
 
-const arbeitskreise = [
-  { value: '', label: 'Alle AKs' },
-  { value: 'AK1', label: 'AK1 - Grundsatz' },
-  { value: 'AK2', label: 'AK2 - Migration' },
-  { value: 'AK3', label: 'AK3 - Pflege' },
-  { value: 'AK4', label: 'AK4 - Eingliederung' },
-  { value: 'AK5', label: 'AK5 - Kinder/Jugend' },
-  { value: 'QAG', label: 'QAG - Querschnitt' }
-]
+const toggleAk = (ak: string) => {
+  if (itemsStore.filters.assigned_aks.length === 0) {
+    itemsStore.filters.assigned_aks = [ak]
+  } else if (itemsStore.filters.assigned_aks.includes(ak)) {
+    itemsStore.filters.assigned_aks = itemsStore.filters.assigned_aks.filter(a => a !== ak)
+  } else {
+    itemsStore.filters.assigned_aks.push(ak)
+  }
+}
 
 const sortOptions = [
   { value: 'date', label: 'Datum' },
@@ -98,11 +100,16 @@ const applyDatePreset = (preset: string) => {
 
 // Computed
 const hasActiveFilters = computed(() => {
+  // Check if priorities differ from default [high, medium, low]
+  const defaultPriorities = ['high', 'medium', 'low']
+  const prioritiesChanged = itemsStore.filters.priorities.length !== defaultPriorities.length ||
+    !defaultPriorities.every(p => itemsStore.filters.priorities.includes(p as Priority))
+
   return (
-    itemsStore.filters.priority ||
+    prioritiesChanged ||
     itemsStore.filters.source_id ||
     itemsStore.filters.connector_type ||
-    itemsStore.filters.assigned_ak ||
+    itemsStore.filters.assigned_aks.length > 0 ||
     itemsStore.filters.search ||
     (selectedDatePreset.value && selectedDatePreset.value !== defaultPreset.value)
   )
@@ -142,30 +149,33 @@ const toggleSortOrder = () => {
 // Watch for filter changes (except search which has its own button)
 watch(
   () => [
-    itemsStore.filters.priority,
+    itemsStore.filters.priorities,
     itemsStore.filters.source_id,
     itemsStore.filters.connector_type,
-    itemsStore.filters.assigned_ak,
+    itemsStore.filters.assigned_aks,
     itemsStore.filters.sort_by,
     itemsStore.filters.since
   ],
   () => {
     page.value = 1
     loadItems()
-  }
+  },
+  { deep: true }
 )
 
 // Load URL params on mount
 onMounted(async () => {
   // Parse URL params
   if (route.query.priority) {
-    itemsStore.setFilter('priority', route.query.priority as string)
+    const priorities = (route.query.priority as string).split(',') as Priority[]
+    itemsStore.filters.priorities = priorities
   }
   if (route.query.connector_type) {
     itemsStore.setFilter('connector_type', route.query.connector_type as string)
   }
   if (route.query.assigned_ak) {
-    itemsStore.setFilter('assigned_ak', route.query.assigned_ak as string)
+    const aks = (route.query.assigned_ak as string).split(',')
+    itemsStore.filters.assigned_aks = aks
   }
   if (route.query.source_id) {
     itemsStore.setFilter('source_id', parseInt(route.query.source_id as string))
@@ -194,9 +204,9 @@ watch(
   [() => itemsStore.filters, selectedDatePreset],
   ([filters, datePreset]) => {
     const query: Record<string, string> = {}
-    if (filters.priority) query.priority = filters.priority
+    if (filters.priorities.length > 0) query.priority = filters.priorities.join(',')
     if (filters.connector_type) query.connector_type = filters.connector_type
-    if (filters.assigned_ak) query.assigned_ak = filters.assigned_ak
+    if (filters.assigned_aks.length > 0) query.assigned_ak = filters.assigned_aks.join(',')
     if (filters.source_id) query.source_id = String(filters.source_id)
     if (filters.search) query.search = filters.search
     if (datePreset && datePreset !== defaultPreset.value) query.date_range = datePreset
@@ -269,32 +279,32 @@ watch(
     <div class="grid grid-cols-4 gap-2">
       <button
         class="rounded-lg py-1.5 px-3 bg-red-500 hover:bg-red-600 transition-colors cursor-pointer text-center"
-        :class="itemsStore.filters.priority === 'high' ? 'ring-2 ring-offset-1 ring-red-700' : ''"
-        @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'high' ? null : 'high')"
+        :class="itemsStore.filters.priorities.includes('high') ? 'ring-2 ring-offset-1 ring-red-700' : 'opacity-60'"
+        @click="itemsStore.togglePriority('high')"
       >
         <span class="text-lg font-bold text-white">{{ statsStore.stats?.items_by_priority?.high ?? 0 }}</span>
         <span class="text-xs text-red-100 ml-1">Hoch</span>
       </button>
       <button
         class="rounded-lg py-1.5 px-3 bg-orange-500 hover:bg-orange-600 transition-colors cursor-pointer text-center"
-        :class="itemsStore.filters.priority === 'medium' ? 'ring-2 ring-offset-1 ring-orange-700' : ''"
-        @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'medium' ? null : 'medium')"
+        :class="itemsStore.filters.priorities.includes('medium') ? 'ring-2 ring-offset-1 ring-orange-700' : 'opacity-60'"
+        @click="itemsStore.togglePriority('medium')"
       >
         <span class="text-lg font-bold text-white">{{ statsStore.stats?.items_by_priority?.medium ?? 0 }}</span>
         <span class="text-xs text-orange-100 ml-1">Mittel</span>
       </button>
       <button
         class="rounded-lg py-1.5 px-3 bg-yellow-400 hover:bg-yellow-500 transition-colors cursor-pointer text-center"
-        :class="itemsStore.filters.priority === 'low' ? 'ring-2 ring-offset-1 ring-yellow-600' : ''"
-        @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'low' ? null : 'low')"
+        :class="itemsStore.filters.priorities.includes('low') ? 'ring-2 ring-offset-1 ring-yellow-600' : 'opacity-60'"
+        @click="itemsStore.togglePriority('low')"
       >
         <span class="text-lg font-bold text-gray-900">{{ statsStore.stats?.items_by_priority?.low ?? 0 }}</span>
         <span class="text-xs text-yellow-800 ml-1">Niedrig</span>
       </button>
       <button
         class="rounded-lg py-1.5 px-3 bg-blue-500 hover:bg-blue-600 transition-colors cursor-pointer text-center"
-        :class="itemsStore.filters.priority === 'none' ? 'ring-2 ring-offset-1 ring-blue-700' : ''"
-        @click="itemsStore.setFilter('priority', itemsStore.filters.priority === 'none' ? null : 'none')"
+        :class="itemsStore.filters.priorities.includes('none') ? 'ring-2 ring-offset-1 ring-blue-700' : 'opacity-60'"
+        @click="itemsStore.togglePriority('none')"
       >
         <span class="text-lg font-bold text-white">{{ statsStore.stats?.items_by_priority?.none ?? 0 }}</span>
         <span class="text-xs text-blue-100 ml-1">Keine</span>
@@ -340,27 +350,40 @@ watch(
           </option>
         </select>
 
-        <!-- Priority -->
-        <select
-          class="input text-sm w-auto"
-          :value="itemsStore.filters.priority ?? ''"
-          @change="itemsStore.setFilter('priority', ($event.target as HTMLSelectElement).value || null)"
-        >
-          <option v-for="p in priorities" :key="p.value" :value="p.value">
+        <!-- Priority Toggle Buttons -->
+        <div class="flex items-center gap-0.5">
+          <span class="text-xs text-white mr-1">Prio:</span>
+          <button
+            v-for="p in priorityButtons"
+            :key="p.value"
+            type="button"
+            class="px-1.5 py-0.5 text-xs font-medium rounded transition-all"
+            :class="itemsStore.filters.priorities.includes(p.value)
+              ? p.color + ' text-white'
+              : 'bg-gray-200 text-gray-500 hover:bg-gray-300'"
+            :title="p.value"
+            @click="itemsStore.togglePriority(p.value)"
+          >
             {{ p.label }}
-          </option>
-        </select>
+          </button>
+        </div>
 
-        <!-- Arbeitskreis -->
-        <select
-          class="input text-sm w-auto"
-          :value="itemsStore.filters.assigned_ak ?? ''"
-          @change="itemsStore.setFilter('assigned_ak', ($event.target as HTMLSelectElement).value || null)"
-        >
-          <option v-for="ak in arbeitskreise" :key="ak.value" :value="ak.value">
-            {{ ak.label }}
-          </option>
-        </select>
+        <!-- Arbeitskreis Toggle Buttons -->
+        <div class="flex items-center gap-0.5">
+          <span class="text-xs text-white mr-1">AK:</span>
+          <button
+            v-for="ak in akButtons"
+            :key="ak"
+            type="button"
+            class="px-1.5 py-0.5 text-xs font-medium rounded transition-all"
+            :class="itemsStore.filters.assigned_aks.length === 0 || itemsStore.filters.assigned_aks.includes(ak)
+              ? 'bg-purple-500 hover:bg-purple-600 text-white'
+              : 'bg-gray-200 text-gray-500 hover:bg-gray-300'"
+            @click="toggleAk(ak)"
+          >
+            {{ ak }}
+          </button>
+        </div>
 
         <!-- Sort -->
         <select

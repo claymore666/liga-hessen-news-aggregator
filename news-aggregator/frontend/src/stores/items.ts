@@ -10,12 +10,12 @@ export const useItemsStore = defineStore('items', () => {
   const error = ref<string | null>(null)
   const total = ref(0)
   const filters = ref({
-    priority: null as Priority | null,
+    priorities: ['high', 'medium', 'low'] as Priority[],
     source_id: null as number | null,
     is_read: null as boolean | null,
     is_archived: null as boolean | null,
     connector_type: null as string | null,
-    assigned_ak: null as string | null,
+    assigned_aks: [] as string[],  // Empty = all AKs (no filter)
     sort_by: 'date' as string,
     sort_order: 'desc' as string,
     search: null as string | null,
@@ -38,12 +38,12 @@ export const useItemsStore = defineStore('items', () => {
     try {
       const response = await itemsApi.list({
         ...params,
-        priority: filters.value.priority || undefined,
+        priority: filters.value.priorities.length > 0 ? filters.value.priorities.join(',') : undefined,
         source_id: filters.value.source_id || undefined,
         is_read: filters.value.is_read ?? undefined,
         is_archived: filters.value.is_archived ?? undefined,
         connector_type: filters.value.connector_type || undefined,
-        assigned_ak: filters.value.assigned_ak || undefined,
+        assigned_ak: filters.value.assigned_aks.length > 0 ? filters.value.assigned_aks.join(',') : undefined,
         sort_by: filters.value.sort_by,
         sort_order: filters.value.sort_order,
         search: filters.value.search || undefined,
@@ -162,16 +162,34 @@ export const useItemsStore = defineStore('items', () => {
 
   function clearFilters() {
     filters.value = {
-      priority: null,
+      priorities: ['high', 'medium', 'low'],  // Default: exclude 'none'
       source_id: null,
       is_read: null,
       is_archived: null,
       connector_type: null,
-      assigned_ak: null,
+      assigned_aks: [],  // Empty = all AKs
       sort_by: 'date',
       sort_order: 'desc',
       search: null,
       since: null
+    }
+  }
+
+  function togglePriority(priority: Priority) {
+    const index = filters.value.priorities.indexOf(priority)
+    if (index === -1) {
+      filters.value.priorities.push(priority)
+    } else {
+      filters.value.priorities.splice(index, 1)
+    }
+  }
+
+  function toggleAk(ak: string) {
+    const index = filters.value.assigned_aks.indexOf(ak)
+    if (index === -1) {
+      filters.value.assigned_aks.push(ak)
+    } else {
+      filters.value.assigned_aks.splice(index, 1)
     }
   }
 
@@ -193,6 +211,8 @@ export const useItemsStore = defineStore('items', () => {
     archiveItem,
     updateItem,
     setFilter,
-    clearFilters
+    clearFilters,
+    togglePriority,
+    toggleAk
   }
 })

@@ -209,17 +209,18 @@ const handleArchive = async () => {
 // Watch for filter changes
 watch(
   () => [
-    itemsStore.filters.priority,
+    itemsStore.filters.priorities,
     itemsStore.filters.source_id,
     itemsStore.filters.connector_type,
-    itemsStore.filters.assigned_ak,
+    itemsStore.filters.assigned_aks,
     itemsStore.filters.is_read,
     itemsStore.filters.sort_by
   ],
   () => {
     page.value = 1
     loadItems()
-  }
+  },
+  { deep: true }
 )
 
 // Handle deep-link to specific item
