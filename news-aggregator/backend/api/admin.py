@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import async_session_maker, get_db
-from models import Item, Source, Rule, Priority
+from models import Channel, Item, Source, Rule, Priority
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -159,8 +159,20 @@ async def delete_items_by_source(
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
 
+    # Get channel IDs for this source
+    channel_ids_query = select(Channel.id).where(Channel.source_id == source_id)
+    channel_ids_result = await db.execute(channel_ids_query)
+    channel_ids = [row[0] for row in channel_ids_result.fetchall()]
+
+    if not channel_ids:
+        return DeleteItemsResponse(
+            deleted_count=0,
+            message=f"No channels found for source '{source.name}'",
+        )
+
+    # Delete items belonging to those channels
     stmt = delete(Item).where(
-        Item.source_id == source_id,
+        Item.channel_id.in_(channel_ids),
         Item.is_starred == False,  # noqa: E712
     )
     result = await db.execute(stmt)

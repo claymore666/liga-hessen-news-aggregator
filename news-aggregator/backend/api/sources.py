@@ -35,12 +35,16 @@ async def list_sources(
     db: AsyncSession = Depends(get_db),
     enabled: bool | None = None,
     has_errors: bool | None = None,
+    is_stakeholder: bool | None = None,
 ) -> list[SourceResponse]:
     """List all sources (organizations) with their channels."""
     query = select(Source).options(selectinload(Source.channels)).order_by(Source.name)
 
     if enabled is not None:
         query = query.where(Source.enabled == enabled)
+
+    if is_stakeholder is not None:
+        query = query.where(Source.is_stakeholder == is_stakeholder)
 
     result = await db.execute(query)
     sources = result.scalars().all()
@@ -134,10 +138,9 @@ async def create_source(
         )
         db.add(channel)
 
-    await db.flush()
-    await db.refresh(source)
+    await db.commit()
 
-    # Reload with channels
+    # Reload with channels to avoid lazy loading issues
     query = (
         select(Source)
         .options(selectinload(Source.channels))
@@ -185,8 +188,16 @@ async def update_source(
     for key, value in update_data.items():
         setattr(source, key, value)
 
-    await db.flush()
-    await db.refresh(source)
+    await db.commit()
+
+    # Re-fetch with relationships to avoid lazy loading issues
+    query = (
+        select(Source)
+        .options(selectinload(Source.channels))
+        .where(Source.id == source_id)
+    )
+    result = await db.execute(query)
+    source = result.scalar_one()
 
     return _build_source_response(source)
 
@@ -225,8 +236,16 @@ async def enable_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     source.enabled = True
-    await db.flush()
-    await db.refresh(source)
+    await db.commit()
+
+    # Re-fetch with relationships to avoid lazy loading issues
+    query = (
+        select(Source)
+        .options(selectinload(Source.channels))
+        .where(Source.id == source_id)
+    )
+    result = await db.execute(query)
+    source = result.scalar_one()
 
     return _build_source_response(source)
 
@@ -249,8 +268,16 @@ async def disable_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     source.enabled = False
-    await db.flush()
-    await db.refresh(source)
+    await db.commit()
+
+    # Re-fetch with relationships to avoid lazy loading issues
+    query = (
+        select(Source)
+        .options(selectinload(Source.channels))
+        .where(Source.id == source_id)
+    )
+    result = await db.execute(query)
+    source = result.scalar_one()
 
     return _build_source_response(source)
 
