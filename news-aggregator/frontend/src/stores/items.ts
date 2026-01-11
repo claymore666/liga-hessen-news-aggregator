@@ -47,7 +47,9 @@ export const useItemsStore = defineStore('items', () => {
         sort_by: filters.value.sort_by,
         sort_order: filters.value.sort_order,
         search: filters.value.search || undefined,
-        since: filters.value.since || undefined
+        since: filters.value.since || undefined,
+        // Show all items including 'none' priority when no filter is set
+        relevant_only: false
       })
       items.value = response.data.items
       total.value = response.data.total
