@@ -37,11 +37,11 @@ async def get_stats(
     starred_items = await db.scalar(
         select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
     ) or 0
-    # High priority items (was critical_items)
+    # High priority items
     high_items = await db.scalar(
         select(func.count(Item.id)).where(Item.priority == Priority.HIGH)
     ) or 0
-    # Medium priority items (was high_priority_items)
+    # Medium priority items
     medium_items_count = await db.scalar(
         select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)
     ) or 0
@@ -93,8 +93,8 @@ async def get_stats(
         relevant_items=relevant_items,
         unread_items=unread_items,
         starred_items=starred_items,
-        critical_items=high_items,  # Now maps to high priority
-        high_priority_items=medium_items_count,  # Now maps to medium priority
+        high_items=high_items,
+        medium_items=medium_items_count,
         sources_count=sources_count,
         channels_count=channels_count,
         enabled_sources=enabled_sources,

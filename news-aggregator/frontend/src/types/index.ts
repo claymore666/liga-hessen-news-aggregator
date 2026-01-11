@@ -126,8 +126,8 @@ export interface Stats {
   relevant_items: number
   unread_items: number
   starred_items: number
-  critical_items: number
-  high_priority_items: number
+  high_items: number
+  medium_items: number
   items_by_priority: Record<Priority, number>
   sources_count: number
   channels_count: number

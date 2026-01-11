@@ -248,59 +248,57 @@ class TestPriorityLogic:
 
 
 class TestPriorityMapping:
-    """Tests for priority string to enum mapping."""
+    """Tests for LLM priority string to stored priority enum mapping.
 
-    def test_all_priority_values_map_correctly(self):
-        """Test all priority string values map to correct enums."""
+    LLM outputs: critical, high, medium, low
+    Stored priorities: high, medium, low, none
+
+    Mapping: critical→high, high→medium, medium→low, low→none
+    """
+
+    @staticmethod
+    def map_llm_priority(llm_priority: str | None) -> "Priority":
+        """Map LLM output priority to stored priority enum."""
         from models import Priority
 
+        if llm_priority == "critical":
+            return Priority.HIGH
+        elif llm_priority == "high":
+            return Priority.MEDIUM
+        elif llm_priority == "medium":
+            return Priority.LOW
+        else:
+            return Priority.NONE
+
+    def test_all_priority_values_map_correctly(self):
+        """Test all LLM priority values map to correct stored enums."""
+        from models import Priority
+
+        # LLM output → Stored priority
         test_cases = [
-            ("critical", Priority.CRITICAL),
-            ("high", Priority.HIGH),
-            ("medium", Priority.MEDIUM),
-            ("low", Priority.LOW),
+            ("critical", Priority.HIGH),  # critical → high
+            ("high", Priority.MEDIUM),    # high → medium
+            ("medium", Priority.LOW),     # medium → low
+            ("low", Priority.NONE),       # low → none
         ]
 
         for llm_priority, expected in test_cases:
-            if llm_priority == "critical":
-                result = Priority.CRITICAL
-            elif llm_priority == "high":
-                result = Priority.HIGH
-            elif llm_priority == "medium":
-                result = Priority.MEDIUM
-            else:
-                result = Priority.LOW
-            assert result == expected, f"Failed for {llm_priority}"
+            result = self.map_llm_priority(llm_priority)
+            assert result == expected, f"Failed for {llm_priority}: got {result}, expected {expected}"
 
-    def test_null_priority_maps_to_low(self):
-        """None priority should map to LOW."""
+    def test_null_priority_maps_to_none(self):
+        """None priority should map to NONE."""
         from models import Priority
 
-        llm_priority = None
-        if llm_priority == "critical":
-            result = Priority.CRITICAL
-        elif llm_priority == "high":
-            result = Priority.HIGH
-        elif llm_priority == "medium":
-            result = Priority.MEDIUM
-        else:
-            result = Priority.LOW
-        assert result == Priority.LOW
+        result = self.map_llm_priority(None)
+        assert result == Priority.NONE
 
-    def test_unknown_priority_maps_to_low(self):
-        """Unknown priority string should map to LOW."""
+    def test_unknown_priority_maps_to_none(self):
+        """Unknown priority string should map to NONE."""
         from models import Priority
 
-        llm_priority = "unknown"
-        if llm_priority == "critical":
-            result = Priority.CRITICAL
-        elif llm_priority == "high":
-            result = Priority.HIGH
-        elif llm_priority == "medium":
-            result = Priority.MEDIUM
-        else:
-            result = Priority.LOW
-        assert result == Priority.LOW
+        result = self.map_llm_priority("unknown")
+        assert result == Priority.NONE
 
 
 class TestAnalyzeMethod:

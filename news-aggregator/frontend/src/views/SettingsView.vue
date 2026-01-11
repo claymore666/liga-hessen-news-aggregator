@@ -25,8 +25,8 @@ const settings = ref({
   notifications: {
     email_enabled: false,
     email_recipients: '',
-    notify_critical: true,
-    notify_high: false
+    notify_high: true,
+    notify_medium: false
   },
   scheduler: {
     enabled: true,

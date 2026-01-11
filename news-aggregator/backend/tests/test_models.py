@@ -428,7 +428,7 @@ class TestRuleModel:
             rule_type=RuleType.KEYWORD,
             pattern="dringend, eilig, sofort",
             priority_boost=30,
-            target_priority=Priority.CRITICAL,
+            target_priority=Priority.HIGH,
             enabled=True,
             order=1,
         )

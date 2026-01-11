@@ -221,7 +221,7 @@ async def multiple_items_in_db(
 ) -> list[Item]:
     """Create multiple items with different priorities in the database."""
     items = []
-    priorities = [Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW]
+    priorities = [Priority.HIGH, Priority.MEDIUM, Priority.LOW, Priority.NONE]
 
     for i, priority in enumerate(priorities):
         item = Item(
