@@ -66,7 +66,7 @@ const formatTime = (date: string | null) => {
           <!-- Title -->
           <span
             class="min-w-0 flex-1 truncate text-xs"
-            :class="item.is_read ? 'text-gray-500' : 'font-medium text-gray-900'"
+            :class="item.is_read ? 'text-gray-500 font-normal' : 'font-bold text-gray-900'"
           >
             {{ item.title }}
           </span>
