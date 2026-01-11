@@ -24,24 +24,26 @@ async def get_stats(
 
     # Item counts
     total_items = await db.scalar(select(func.count(Item.id))) or 0
-    # Relevant items = everything except LOW priority
+    # Relevant items = everything except NONE priority
     relevant_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority != Priority.LOW)
+        select(func.count(Item.id)).where(Item.priority != Priority.NONE)
     ) or 0
     unread_items = await db.scalar(
         select(func.count(Item.id)).where(
             Item.is_read == False,  # noqa: E712
-            Item.priority != Priority.LOW  # Only count unread relevant items
+            Item.priority != Priority.NONE  # Only count unread relevant items
         )
     ) or 0
     starred_items = await db.scalar(
         select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
     ) or 0
-    critical_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.CRITICAL)
-    ) or 0
-    high_priority_items = await db.scalar(
+    # High priority items (was critical_items)
+    high_items = await db.scalar(
         select(func.count(Item.id)).where(Item.priority == Priority.HIGH)
+    ) or 0
+    # Medium priority items (was high_priority_items)
+    medium_items_count = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)
     ) or 0
 
     # Source (organization) counts
@@ -72,12 +74,13 @@ async def get_stats(
         select(func.count(Item.id)).where(Item.fetched_at >= week_start)
     ) or 0
 
-    # Medium priority count for frontend
-    medium_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)
-    ) or 0
+    # Low priority count for frontend
     low_items = await db.scalar(
         select(func.count(Item.id)).where(Item.priority == Priority.LOW)
+    ) or 0
+    # None priority count (not relevant)
+    none_items = await db.scalar(
+        select(func.count(Item.id)).where(Item.priority == Priority.NONE)
     ) or 0
 
     # Last fetch time (from channels now)
@@ -90,8 +93,8 @@ async def get_stats(
         relevant_items=relevant_items,
         unread_items=unread_items,
         starred_items=starred_items,
-        critical_items=critical_items,
-        high_priority_items=high_priority_items,
+        critical_items=high_items,  # Now maps to high priority
+        high_priority_items=medium_items_count,  # Now maps to medium priority
         sources_count=sources_count,
         channels_count=channels_count,
         enabled_sources=enabled_sources,
@@ -100,10 +103,10 @@ async def get_stats(
         items_today=items_today,
         items_this_week=items_this_week,
         items_by_priority={
-            "critical": critical_items,
-            "high": high_priority_items,
-            "medium": medium_items,
+            "high": high_items,
+            "medium": medium_items_count,
             "low": low_items,
+            "none": none_items,
         },
         last_fetch_at=last_fetch.isoformat() if last_fetch else None,
     )

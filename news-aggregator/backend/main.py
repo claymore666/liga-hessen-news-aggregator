@@ -19,11 +19,72 @@ from services.scheduler import start_scheduler, stop_scheduler
 from services.proxy_manager import proxy_manager
 
 
+async def run_migrations() -> None:
+    """Run database migrations for existing databases."""
+    from database import engine
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        # Check if items table exists
+        result = await conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='items'"
+        ))
+        if not result.fetchone():
+            return  # No items table yet, init_db will create it
+
+        # Check existing columns
+        result = await conn.execute(text("PRAGMA table_info(items)"))
+        columns = [row[1] for row in result.fetchall()]
+
+        # Add missing columns
+        migrations = [
+            ("is_archived", "ALTER TABLE items ADD COLUMN is_archived BOOLEAN DEFAULT 0"),
+            ("assigned_ak", "ALTER TABLE items ADD COLUMN assigned_ak VARCHAR(10)"),
+            ("is_manually_reviewed", "ALTER TABLE items ADD COLUMN is_manually_reviewed BOOLEAN DEFAULT 0"),
+            ("reviewed_at", "ALTER TABLE items ADD COLUMN reviewed_at DATETIME"),
+        ]
+
+        for column_name, sql in migrations:
+            if column_name not in columns:
+                await conn.execute(text(sql))
+                logging.info(f"Migration: Added '{column_name}' column to items table")
+
+        # Migrate assigned_ak from metadata to column for existing items
+        if "assigned_ak" not in columns:
+            await conn.execute(text("""
+                UPDATE items
+                SET assigned_ak = json_extract(metadata, '$.llm_analysis.assigned_ak')
+                WHERE json_extract(metadata, '$.llm_analysis.assigned_ak') IS NOT NULL
+                  AND assigned_ak IS NULL
+            """))
+
+        # Migrate priority values: critical→high, high→medium, medium→low, low→none
+        # Check if any items still have old priority values ('critical' only exists in old system)
+        result = await conn.execute(text(
+            "SELECT COUNT(*) FROM items WHERE priority = 'critical'"
+        ))
+        needs_migration = result.scalar()
+
+        if needs_migration and needs_migration > 0:
+            logging.info("Migration: Converting priority values (critical→high, high→medium, medium→low, low→none)")
+            # Use temp values to avoid conflicts during cascading migration
+            await conn.execute(text("UPDATE items SET priority = '_high' WHERE priority = 'critical'"))
+            await conn.execute(text("UPDATE items SET priority = '_medium' WHERE priority = 'high'"))
+            await conn.execute(text("UPDATE items SET priority = '_low' WHERE priority = 'medium'"))
+            await conn.execute(text("UPDATE items SET priority = 'none' WHERE priority = 'low'"))
+            # Now rename temp values to final values
+            await conn.execute(text("UPDATE items SET priority = 'high' WHERE priority = '_high'"))
+            await conn.execute(text("UPDATE items SET priority = 'medium' WHERE priority = '_medium'"))
+            await conn.execute(text("UPDATE items SET priority = 'low' WHERE priority = '_low'"))
+            logging.info("Migration: Priority values converted successfully")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler for startup/shutdown."""
     # Startup
     await init_db()
+    await run_migrations()
     start_scheduler()
     proxy_manager.start_background_search()
     yield

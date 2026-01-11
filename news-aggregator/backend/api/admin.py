@@ -194,7 +194,7 @@ async def delete_low_priority_items(
     Starred items are preserved.
     """
     stmt = delete(Item).where(
-        Item.priority == Priority.LOW,
+        Item.priority == Priority.NONE,
         Item.is_starred == False,  # noqa: E712
     )
     result = await db.execute(stmt)

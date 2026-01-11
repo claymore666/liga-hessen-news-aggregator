@@ -1,4 +1,4 @@
-export type Priority = 'critical' | 'high' | 'medium' | 'low'
+export type Priority = 'high' | 'medium' | 'low' | 'none'
 export type ConnectorType = 'rss' | 'html' | 'bluesky' | 'twitter' | 'pdf' | 'mastodon' | 'x_scraper' | 'telegram' | 'instagram' | 'instagram_scraper' | 'google_alerts'
 export type RuleType = 'keyword' | 'regex' | 'semantic'
 
@@ -96,8 +96,11 @@ export interface Item {
   priority: Priority
   priority_score: number
   is_read: boolean
+  is_starred: boolean
   is_archived: boolean
   assigned_ak: string | null
+  is_manually_reviewed: boolean
+  reviewed_at: string | null
   tags: string[]
   metadata?: ItemMetadata
   created_at: string

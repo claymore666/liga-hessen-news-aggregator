@@ -37,7 +37,7 @@ const settings = ref({
 // Email export state
 const emailExport = ref({
   recipients: '',
-  min_priority: 'low',
+  min_priority: 'none',
   hours_back: 24,
   include_read: false
 })
@@ -53,10 +53,10 @@ const testEmailStatus = ref<{ type: 'success' | 'error'; message: string } | nul
 const testingSend = ref(false)
 
 const priorities = [
-  { value: 'critical', label: 'Nur Kritisch' },
-  { value: 'high', label: 'Hoch und höher' },
+  { value: 'high', label: 'Nur Hoch' },
   { value: 'medium', label: 'Mittel und höher' },
-  { value: 'low', label: 'Alle Prioritäten' }
+  { value: 'low', label: 'Niedrig und höher' },
+  { value: 'none', label: 'Alle Prioritäten' }
 ]
 
 const saveSettings = async () => {

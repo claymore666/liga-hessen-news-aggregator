@@ -228,15 +228,15 @@ Antworte NUR mit JA oder NEIN."""
         # Cap score at 100
         total_score = min(100, total_score)
 
-        # Determine priority from score
+        # Determine priority from score (high→medium→low→none)
         if total_score >= 90:
-            priority = Priority.CRITICAL
-        elif total_score >= 70:
             priority = Priority.HIGH
-        elif total_score >= 40:
+        elif total_score >= 70:
             priority = Priority.MEDIUM
-        else:
+        elif total_score >= 40:
             priority = Priority.LOW
+        else:
+            priority = Priority.NONE
 
         return total_score, priority
 
