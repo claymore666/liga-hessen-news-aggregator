@@ -1,7 +1,6 @@
-# Backend Dockerfile
-FROM python:3.12-slim
-
-WORKDIR /app
+# Backend Dockerfile - Multi-stage build for better caching
+# Stage 1: Base image with system dependencies (rarely changes)
+FROM python:3.12-slim AS base
 
 # Install system dependencies (including Playwright browser deps)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,14 +14,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
+# Stage 2: Dependencies (changes when requirements.txt changes)
+FROM base AS deps
+
+WORKDIR /app
+
 # Copy requirements first for better caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browser (Chromium only, smaller image)
+# Install Playwright browser (Chromium only)
 RUN playwright install chromium
 
-# Copy application code
+# Stage 3: Application (changes when code changes)
+FROM deps AS app
+
+WORKDIR /app
+
+# Copy application code (uses .dockerignore to exclude unnecessary files)
 COPY . .
 
 # Create data directory for SQLite
