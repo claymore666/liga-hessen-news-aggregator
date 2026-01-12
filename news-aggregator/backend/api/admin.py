@@ -401,3 +401,112 @@ async def migrate_items_for_llm_retry(
         updated_count=updated,
         message=f"Marked {updated} items without summary for LLM retry processing",
     )
+
+
+class ClassifyResponse(BaseModel):
+    """Response for classify items operation."""
+
+    processed: int
+    updated: int
+    errors: int
+    message: str
+
+
+@router.post("/admin/classify-items", response_model=ClassifyResponse)
+async def classify_items_for_confidence(
+    limit: int = Query(100, ge=1, le=1000, description="Max items to classify"),
+    update_retry_priority: bool = Query(True, description="Update retry_priority based on confidence"),
+    db: AsyncSession = Depends(get_db),
+) -> ClassifyResponse:
+    """Run classifier on items without relevance confidence.
+
+    This is useful to populate confidence scores for items that were
+    fetched before the classifier was available, allowing better
+    prioritization of the LLM retry queue.
+
+    The classifier is fast (embedding-based) compared to LLM processing.
+    """
+    from sqlalchemy.orm import selectinload
+    from services.relevance_filter import create_relevance_filter
+
+    # Create classifier
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        raise HTTPException(status_code=503, detail="Classifier service not available")
+
+    # Query items without relevance_confidence
+    # Prioritize items that need LLM processing (retry queue)
+    query = (
+        select(Item)
+        .options(selectinload(Item.channel).selectinload(Channel.source))
+        .where(
+            func.json_extract(Item.metadata_, "$.pre_filter.relevance_confidence").is_(None)
+        )
+        .order_by(
+            Item.needs_llm_processing.desc(),  # Items needing retry first
+            Item.fetched_at.desc()
+        )
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    if not items:
+        return ClassifyResponse(
+            processed=0,
+            updated=0,
+            errors=0,
+            message="No items without confidence scores found",
+        )
+
+    processed = 0
+    updated = 0
+    errors = 0
+
+    for item in items:
+        try:
+            source_name = item.channel.source.name if item.channel and item.channel.source else ""
+            classification = await relevance_filter.classify(
+                title=item.title,
+                content=item.content,
+                source=source_name,
+            )
+
+            # Store classifier results in metadata
+            # Create new dict to ensure SQLAlchemy detects the change
+            new_metadata = dict(item.metadata_) if item.metadata_ else {}
+            new_metadata["pre_filter"] = {
+                "relevance_confidence": classification.get("relevance_confidence"),
+                "ak_suggestion": classification.get("ak"),
+                "ak_confidence": classification.get("ak_confidence"),
+                "priority_suggestion": classification.get("priority"),
+                "priority_confidence": classification.get("priority_confidence"),
+                "classified_at": datetime.utcnow().isoformat(),
+            }
+
+            # Update retry_priority if item needs LLM processing
+            if update_retry_priority and item.needs_llm_processing:
+                confidence = classification.get("relevance_confidence", 0.5)
+                if confidence >= 0.5:
+                    new_metadata["retry_priority"] = "high"
+                else:
+                    new_metadata["retry_priority"] = "edge_case"
+
+            # Assign new dict to trigger SQLAlchemy change detection
+            item.metadata_ = new_metadata
+            processed += 1
+            updated += 1
+
+        except Exception as e:
+            logger.warning(f"Failed to classify item {item.id}: {e}")
+            errors += 1
+
+    await db.commit()
+
+    logger.info(f"Classified {processed} items: {updated} updated, {errors} errors")
+    return ClassifyResponse(
+        processed=processed,
+        updated=updated,
+        errors=errors,
+        message=f"Classified {processed} items, updated {updated} with confidence scores",
+    )
