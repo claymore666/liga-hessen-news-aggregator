@@ -1,4 +1,20 @@
 services:
+  db:
+    image: postgres:17-alpine
+    container_name: liga-news-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: liga_news
+      POSTGRES_USER: liga
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liga -d liga_news"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -6,7 +22,7 @@ services:
     container_name: liga-news-backend
     restart: unless-stopped
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/liga_news.db
+      - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
       - OLLAMA_BASE_URL=http://gpu1:11434
       - OLLAMA_MODEL=qwen3:14b-q8_0
@@ -23,6 +39,9 @@ services:
       - backend-data:/app/data
     ports:
       - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -51,5 +70,7 @@ services:
       start_period: 5s
 
 volumes:
+  postgres-data:
+    name: liga-news-postgres
   backend-data:
     name: liga-news-data
