@@ -8,7 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db, async_session_maker, json_extract_path
+from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, Priority, Source
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
@@ -93,21 +93,15 @@ async def list_items(
     if assigned_ak is not None:
         # Support comma-separated AK values
         ak_values = [ak.strip() for ak in assigned_ak.split(",") if ak.strip()]
-        if len(ak_values) == 1:
-            # Filter by assigned_ak column (or fall back to metadata for legacy items)
-            query = query.where(
-                (Item.assigned_ak == ak_values[0]) |
-                (json_extract_path(Item.metadata_, "llm_analysis", "assigned_ak") == ak_values[0])
+        from sqlalchemy import or_
+        # Filter by assigned_aks (JSON array) or fall back to legacy assigned_ak/metadata
+        query = query.where(
+            or_(
+                json_array_overlaps(Item.assigned_aks, ak_values),
+                Item.assigned_ak.in_(ak_values),
+                json_extract_path(Item.metadata_, "llm_analysis", "assigned_ak").in_(ak_values)
             )
-        elif len(ak_values) > 1:
-            # Multiple AKs - use IN clause
-            from sqlalchemy import or_
-            query = query.where(
-                or_(
-                    Item.assigned_ak.in_(ak_values),
-                    json_extract_path(Item.metadata_, "llm_analysis", "assigned_ak").in_(ak_values)
-                )
-            )
+        )
 
     # Get total count
     count_query = select(func.count()).select_from(query.subquery())
@@ -285,11 +279,26 @@ async def update_item(
                     detail=f"Invalid priority: {priority_str}. Must be high, medium, low, or none."
                 )
 
-    # Check if assigned_ak is being changed
-    if "assigned_ak" in update_data:
-        new_ak = update_data.get("assigned_ak")
-        if item.assigned_ak != new_ak:
+    # Check if assigned_aks (array) is being changed
+    if "assigned_aks" in update_data:
+        new_aks = update_data.get("assigned_aks") or []
+        if set(item.assigned_aks or []) != set(new_aks):
             manually_reviewed = True
+            item.assigned_aks = new_aks
+            # Also sync deprecated assigned_ak field for backward compatibility
+            item.assigned_ak = new_aks[0] if new_aks else None
+        # Remove from update_data since we already handled it
+        del update_data["assigned_aks"]
+    # Backward compatibility: handle single assigned_ak
+    elif "assigned_ak" in update_data:
+        new_ak = update_data.get("assigned_ak")
+        new_aks = [new_ak] if new_ak else []
+        if set(item.assigned_aks or []) != set(new_aks):
+            manually_reviewed = True
+            item.assigned_aks = new_aks
+            item.assigned_ak = new_ak
+        # Remove from update_data since we already handled it
+        del update_data["assigned_ak"]
 
     for key, value in update_data.items():
         setattr(item, key, value)
@@ -665,13 +674,20 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     # null or "low" = NONE (not relevant)
                     item.priority = Priority.NONE
 
+                # Set assigned_aks from LLM analysis
+                llm_aks = analysis.get("assigned_aks", [])
+                if llm_aks:
+                    item.assigned_aks = llm_aks
+                    item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
+
                 # Store analysis metadata
                 item.metadata_ = {
                     **item.metadata_,
                     "llm_analysis": {
                         "relevance_score": analysis.get("relevance_score", 0.5),
                         "priority_suggestion": llm_priority,
-                        "assigned_ak": analysis.get("assigned_ak"),
+                        "assigned_aks": llm_aks,
+                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated
                         "tags": analysis.get("tags", []),
                         "reasoning": analysis.get("reasoning"),
                     },

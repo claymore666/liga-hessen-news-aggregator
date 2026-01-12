@@ -208,9 +208,9 @@ const handlePriorityChange = async (priority: Priority) => {
   }
 }
 
-const handleAkChange = async (ak: string | null) => {
+const handleAksChange = async (aks: string[]) => {
   if (selectedItem.value) {
-    await itemsStore.updateItem(selectedItem.value.id, { assigned_ak: ak })
+    await itemsStore.updateItem(selectedItem.value.id, { assigned_aks: aks })
   }
 }
 
@@ -354,7 +354,7 @@ onMounted(async () => {
             <FeedbackPanel
               :item="selectedItem"
               @update:priority="handlePriorityChange"
-              @update:ak="handleAkChange"
+              @update:aks="handleAksChange"
               @toggle:read="handleToggleRead"
               @archive="handleArchive"
             />

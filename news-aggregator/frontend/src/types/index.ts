@@ -53,7 +53,8 @@ export interface SourceCreate {
 export interface LLMAnalysis {
   relevance_score?: number
   priority_suggestion?: string
-  assigned_ak?: string
+  assigned_aks?: string[]
+  assigned_ak?: string  // Deprecated, use assigned_aks
   tags?: string[]
   reasoning?: string
 }
@@ -98,7 +99,8 @@ export interface Item {
   is_read: boolean
   is_starred: boolean
   is_archived: boolean
-  assigned_ak: string | null
+  assigned_aks: string[]
+  assigned_ak: string | null  // Deprecated, use assigned_aks
   is_manually_reviewed: boolean
   reviewed_at: string | null
   tags: string[]

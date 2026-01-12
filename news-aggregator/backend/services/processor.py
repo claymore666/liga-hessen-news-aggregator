@@ -46,10 +46,15 @@ AUSGABE als valides JSON:
   "relevant": true/false,
   "relevance_score": 0.0-1.0,
   "priority": "critical|high|medium|low|null",
-  "assigned_ak": "AK1|AK2|AK3|AK4|AK5|QAG|null",
+  "assigned_aks": ["AK1", "AK3"],
   "tags": ["thema1", "thema2"],
   "reasoning": "Kurze Begründung der Klassifikation"
 }
+
+ARBEITSKREIS-ZUWEISUNG:
+- assigned_aks: Array mit 0-3 relevanten Arbeitskreisen
+- Mehrfachzuweisung möglich wenn Thema mehrere AKs betrifft (z.B. Kinderarmut = AK1 + AK5)
+- Leeres Array [] wenn nicht relevant
 
 WICHTIG:
 - summary/detailed_analysis: NUR Fakten aus dem Artikel, KEINE "Liga dürfte...", "Wohlfahrtsverbände könnten..."
@@ -140,7 +145,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             - relevant: bool
             - relevance_score: float (0.0-1.0)
             - priority: str (critical/high/medium/low/null)
-            - assigned_ak: str | None
+            - assigned_aks: list[str] (0-3 AK codes)
             - tags: list[str]
             - reasoning: str
         """
@@ -264,35 +269,47 @@ Antworte NUR mit JA oder NEIN."""
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines).strip()
 
+        result = None
         try:
             # Try direct JSON parse
-            result = json.loads(text)
-            if isinstance(result, dict):
-                return result
-            # Not a dict (e.g., array) - fall through to default
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                result = parsed
         except json.JSONDecodeError:
             pass
 
         # Try to find JSON object in text (handles nested braces)
-        try:
-            start = text.find("{")
-            if start != -1:
-                # Find matching closing brace
-                depth = 0
-                for i, char in enumerate(text[start:], start):
-                    if char == "{":
-                        depth += 1
-                    elif char == "}":
-                        depth -= 1
-                        if depth == 0:
-                            json_str = text[start:i+1]
-                            return json.loads(json_str)
-        except (json.JSONDecodeError, ValueError):
-            pass
+        if result is None:
+            try:
+                start = text.find("{")
+                if start != -1:
+                    # Find matching closing brace
+                    depth = 0
+                    for i, char in enumerate(text[start:], start):
+                        if char == "{":
+                            depth += 1
+                        elif char == "}":
+                            depth -= 1
+                            if depth == 0:
+                                json_str = text[start:i+1]
+                                result = json.loads(json_str)
+                                break
+            except (json.JSONDecodeError, ValueError):
+                pass
 
-        # Fallback to default
-        logger.warning(f"Could not parse LLM response as JSON: {text[:100]}")
-        return self._default_analysis(text[:500])
+        # Fallback to default if parsing failed
+        if result is None:
+            logger.warning(f"Could not parse LLM response as JSON: {text[:100]}")
+            return self._default_analysis(text[:500])
+
+        # Normalize assigned_ak (single) to assigned_aks (array) for backward compatibility
+        if "assigned_ak" in result and "assigned_aks" not in result:
+            ak = result.get("assigned_ak")
+            result["assigned_aks"] = [ak] if ak else []
+        elif "assigned_aks" not in result:
+            result["assigned_aks"] = []
+
+        return result
 
     def _default_analysis(self, summary: str = "") -> dict[str, Any]:
         """Return default analysis when LLM fails."""
@@ -301,7 +318,7 @@ Antworte NUR mit JA oder NEIN."""
             "relevant": False,
             "relevance_score": 0.0,
             "priority": "low",
-            "assigned_ak": None,
+            "assigned_aks": [],
             "matched_rules": [],
             "tags": [],
             "reasoning": "Automatische Analyse nicht verfügbar",

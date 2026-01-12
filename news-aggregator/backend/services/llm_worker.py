@@ -339,15 +339,18 @@ class LLMWorker:
                         item.priority = Priority.NONE
                         item.priority_score = min(item.priority_score or 100, 40)
 
-                    # Set assigned_ak: LLM takes precedence, classifier AK as fallback
-                    if analysis.get("assigned_ak"):
-                        item.assigned_ak = analysis["assigned_ak"]
-                    elif not item.assigned_ak:
+                    # Set assigned_aks: LLM takes precedence, classifier AK as fallback
+                    llm_aks = analysis.get("assigned_aks", [])
+                    if llm_aks:
+                        item.assigned_aks = llm_aks
+                        item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
+                    elif not item.assigned_aks:
                         # Use classifier AK suggestion as fallback
                         pre_filter = (item.metadata_ or {}).get("pre_filter", {})
                         classifier_ak = pre_filter.get("ak_suggestion")
                         if classifier_ak:
-                            item.assigned_ak = classifier_ak
+                            item.assigned_aks = [classifier_ak]
+                            item.assigned_ak = classifier_ak  # Deprecated field
                             logger.debug(f"Using classifier AK: {classifier_ak}")
 
                     # Store LLM analysis in metadata
@@ -355,7 +358,8 @@ class LLMWorker:
                     new_metadata["llm_analysis"] = {
                         "relevance_score": analysis.get("relevance_score", 0.5),
                         "priority_suggestion": llm_priority,
-                        "assigned_ak": analysis.get("assigned_ak"),
+                        "assigned_aks": llm_aks,
+                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated, for backward compat
                         "tags": analysis.get("tags", []),
                         "reasoning": analysis.get("reasoning"),
                         "processed_at": datetime.utcnow().isoformat(),

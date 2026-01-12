@@ -201,7 +201,8 @@ class Item(Base):
     is_read: Mapped[bool] = mapped_column(default=False)
     is_starred: Mapped[bool] = mapped_column(default=False)
     is_archived: Mapped[bool] = mapped_column(default=False)
-    assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)  # Deprecated, use assigned_aks
+    assigned_aks: Mapped[list[str]] = mapped_column(JSON, default=list)  # Array of AK codes
     is_manually_reviewed: Mapped[bool] = mapped_column(default=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
