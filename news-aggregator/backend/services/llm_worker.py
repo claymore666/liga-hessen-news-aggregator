@@ -338,9 +338,16 @@ class LLMWorker:
                         item.priority = Priority.NONE
                         item.priority_score = min(item.priority_score or 100, 40)
 
-                    # Set assigned_ak if provided
+                    # Set assigned_ak: LLM takes precedence, classifier AK as fallback
                     if analysis.get("assigned_ak"):
                         item.assigned_ak = analysis["assigned_ak"]
+                    elif not item.assigned_ak:
+                        # Use classifier AK suggestion as fallback
+                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
+                        classifier_ak = pre_filter.get("ak_suggestion")
+                        if classifier_ak:
+                            item.assigned_ak = classifier_ak
+                            logger.debug(f"Using classifier AK: {classifier_ak}")
 
                     # Store LLM analysis in metadata
                     new_metadata = dict(item.metadata_) if item.metadata_ else {}
