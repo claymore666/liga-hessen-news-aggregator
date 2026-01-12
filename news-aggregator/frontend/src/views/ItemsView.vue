@@ -85,13 +85,14 @@ useKeyboardShortcuts([
   }
 ])
 
-const priorities = [
-  { value: '', label: 'Alle Prioritäten' },
-  { value: 'critical', label: 'Kritisch' },
-  { value: 'high', label: 'Hoch' },
-  { value: 'medium', label: 'Mittel' },
-  { value: 'low', label: 'Niedrig' }
+const priorityButtons: { value: Priority; label: string; color: string }[] = [
+  { value: 'high', label: 'H', color: 'bg-red-500 hover:bg-red-600' },
+  { value: 'medium', label: 'M', color: 'bg-orange-500 hover:bg-orange-600' },
+  { value: 'low', label: 'L', color: 'bg-yellow-500 hover:bg-yellow-600' },
+  { value: 'none', label: 'N', color: 'bg-gray-400 hover:bg-gray-500' }
 ]
+
+const akButtons = ['AK1', 'AK2', 'AK3', 'AK4', 'AK5', 'QAG']
 
 const connectorTypes = [
   { value: '', label: 'Alle Typen' },
@@ -105,15 +106,15 @@ const connectorTypes = [
   { value: 'instagram_scraper', label: 'Instagram' }
 ]
 
-const arbeitskreise = [
-  { value: '', label: 'Alle AKs' },
-  { value: 'AK1', label: 'AK1 - Grundsatz' },
-  { value: 'AK2', label: 'AK2 - Migration' },
-  { value: 'AK3', label: 'AK3 - Pflege' },
-  { value: 'AK4', label: 'AK4 - Eingliederung' },
-  { value: 'AK5', label: 'AK5 - Kinder/Jugend' },
-  { value: 'QAG', label: 'QAG - Querschnitt' }
-]
+const toggleAk = (ak: string) => {
+  if (itemsStore.filters.assigned_aks.length === 0) {
+    itemsStore.filters.assigned_aks = [ak]
+  } else if (itemsStore.filters.assigned_aks.includes(ak)) {
+    itemsStore.filters.assigned_aks = itemsStore.filters.assigned_aks.filter(a => a !== ak)
+  } else {
+    itemsStore.filters.assigned_aks.push(ak)
+  }
+}
 
 const sortOptions = [
   { value: 'date', label: 'Datum' },
@@ -122,11 +123,15 @@ const sortOptions = [
 ]
 
 const hasActiveFilters = computed(() => {
+  const defaultPriorities = ['high', 'medium', 'low']
+  const prioritiesChanged = itemsStore.filters.priorities.length !== defaultPriorities.length ||
+    !defaultPriorities.every(p => itemsStore.filters.priorities.includes(p as Priority))
+
   return (
-    itemsStore.filters.priority ||
+    prioritiesChanged ||
     itemsStore.filters.source_id ||
     itemsStore.filters.connector_type ||
-    itemsStore.filters.assigned_ak ||
+    itemsStore.filters.assigned_aks.length > 0 ||
     itemsStore.filters.search ||
     itemsStore.filters.is_read !== null
   )
@@ -180,17 +185,18 @@ const markSelectedAsRead = async () => {
 
 watch(
   () => [
-    itemsStore.filters.priority,
+    itemsStore.filters.priorities,
     itemsStore.filters.source_id,
     itemsStore.filters.connector_type,
-    itemsStore.filters.assigned_ak,
+    itemsStore.filters.assigned_aks,
     itemsStore.filters.is_read,
     itemsStore.filters.sort_by
   ],
   () => {
     page.value = 1
     loadItems()
-  }
+  },
+  { deep: true }
 )
 
 onMounted(async () => {
@@ -279,16 +285,23 @@ onMounted(async () => {
           </option>
         </select>
 
-        <!-- Priority -->
-        <select
-          class="input text-sm w-auto"
-          :value="itemsStore.filters.priority ?? ''"
-          @change="itemsStore.setFilter('priority', ($event.target as HTMLSelectElement).value || null)"
-        >
-          <option v-for="p in priorities" :key="p.value" :value="p.value">
+        <!-- Priority Toggle Buttons -->
+        <div class="flex items-center gap-0.5">
+          <span class="text-xs text-white mr-1">Prio:</span>
+          <button
+            v-for="p in priorityButtons"
+            :key="p.value"
+            type="button"
+            class="px-1.5 py-0.5 text-xs font-medium rounded transition-all"
+            :class="itemsStore.filters.priorities.includes(p.value)
+              ? p.color + ' text-white'
+              : 'bg-gray-200 text-gray-500 hover:bg-gray-300'"
+            :title="p.value"
+            @click="itemsStore.togglePriority(p.value)"
+          >
             {{ p.label }}
-          </option>
-        </select>
+          </button>
+        </div>
 
         <!-- Status -->
         <select
@@ -301,16 +314,22 @@ onMounted(async () => {
           <option value="true">Gelesen</option>
         </select>
 
-        <!-- Arbeitskreis -->
-        <select
-          class="input text-sm w-auto"
-          :value="itemsStore.filters.assigned_ak ?? ''"
-          @change="itemsStore.setFilter('assigned_ak', ($event.target as HTMLSelectElement).value || null)"
-        >
-          <option v-for="ak in arbeitskreise" :key="ak.value" :value="ak.value">
-            {{ ak.label }}
-          </option>
-        </select>
+        <!-- Arbeitskreis Toggle Buttons -->
+        <div class="flex items-center gap-0.5">
+          <span class="text-xs text-white mr-1">AK:</span>
+          <button
+            v-for="ak in akButtons"
+            :key="ak"
+            type="button"
+            class="px-1.5 py-0.5 text-xs font-medium rounded transition-all"
+            :class="itemsStore.filters.assigned_aks.length === 0 || itemsStore.filters.assigned_aks.includes(ak)
+              ? 'bg-purple-500 hover:bg-purple-600 text-white'
+              : 'bg-gray-200 text-gray-500 hover:bg-gray-300'"
+            @click="toggleAk(ak)"
+          >
+            {{ ak }}
+          </button>
+        </div>
 
         <!-- Sort -->
         <select

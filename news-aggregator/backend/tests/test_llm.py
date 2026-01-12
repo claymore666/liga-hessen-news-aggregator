@@ -285,7 +285,7 @@ class TestItemProcessor:
         from models import Item
         item = Item(
             id=1,
-            source_id=1,
+            channel_id=1,
             external_id="test-123",
             title="Haushaltskürzungen bedrohen Pflegeeinrichtungen",
             content="Die geplanten Kürzungen im Landeshaushalt gefährden soziale Einrichtungen...",
@@ -293,21 +293,21 @@ class TestItemProcessor:
         )
         return item
 
-    def test_calculate_keyword_score_critical(self, processor, sample_item):
-        """Critical keywords should increase score significantly."""
+    def test_calculate_keyword_score_high(self, processor, sample_item):
+        """High priority keywords should increase score significantly."""
         score, priority = processor.calculate_keyword_score(sample_item)
 
-        # Should match "kürzungen" (critical keyword)
+        # Should match "kürzungen" (high priority keyword)
         assert score > 50
         from models import Priority
-        assert priority in [Priority.HIGH, Priority.CRITICAL]
+        assert priority in [Priority.HIGH, Priority.MEDIUM]
 
     def test_calculate_keyword_score_no_match(self, processor):
         """Items without keywords should have base score."""
         from models import Item
         item = Item(
             id=1,
-            source_id=1,
+            channel_id=1,
             external_id="test-456",
             title="Wetter in Hessen",
             content="Es wird sonnig und warm.",
@@ -318,7 +318,8 @@ class TestItemProcessor:
 
         assert score == 50  # Base score
         from models import Priority
-        assert priority == Priority.MEDIUM
+        # Score of 50 falls into LOW priority range (>= 40)
+        assert priority == Priority.LOW
 
     @pytest.mark.asyncio
     async def test_summarize(self, processor, sample_item, mock_llm_service):

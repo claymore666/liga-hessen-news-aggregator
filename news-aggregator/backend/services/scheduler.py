@@ -1,6 +1,8 @@
 """Background job scheduler using APScheduler."""
 
+import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,6 +16,22 @@ from models import Channel, Source
 
 logger = logging.getLogger(__name__)
 
+# Per-source-type concurrency limits for parallel fetching
+SOURCE_TYPE_LIMITS = {
+    "x_scraper": 2,  # Heavy browser + rate limits
+    "instagram_scraper": 2,
+    "instagram": 3,
+    "mastodon": 5,
+    "twitter": 5,
+    "rss": 10,  # Lightweight
+    "html": 5,
+    "bluesky": 5,
+    "telegram": 3,
+    "pdf": 3,
+    "google_alerts": 5,
+    "linkedin": 2,
+}
+
 # Track if a fetch is currently running to avoid overlapping fetches
 _fetch_in_progress = False
 
@@ -22,6 +40,9 @@ scheduler = AsyncIOScheduler()
 
 async def fetch_all_channels(training_mode: bool = False) -> dict:
     """Fetch items from all enabled channels across all sources.
+
+    Fetches channels in parallel, grouped by source type. Each source type
+    has its own concurrency limit to prevent overwhelming external services.
 
     Args:
         training_mode: If True, disables filtering for training data collection.
@@ -32,15 +53,12 @@ async def fetch_all_channels(training_mode: bool = False) -> dict:
     mode_str = " (TRAINING MODE)" if training_mode else ""
     logger.info(f"Starting scheduled fetch for all channels{mode_str}")
 
-    total_items = 0
-    errors = 0
-    channels_fetched = 0
-
     async with async_session_maker() as db:
         # Get all enabled channels where the parent source is also enabled
         query = (
             select(Channel)
             .join(Source)
+            .options(selectinload(Channel.source))
             .where(
                 Channel.enabled == True,  # noqa: E712
                 Source.enabled == True,  # noqa: E712
@@ -49,26 +67,64 @@ async def fetch_all_channels(training_mode: bool = False) -> dict:
         result = await db.execute(query)
         channels = result.scalars().all()
 
-        for channel in channels:
-            try:
-                count = await fetch_channel(channel.id, training_mode=training_mode)
-                total_items += count
-                channels_fetched += 1
-            except Exception as e:
-                logger.error(f"Error fetching channel {channel.id}: {e}")
-                errors += 1
+        if not channels:
+            logger.info("No enabled channels to fetch")
+            return {
+                "channels_fetched": 0,
+                "items_collected": 0,
+                "errors": 0,
+                "training_mode": training_mode,
+            }
 
-    logger.info(f"Completed fetch for {channels_fetched} channels{mode_str}: {total_items} items, {errors} errors")
+        # Group channels by source type
+        by_type: dict[str, list[Channel]] = defaultdict(list)
+        for channel in channels:
+            by_type[channel.connector_type].append(channel)
+
+        logger.info(
+            f"Fetching {len(channels)} channels across {len(by_type)} source types: "
+            f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
+        )
+
+        # Create semaphores per source type
+        semaphores = {
+            source_type: asyncio.Semaphore(SOURCE_TYPE_LIMITS.get(source_type, 3))
+            for source_type in by_type.keys()
+        }
+
+        # Fetch all source types in parallel
+        tasks = [
+            _fetch_source_type_group(source_type, type_channels, semaphores[source_type], training_mode)
+            for source_type, type_channels in by_type.items()
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results
+        total_fetched = 0
+        total_errors = 0
+        for source_type, result in zip(by_type.keys(), results):
+            if isinstance(result, Exception):
+                logger.error(f"Error in source type group {source_type}: {result}")
+                total_errors += len(by_type[source_type])
+            else:
+                fetched, errors = result
+                total_fetched += fetched
+                total_errors += errors
+
+    logger.info(f"Completed fetch for {total_fetched} channels{mode_str}, {total_errors} errors")
     return {
-        "channels_fetched": channels_fetched,
-        "items_collected": total_items,
-        "errors": errors,
+        "channels_fetched": total_fetched,
+        "items_collected": 0,  # Note: individual item counts not tracked in parallel mode
+        "errors": total_errors,
         "training_mode": training_mode,
     }
 
 
 async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     """Fetch items from a single channel.
+
+    This function separates network I/O (can run in parallel) from database
+    writes (serialized via db_write_lock) to enable efficient parallel fetching.
 
     Args:
         channel_id: ID of channel to fetch
@@ -78,6 +134,7 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         Number of new items fetched.
     """
     from connectors import ConnectorRegistry
+    from database import db_write_lock
     from services.pipeline import Pipeline
     from services.processor import ItemProcessor, create_processor_from_settings
     from services.relevance_filter import create_relevance_filter
@@ -104,6 +161,7 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         except Exception as e:
             logger.warning(f"LLM processor not available: {e}")
 
+    # Phase 1: Read channel info (quick read, can be parallel)
     async with async_session_maker() as db:
         query = (
             select(Channel)
@@ -125,40 +183,143 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
             logger.info(f"Parent source {channel.source_id} is disabled, skipping channel {channel_id}")
             return 0
 
-        try:
-            # Get connector and fetch items
-            connector_class = ConnectorRegistry.get(channel.connector_type)
-            if connector_class is None:
-                raise ValueError(f"Unknown connector type: {channel.connector_type}")
+        # Extract needed info before closing session
+        connector_type = channel.connector_type
+        channel_config = dict(channel.config)
+        source_name = channel.source.name
 
-            connector = connector_class()
-            # Build config dict and convert to Pydantic model
-            config_dict = {"url": channel.config.get("url", ""), **channel.config}
-            config_model = connector_class.config_schema(**config_dict)
-            raw_items = await connector.fetch(config_model)
+    # Phase 2: Network I/O - fetch items (runs in parallel with other channels)
+    try:
+        connector_class = ConnectorRegistry.get(connector_type)
+        if connector_class is None:
+            raise ValueError(f"Unknown connector type: {connector_type}")
 
-            logger.info(f"Connector returned {len(raw_items)} raw items from channel {channel_id}")
+        connector = connector_class()
+        config_dict = {"url": channel_config.get("url", ""), **channel_config}
+        config_model = connector_class.config_schema(**config_dict)
+        raw_items = await connector.fetch(config_model)
 
-            # Process through pipeline (with optional LLM processor and pre-filter)
-            pipeline = Pipeline(db, processor=processor, relevance_filter=relevance_filter, training_mode=training_mode)
-            new_items = await pipeline.process(raw_items, channel)
+        logger.info(f"Connector returned {len(raw_items)} raw items from channel {channel_id}")
 
-            channel.last_fetch_at = datetime.utcnow()
-            channel.last_error = None
-            await db.commit()
+    except Exception as e:
+        # Phase 2 error: Update channel error status (needs db lock)
+        async with db_write_lock:
+            async with async_session_maker() as db:
+                channel = await db.get(Channel, channel_id)
+                if channel:
+                    channel.last_error = str(e)
+                    await db.commit()
+        logger.error(f"Error fetching channel {channel_id}: {e}")
+        raise
 
-            logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
-            return len(new_items)
+    # Phase 2.5: Pre-filter items BEFORE entering database session
+    # This avoids async context conflicts between httpx and SQLAlchemy
+    pre_filter_results: dict[str, dict] = {}
+    if relevance_filter and not training_mode and raw_items:
+        logger.debug(f"Pre-filtering {len(raw_items)} items for channel {channel_id}")
+        for raw_item in raw_items:
+            try:
+                should_process, result = await relevance_filter.should_process(
+                    title=raw_item.title,
+                    content=raw_item.content,
+                    source=source_name,
+                )
+                if result:
+                    pre_filter_results[raw_item.external_id] = {
+                        "should_process": should_process,
+                        "result": result,
+                    }
+            except Exception as e:
+                logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
+        logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
 
-        except Exception as e:
-            logger.error(f"Error fetching channel {channel_id}: {e}")
-            channel.last_error = str(e)
-            await db.commit()
-            raise
+    # Phase 3: Database writes - process and store items (serialized)
+    async with db_write_lock:
+        async with async_session_maker() as db:
+            # Re-fetch channel within this session
+            channel = await db.get(Channel, channel_id)
+            if channel is None:
+                return 0
+
+            try:
+                # Process through pipeline (includes database writes)
+                # Pass pre-computed filter results to avoid async context issues
+                pipeline = Pipeline(
+                    db,
+                    processor=processor,
+                    relevance_filter=relevance_filter,
+                    training_mode=training_mode,
+                    pre_filter_results=pre_filter_results,
+                )
+                new_items = await pipeline.process(raw_items, channel)
+
+                channel.last_fetch_at = datetime.utcnow()
+                channel.last_error = None
+                await db.commit()
+
+                logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
+                return len(new_items)
+
+            except Exception as e:
+                logger.error(f"Error processing channel {channel_id}: {e}")
+                await db.rollback()
+                # Try to update error status
+                try:
+                    channel = await db.get(Channel, channel_id)
+                    if channel:
+                        channel.last_error = str(e)
+                        await db.commit()
+                except Exception:
+                    pass
+                raise
+
+
+async def _fetch_source_type_group(
+    source_type: str,
+    channels: list[Channel],
+    semaphore: asyncio.Semaphore,
+    training_mode: bool = False,
+) -> tuple[int, int]:
+    """Fetch all channels of a given source type with concurrency limit.
+
+    Args:
+        source_type: The connector type (e.g., 'rss', 'x_scraper')
+        channels: List of channels to fetch
+        semaphore: Semaphore to limit concurrent fetches
+        training_mode: If True, disables filtering for training data collection
+
+    Returns:
+        Tuple of (fetched_count, error_count)
+    """
+    fetched = 0
+    errors = 0
+    results_lock = asyncio.Lock()
+
+    async def fetch_with_limit(channel: Channel) -> None:
+        nonlocal fetched, errors
+        async with semaphore:
+            try:
+                await fetch_channel(channel.id, training_mode=training_mode)
+                async with results_lock:
+                    fetched += 1
+            except Exception as e:
+                logger.error(
+                    f"Error fetching channel {channel.id} "
+                    f"({channel.source.name}/{channel.connector_type}): {e}"
+                )
+                async with results_lock:
+                    errors += 1
+
+    # Run all channels of this type concurrently (within semaphore limit)
+    await asyncio.gather(*[fetch_with_limit(ch) for ch in channels], return_exceptions=True)
+    return fetched, errors
 
 
 async def fetch_due_channels() -> dict:
     """Fetch channels that are past their individual fetch interval.
+
+    Fetches channels in parallel, grouped by source type. Each source type
+    has its own concurrency limit to prevent overwhelming external services.
 
     Checks every enabled channel and fetches those where:
     now - last_fetch_at > fetch_interval_minutes
@@ -177,8 +338,6 @@ async def fetch_due_channels() -> dict:
     _fetch_in_progress = True
     try:
         now = datetime.utcnow()
-        fetched = 0
-        errors = 0
 
         async with async_session_maker() as db:
             # Find enabled channels where parent source is also enabled
@@ -198,36 +357,192 @@ async def fetch_due_channels() -> dict:
             due_channels = []
             for channel in all_channels:
                 if channel.last_fetch_at is None:
-                    due_channels.append((channel, None))
+                    due_channels.append(channel)
                 else:
                     due_time = channel.last_fetch_at + timedelta(minutes=channel.fetch_interval_minutes)
                     if due_time < now:
-                        due_channels.append((channel, channel.last_fetch_at))
+                        due_channels.append(channel)
 
-            # Sort by last_fetch_at (oldest first, NULL first)
-            due_channels.sort(key=lambda x: x[1] or datetime.min)
+            if not due_channels:
+                return {"due_channels": 0, "fetched": 0, "errors": 0}
 
-            if due_channels:
-                logger.info(f"Found {len(due_channels)} channels due for fetching")
+            # Group channels by source type
+            by_type: dict[str, list[Channel]] = defaultdict(list)
+            for channel in due_channels:
+                by_type[channel.connector_type].append(channel)
 
-            for channel, _ in due_channels:
-                try:
-                    await fetch_channel(channel.id)
-                    fetched += 1
-                except Exception as e:
-                    logger.error(f"Error fetching channel {channel.id} ({channel.source.name}/{channel.connector_type}): {e}")
-                    errors += 1
+            logger.info(
+                f"Found {len(due_channels)} channels due for fetching "
+                f"across {len(by_type)} source types: "
+                f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
+            )
 
-        if fetched > 0 or errors > 0:
-            logger.info(f"Fetched {fetched} due channels, {errors} errors")
+            # Create semaphores per source type
+            semaphores = {
+                source_type: asyncio.Semaphore(SOURCE_TYPE_LIMITS.get(source_type, 3))
+                for source_type in by_type.keys()
+            }
+
+            # Fetch all source types in parallel
+            tasks = [
+                _fetch_source_type_group(source_type, channels, semaphores[source_type])
+                for source_type, channels in by_type.items()
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Collect results
+            total_fetched = 0
+            total_errors = 0
+            for source_type, result in zip(by_type.keys(), results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error in source type group {source_type}: {result}")
+                    total_errors += len(by_type[source_type])
+                else:
+                    fetched, errors = result
+                    total_fetched += fetched
+                    total_errors += errors
+                    if fetched > 0 or errors > 0:
+                        logger.info(f"  {source_type}: {fetched} fetched, {errors} errors")
+
+        if total_fetched > 0 or total_errors > 0:
+            logger.info(f"Parallel fetch complete: {total_fetched} channels, {total_errors} errors")
 
         return {
             "due_channels": len(due_channels),
-            "fetched": fetched,
-            "errors": errors,
+            "fetched": total_fetched,
+            "errors": total_errors,
         }
     finally:
         _fetch_in_progress = False
+
+
+async def retry_llm_processing(batch_size: int = 10) -> dict:
+    """Retry LLM processing for items that were fetched during GPU unavailability.
+
+    Prioritizes items by retry_priority:
+    1. "high" - classifier marked as likely relevant
+    2. "unknown" - no classifier result available
+    3. "edge_case" - classifier was uncertain
+
+    Args:
+        batch_size: Maximum number of items to process per run
+
+    Returns:
+        Dict with processing statistics.
+    """
+    from sqlalchemy import case
+    from sqlalchemy.orm import selectinload
+
+    from models import Item
+    from services.processor import create_processor_from_settings
+
+    # Try to create LLM processor - if unavailable, skip this run
+    try:
+        processor = await create_processor_from_settings()
+        if not processor:
+            logger.debug("LLM processor not available for retry, skipping")
+            return {"skipped": True, "reason": "llm_unavailable"}
+    except Exception as e:
+        logger.debug(f"LLM processor not available for retry: {e}")
+        return {"skipped": True, "reason": str(e)}
+
+    processed = 0
+    errors = 0
+
+    async with async_session_maker() as db:
+        # Query items needing LLM processing, ordered by priority
+        # Priority order: high > unknown > edge_case > low
+        # "low" items are certainly irrelevant (confidence < 0.25)
+        from database import json_extract_path
+
+        retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+        priority_order = case(
+            (retry_priority == "high", 1),
+            (retry_priority == "unknown", 2),
+            (retry_priority == "edge_case", 3),
+            (retry_priority == "low", 4),
+            else_=5,
+        )
+        # Skip "low" priority items (certainly irrelevant) by default
+        # They can still be processed manually if needed
+        query = (
+            select(Item)
+            .options(selectinload(Item.channel).selectinload(Channel.source))
+            .where(
+                Item.needs_llm_processing == True,  # noqa: E712
+                retry_priority != "low",  # Skip certainly irrelevant items
+            )
+            .order_by(priority_order, Item.fetched_at.desc())
+            .limit(batch_size)
+        )
+        result = await db.execute(query)
+        items = result.scalars().all()
+
+        if not items:
+            return {"processed": 0, "errors": 0, "remaining": 0}
+
+        logger.info(f"Retrying LLM processing for {len(items)} items")
+
+        for item in items:
+            try:
+                source_name = item.channel.source.name if item.channel.source else "Unbekannt"
+                analysis = await processor.analyze(item, source_name=source_name)
+
+                # Update item with LLM results
+                if analysis.get("summary"):
+                    item.summary = analysis["summary"]
+                if analysis.get("detailed_analysis"):
+                    item.detailed_analysis = analysis["detailed_analysis"]
+
+                # Update priority based on LLM
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if analysis.get("relevant") is False:
+                    llm_priority = "low"
+
+                from models import Priority
+                if llm_priority == "critical":
+                    item.priority = Priority.HIGH
+                    item.priority_score = max(item.priority_score, 90)
+                elif llm_priority == "high":
+                    item.priority = Priority.MEDIUM
+                    item.priority_score = max(item.priority_score, 70)
+                elif llm_priority == "medium":
+                    item.priority = Priority.LOW
+                elif llm_priority:
+                    item.priority = Priority.NONE
+                    item.priority_score = min(item.priority_score, 40)
+
+                # Store analysis metadata
+                item.metadata_["llm_analysis"] = {
+                    "relevance_score": analysis.get("relevance_score", 0.5),
+                    "priority_suggestion": llm_priority,
+                    "assigned_ak": analysis.get("assigned_ak"),
+                    "tags": analysis.get("tags", []),
+                    "reasoning": analysis.get("reasoning"),
+                    "retried_at": datetime.utcnow().isoformat(),
+                }
+
+                # Clear retry flag
+                item.needs_llm_processing = False
+                processed += 1
+
+                logger.info(f"LLM retry success: {item.title[:40]} -> {llm_priority}")
+
+            except Exception as e:
+                logger.warning(f"LLM retry failed for item {item.id}: {e}")
+                errors += 1
+
+        await db.commit()
+
+        # Count remaining items
+        count_query = select(Item).where(Item.needs_llm_processing == True)  # noqa: E712
+        remaining_result = await db.execute(count_query)
+        remaining = len(remaining_result.scalars().all())
+
+    if processed > 0:
+        logger.info(f"LLM retry complete: {processed} processed, {errors} errors, {remaining} remaining")
+
+    return {"processed": processed, "errors": errors, "remaining": remaining}
 
 
 async def cleanup_old_items() -> int:
@@ -292,6 +607,10 @@ def start_scheduler() -> None:
         name="Refresh proxy list",
         replace_existing=True,
     )
+
+    # NOTE: LLM retry processing is now handled by the LLM worker (llm_worker.py)
+    # which runs continuously and processes items with priority ordering.
+    # The old 5-minute interval job has been removed for efficiency.
 
     scheduler.start()
     logger.info("Scheduler started")

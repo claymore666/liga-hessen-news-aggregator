@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, Item, Priority, Rule, RuleType
+from config import settings
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
@@ -46,6 +47,7 @@ class Pipeline:
         processor: ItemProcessor | None = None,
         relevance_filter: "RelevanceFilter | None" = None,
         training_mode: bool = False,
+        pre_filter_results: dict[str, dict] | None = None,
     ):
         """Initialize pipeline.
 
@@ -55,11 +57,15 @@ class Pipeline:
             relevance_filter: Optional pre-filter for relevance classification
             training_mode: If True, disables filtering (age, keyword, LLM relevance)
                           for training data collection. Only deduplication remains.
+            pre_filter_results: Pre-computed filter results keyed by external_id.
+                              If provided, uses these instead of calling relevance_filter
+                              to avoid async context conflicts with SQLAlchemy.
         """
         self.db = db
         self.processor = processor
         self.relevance_filter = relevance_filter
         self.training_mode = training_mode
+        self.pre_filter_results = pre_filter_results or {}
         self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
@@ -116,89 +122,105 @@ class Pipeline:
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
+            # Keywords serve as temporary fallback until classifier processes the item
             await self._apply_rules(item)
+            keyword_priority = item.priority
+            keyword_score = item.priority_score
 
-            # 5. Pre-filter with embedding classifier (skip LLM for clearly irrelevant items)
+            # 5. Classifier takes precedence over keywords
+            # Use pre-computed results if available (passed from scheduler to avoid async conflicts)
+            # Classifier worker will process items missed here (e.g., during classifier downtime)
             pre_filter_result = None
             skip_llm = False
-            if self.relevance_filter and not self.training_mode:
-                try:
-                    should_process, pre_filter_result = await self.relevance_filter.should_process(
-                        title=normalized.title,
-                        content=normalized.content,
-                        source=channel.source.name if channel.source else "",
-                    )
-                    if not should_process:
-                        # Mark as irrelevant, skip LLM but still store
+            if not self.training_mode:
+                # Check for pre-computed results first (avoids SQLAlchemy async context issues)
+                if normalized.external_id in self.pre_filter_results:
+                    cached = self.pre_filter_results[normalized.external_id]
+                    pre_filter_result = cached["result"]
+                elif self.relevance_filter:
+                    # Fallback: call classifier directly (may fail in async SQLAlchemy context)
+                    try:
+                        _, pre_filter_result = await self.relevance_filter.should_process(
+                            title=normalized.title,
+                            content=normalized.content,
+                            source=channel.source.name if channel.source else "",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Pre-filter failed, using keywords as fallback: {e}")
+
+                # 5a. Apply classifier-based priority (takes precedence over keywords)
+                if pre_filter_result:
+                    confidence = pre_filter_result.get("relevance_confidence", 0.5)
+                    item.priority, item.priority_score, skip_llm = self._priority_from_confidence(confidence)
+
+                    if item.priority != keyword_priority:
+                        logger.info(
+                            f"Classifier override: {normalized.title[:40]}... "
+                            f"conf={confidence:.2f} {keyword_priority.value}->{item.priority.value}"
+                        )
+                    elif skip_llm:
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
-                        item.priority = Priority.LOW
-                        item.priority_score = 10
-                        skip_llm = True
-                except Exception as e:
-                    logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
 
-            # 6. LLM-based categorization and summarization (skip if pre-filtered)
-            if self.processor and not self.training_mode and not skip_llm:
-                try:
-                    # Get full LLM analysis (relevance + summary + priority suggestion)
-                    # Pass source_name since item.channel relationship isn't loaded yet
-                    source_name = channel.source.name if channel.source else "Unbekannt"
-                    analysis = await self.processor.analyze(item, source_name=source_name)
+            # 6. LLM processing is now handled by the LLM worker (llm_worker.py)
+            # The worker runs continuously and processes items with priority ordering.
+            # Fresh items are enqueued after database flush for immediate processing.
 
-                    # Record relevance score (no filtering, just for reference)
-                    relevance_score = analysis.get("relevance_score", 0.5)
-
-                    # Update priority based on LLM suggestion
-                    # New model returns "priority", old model used "priority_suggestion"
-                    llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-
-                    # If LLM says not relevant, force low priority
-                    if analysis.get("relevant") is False:
-                        llm_priority = "low"
-
-                    if llm_priority == "critical":
-                        item.priority = Priority.CRITICAL
-                        item.priority_score = max(item.priority_score, 90)
-                    elif llm_priority == "high":
-                        item.priority = Priority.HIGH
-                        item.priority_score = max(item.priority_score, 70)
-                    elif llm_priority == "medium":
-                        item.priority = Priority.MEDIUM
-                        # Keep keyword-based score for medium
+            # 6a. Mark items for LLM processing (worker will process them)
+            # Skip if pre-filtered as irrelevant or in training mode
+            if not skip_llm and not self.training_mode:
+                item.needs_llm_processing = True
+                # Store classifier confidence for retry prioritization
+                if pre_filter_result:
+                    confidence = pre_filter_result.get("relevance_confidence", 0.5)
+                    if confidence >= 0.5:
+                        item.metadata_["retry_priority"] = "high"
+                    elif confidence >= 0.25:
+                        item.metadata_["retry_priority"] = "edge_case"
                     else:
-                        # null or "low" = LOW (not relevant or low priority)
-                        item.priority = Priority.LOW
-                        item.priority_score = min(item.priority_score, 40)
-
-                    # Set summary from analysis
-                    if analysis.get("summary"):
-                        item.summary = analysis["summary"]
-
-                    # Set detailed analysis from analysis
-                    if analysis.get("detailed_analysis"):
-                        item.detailed_analysis = analysis["detailed_analysis"]
-
-                    # Store analysis metadata
-                    item.metadata_["llm_analysis"] = {
-                        "relevance_score": relevance_score,
-                        "priority_suggestion": llm_priority,
-                        "assigned_ak": analysis.get("assigned_ak"),
-                        "tags": analysis.get("tags", []),
-                        "reasoning": analysis.get("reasoning"),
-                    }
-
-                    logger.info(f"LLM analysis: {normalized.title[:40]} -> relevance={relevance_score:.2f}, priority={llm_priority}")
-
-                except Exception as e:
-                    logger.warning(f"LLM analysis failed for item: {e}")
+                        item.metadata_["retry_priority"] = "low"
+                else:
+                    # No classifier result - treat as unknown (will be processed by classifier worker)
+                    item.metadata_["retry_priority"] = "unknown"
+                logger.info(f"Marked for LLM retry: {normalized.title[:40]} (priority: {item.metadata_.get('retry_priority')})")
 
             # 7. Store pre-filter result in metadata if available
             if pre_filter_result:
                 item.metadata_["pre_filter"] = {
                     "relevance_confidence": pre_filter_result.get("relevance_confidence"),
                     "ak_suggestion": pre_filter_result.get("ak"),
+                    "ak_confidence": pre_filter_result.get("ak_confidence"),
                     "priority_suggestion": pre_filter_result.get("priority"),
+                    "priority_confidence": pre_filter_result.get("priority_confidence"),
                 }
+
+                # 7a. Optionally use classifier priority instead of LLM
+                # Map classifier output to new priority system (critical→high, high→medium, medium→low, low→none)
+                if settings.classifier_use_priority and pre_filter_result.get("priority"):
+                    clf_priority = pre_filter_result["priority"]
+                    if clf_priority == "critical":
+                        item.priority = Priority.HIGH
+                        item.priority_score = 90
+                    elif clf_priority == "high":
+                        item.priority = Priority.MEDIUM
+                        item.priority_score = 70
+                    elif clf_priority == "medium":
+                        item.priority = Priority.LOW
+                        item.priority_score = 50
+                    else:
+                        # "low" or unknown → NONE (not relevant)
+                        item.priority = Priority.NONE
+                        item.priority_score = 30
+                    logger.debug(f"Using classifier priority: {clf_priority} -> {item.priority.value}")
+
+                # 7b. Optionally use classifier AK instead of LLM
+                if settings.classifier_use_ak and pre_filter_result.get("ak"):
+                    clf_ak = pre_filter_result["ak"]
+                    # Store in metadata (AK is stored in llm_analysis.assigned_ak)
+                    if "llm_analysis" not in item.metadata_:
+                        item.metadata_["llm_analysis"] = {}
+                    item.metadata_["llm_analysis"]["assigned_ak"] = clf_ak
+                    item.metadata_["llm_analysis"]["ak_source"] = "classifier"
+                    logger.debug(f"Using classifier AK: {clf_ak}")
 
             # 8. Add to database
             self.db.add(item)
@@ -229,6 +251,20 @@ class Pipeline:
                         logger.info(f"Indexed {indexed} items in vector store")
                 except Exception as e:
                     logger.warning(f"Failed to index items in vector store: {e}")
+
+            # 10. Enqueue fresh items to LLM worker for immediate processing
+            if not self.training_mode:
+                from services.llm_worker import enqueue_fresh_item
+
+                items_to_process = [
+                    item for item in new_items
+                    if item.needs_llm_processing
+                ]
+                for item in items_to_process:
+                    await enqueue_fresh_item(item.id)
+
+                if items_to_process:
+                    logger.info(f"Enqueued {len(items_to_process)} fresh items to LLM worker")
 
         return new_items
 
@@ -373,19 +409,41 @@ class Pipeline:
         """Convert numeric score to priority level.
 
         Base score is 50. Items must have keyword matches to be relevant.
-        - >= 90: CRITICAL (major budget/structural issues)
-        - >= 70: HIGH (legislation, reforms)
-        - > 50: MEDIUM (has some Liga-relevant keywords)
-        - <= 50: LOW (no relevant keyword matches - not Liga-relevant)
+        - >= 90: HIGH (major issues, urgent)
+        - >= 70: MEDIUM (legislation, reforms)
+        - > 50: LOW (has some Liga-relevant keywords)
+        - <= 50: NONE (no relevant keyword matches - not Liga-relevant)
         """
         if score >= 90:
-            return Priority.CRITICAL
-        elif score >= 70:
             return Priority.HIGH
-        elif score > 50:
+        elif score >= 70:
             return Priority.MEDIUM
-        else:
+        elif score > 50:
             return Priority.LOW
+        else:
+            return Priority.NONE
+
+    def _priority_from_confidence(self, confidence: float) -> tuple[Priority, int, bool]:
+        """Determine priority based on classifier confidence.
+
+        Classifier takes precedence over keywords.
+        Thresholds match classifier_worker.py and admin endpoint.
+
+        Args:
+            confidence: Relevance confidence from classifier (0-1)
+
+        Returns:
+            Tuple of (priority, score, skip_llm)
+        """
+        if confidence >= 0.5:
+            # Likely relevant - medium priority, let LLM confirm
+            return Priority.MEDIUM, 70, False
+        elif confidence >= 0.25:
+            # Edge case - low priority, let LLM decide
+            return Priority.LOW, 55, False
+        else:
+            # Certainly irrelevant - none priority, skip LLM
+            return Priority.NONE, 20, True
 
 
 async def process_items(
@@ -395,6 +453,7 @@ async def process_items(
     processor: "ItemProcessor | None" = None,
     relevance_filter: "RelevanceFilter | None" = None,
     training_mode: bool = False,
+    pre_filter_results: dict[str, dict] | None = None,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
 
@@ -405,6 +464,7 @@ async def process_items(
         processor: Optional LLM processor for summarization and semantic rules
         relevance_filter: Optional pre-filter for relevance classification
         training_mode: If True, disables filtering for training data collection
+        pre_filter_results: Pre-computed filter results keyed by external_id
 
     Returns:
         List of newly created Item objects
@@ -414,5 +474,6 @@ async def process_items(
         processor=processor,
         relevance_filter=relevance_filter,
         training_mode=training_mode,
+        pre_filter_results=pre_filter_results,
     )
     return await pipeline.process(raw_items, channel)

@@ -213,7 +213,7 @@ class TestAdminItemCleanupAPI:
     async def test_delete_low_priority_items(
         self, client: AsyncClient, db_session: AsyncSession
     ):
-        """Test deleting low priority items."""
+        """Test deleting NONE priority items (not Liga-relevant)."""
         source = Source(name="Test")
         db_session.add(source)
         await db_session.flush()
@@ -228,8 +228,8 @@ class TestAdminItemCleanupAPI:
         db_session.add(channel)
         await db_session.flush()
 
-        # Create items with different priorities
-        for i, priority in enumerate([Priority.LOW, Priority.LOW, Priority.MEDIUM, Priority.HIGH]):
+        # Create items with different priorities (NONE = not relevant, deleted by this endpoint)
+        for i, priority in enumerate([Priority.NONE, Priority.NONE, Priority.MEDIUM, Priority.HIGH]):
             db_session.add(Item(
                 channel_id=channel.id,
                 external_id=f"p-{i}-{priority.value}",

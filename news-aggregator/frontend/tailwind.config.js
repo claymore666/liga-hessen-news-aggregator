@@ -17,10 +17,10 @@ export default {
           900: '#0a3d5c'
         },
         priority: {
-          critical: '#dc2626',
-          high: '#ea580c',
-          medium: '#ca8a04',
-          low: '#16a34a'
+          high: '#dc2626',     // red - high priority
+          medium: '#ea580c',   // orange - medium priority
+          low: '#ca8a04',      // yellow - low priority
+          none: '#3b82f6'      // blue - not relevant
         }
       }
     }

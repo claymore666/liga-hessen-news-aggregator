@@ -72,8 +72,8 @@ class TestGetStats:
 
         assert response.status_code == 200
         data = response.json()
-        assert "critical_items" in data
-        assert "high_priority_items" in data
+        assert "high_items" in data
+        assert "medium_items" in data
         assert "items_by_priority" in data
 
     @pytest.mark.asyncio
@@ -295,9 +295,12 @@ class TestStatsByPriority:
 
         assert response.status_code == 200
         data = response.json()
-        # Should have counts for each priority level
+        # Should have counts for each priority level (high, medium, low, none)
         if isinstance(data, dict):
-            assert "critical" in data or "CRITICAL" in data
+            assert "high" in data
+            assert "medium" in data
+            assert "low" in data
+            assert "none" in data
         elif isinstance(data, list):
             priorities = [d.get("priority", d.get("name", "")) for d in data]
-            assert any("critical" in str(p).lower() for p in priorities)
+            assert any("high" in str(p).lower() for p in priorities)

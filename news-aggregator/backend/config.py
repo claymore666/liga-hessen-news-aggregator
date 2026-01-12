@@ -39,10 +39,17 @@ class Settings(BaseSettings):
     classifier_url: str = "http://gpu1:8082"
     classifier_threshold: float = 0.8  # Skip LLM if irrelevant confidence > this
     classifier_enabled: bool = True
+    classifier_use_priority: bool = False  # Use classifier priority instead of LLM
+    classifier_use_ak: bool = False  # Use classifier AK instead of LLM
 
     # Scheduler
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
+
+    # Proxy Pool
+    proxy_pool_min: int = 20  # Minimum working proxies to maintain
+    proxy_pool_max: int = 25  # Maximum working proxies (buffer)
+    proxy_known_max: int = 100  # Maximum known good proxies to store
 
     # API
     api_prefix: str = "/api"

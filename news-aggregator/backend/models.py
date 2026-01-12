@@ -33,10 +33,10 @@ class ConnectorType(str, Enum):
 class Priority(str, Enum):
     """Item priority levels."""
 
-    CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    NONE = "none"  # Not relevant
 
 
 class RuleType(str, Enum):
@@ -196,12 +196,18 @@ class Item(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     content_hash: Mapped[str] = mapped_column(String(64))
-    priority: Mapped[Priority] = mapped_column(String(20), default=Priority.MEDIUM)
+    priority: Mapped[Priority] = mapped_column(String(20), default=Priority.LOW)
     priority_score: Mapped[int] = mapped_column(default=50)
     is_read: Mapped[bool] = mapped_column(default=False)
     is_starred: Mapped[bool] = mapped_column(default=False)
+    is_archived: Mapped[bool] = mapped_column(default=False)
+    assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    is_manually_reviewed: Mapped[bool] = mapped_column(default=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    # LLM processing status - True if item needs (re)processing due to GPU unavailability
+    needs_llm_processing: Mapped[bool] = mapped_column(default=False, index=True)
 
     # Relationships
     channel: Mapped["Channel"] = relationship(back_populates="items")

@@ -1,36 +1,63 @@
 # News Aggregator
 
-A flexible news aggregation system with pluggable connectors for monitoring multiple communication channels.
+A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen to monitor policy-relevant news from multiple channels. Features LLM-powered relevance filtering and summarization.
 
 ## Features
 
-- **Pluggable Connector System**: RSS, Twitter, Bluesky, Mastodon, LinkedIn, PDF, HTML scraping
-- **LLM Integration**: Ollama (local) + OpenRouter (cloud fallback) for summarization and rule matching
-- **Vue 3 Frontend**: Dashboard, source management, rule configuration
+- **Multi-Channel Monitoring**: RSS, X/Twitter, Bluesky, Mastodon, Instagram, LinkedIn, Telegram, Google Alerts, PDF documents, HTML scraping
+- **LLM Integration**: Ollama for relevance classification, summarization, and priority scoring
+- **Embedding-based Pre-filter**: Fast relevance classification using sentence transformers
+- **Vue 3 Frontend**: Dashboard with keyboard navigation, source/channel management, rule configuration
+- **Smart Scheduling**: Per-channel fetch intervals with parallel fetching by source type
 - **Rule-based Filtering**: Keyword matching, regex patterns, LLM-powered semantic rules
-- **Email Export**: Daily briefing reports via email
+- **Email Briefings**: Automated daily digest reports
 
 ## Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| Database Layer (SQLAlchemy) | ✅ Complete |
-| Models (Connector, Source, Item, Rule, Setting) | ✅ Complete |
+| Database Layer (SQLAlchemy + async) | ✅ Complete |
+| Models (Source, Channel, Item, Rule) | ✅ Complete |
 | REST API (FastAPI) | ✅ Complete |
 | Pipeline & Scheduler | ✅ Complete |
+| Connectors (14 types) | ✅ Complete |
+| Frontend (Vue 3) | ✅ Complete |
+| LLM Processing (Ollama) | ✅ Complete |
+| Embedding Classifier | ✅ Complete |
+| Docker Deployment | ✅ Complete |
 | Test Suite | ✅ Complete |
-| Connectors | ⏳ In progress |
-| Frontend | ⏳ Not started |
+
+## Known Issues
+
+- [#74](https://github.com/claymore666/liga-hessen-news-aggregator/issues/74): Articles fetched during GPU downtime are not retried for LLM processing
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vue 3 + Vite + TailwindCSS + Pinia |
-| Backend | Python 3.12 + FastAPI + SQLAlchemy |
+| Backend | Python 3.12 + FastAPI + SQLAlchemy (async) |
 | Database | SQLite |
-| LLM | Ollama (gpu1) + OpenRouter (fallback) |
-| Deployment | Docker + docker-compose |
+| LLM | Ollama (local) |
+| Embeddings | sentence-transformers |
+| Scraping | Playwright (for X/Instagram) |
+| Deployment | Docker Compose |
+
+## Connectors
+
+| Connector | Description |
+|-----------|-------------|
+| `rss` | RSS/Atom feeds |
+| `x_scraper` | X/Twitter via Playwright browser automation |
+| `bluesky` | Bluesky social network |
+| `mastodon` | Mastodon/Fediverse instances |
+| `instagram` | Instagram API |
+| `instagram_scraper` | Instagram via browser automation |
+| `linkedin` | LinkedIn posts |
+| `telegram` | Telegram channels |
+| `google_alerts` | Google Alerts RSS feeds |
+| `html` | Generic HTML scraping |
+| `pdf` | PDF document extraction |
 
 ## Project Structure
 
@@ -38,35 +65,55 @@ A flexible news aggregation system with pluggable connectors for monitoring mult
 news-aggregator/
 ├── backend/
 │   ├── api/             # FastAPI routes
-│   │   ├── connectors.py
-│   │   ├── sources.py
-│   │   ├── items.py
-│   │   ├── rules.py
-│   │   └── stats.py
-│   ├── connectors/      # Source connectors (RSS, Twitter, etc.)
-│   ├── services/        # Business logic
+│   │   ├── sources.py   # Source/channel management
+│   │   ├── items.py     # Item CRUD and filtering
+│   │   ├── rules.py     # Rule management
+│   │   ├── scheduler.py # Manual fetch triggers
+│   │   ├── llm.py       # LLM status and reprocessing
+│   │   ├── email.py     # Email briefing endpoints
+│   │   └── stats.py     # Statistics
+│   ├── connectors/      # Source connectors
+│   ├── services/
 │   │   ├── pipeline.py  # Item processing pipeline
-│   │   └── scheduler.py # APScheduler integration
+│   │   ├── scheduler.py # APScheduler jobs
+│   │   ├── processor.py # LLM processing
+│   │   ├── relevance_filter.py # Embedding classifier
+│   │   └── proxy_manager.py    # Proxy rotation
 │   ├── tests/           # pytest test suite
-│   │   ├── test_models.py
-│   │   ├── test_api.py
-│   │   └── test_pipeline.py
 │   ├── models.py        # SQLAlchemy models
 │   ├── schemas.py       # Pydantic schemas
-│   ├── database.py      # Database session management
+│   ├── database.py      # Async database session
 │   ├── config.py        # Application configuration
-│   └── main.py          # FastAPI application entry
-├── frontend/            # Vue 3 application (not started)
+│   └── main.py          # FastAPI application
+├── frontend/
+│   ├── src/
+│   │   ├── views/       # Page components
+│   │   ├── components/  # Reusable components
+│   │   ├── stores/      # Pinia stores
+│   │   └── api/         # API client
+│   └── ...
 ├── docker-compose.yml
 └── README.md
 ```
 
-## Documentation
+## Deployment
 
-See [docs/](../docs/) for detailed architecture documentation:
+The application runs on gpu1 via Docker Compose:
 
-- [Architecture Overview](../docs/NewsAggregatorArchitecture.md)
-- [Documentation Index](../docs/INDEX.md)
+```bash
+cd news-aggregator
+docker compose up -d --build
+```
+
+Access at: http://localhost:5173 (frontend) / http://localhost:8000 (API)
+
+### Container Management
+
+```bash
+docker compose ps              # Check status
+docker compose logs -f backend # Follow backend logs
+docker compose restart         # Restart without rebuild
+```
 
 ## Development
 
@@ -85,7 +132,7 @@ uvicorn main:app --reload
 pytest tests/
 ```
 
-### Frontend (not yet implemented)
+### Frontend
 
 ```bash
 cd frontend
@@ -95,27 +142,46 @@ npm run dev
 
 ## API Endpoints
 
+### Sources & Channels
 ```
-GET  /api/connectors              # List all connector types
-GET  /api/connectors/{type}/schema # Get config schema
+GET    /api/sources                    # List sources with channels
+POST   /api/sources                    # Create source
+GET    /api/sources/{id}               # Get source details
+PUT    /api/sources/{id}               # Update source
+DELETE /api/sources/{id}               # Delete source
+POST   /api/sources/{id}/channels      # Add channel to source
+DELETE /api/sources/{sid}/channels/{cid} # Remove channel
+```
 
-GET  /api/sources                 # List all sources
-POST /api/sources                 # Create source
-GET  /api/sources/{id}            # Get source
-PUT  /api/sources/{id}            # Update source
-DELETE /api/sources/{id}          # Delete source
+### Items
+```
+GET    /api/items                      # List items (paginated, filtered)
+GET    /api/items/{id}                 # Get item details
+PATCH  /api/items/{id}                 # Update item (read/star/archive)
+POST   /api/items/{id}/read            # Mark as read
+POST   /api/items/{id}/unread          # Mark as unread
+POST   /api/items/bulk-update          # Bulk update items
+```
 
-GET  /api/items                   # List items (paginated, filtered)
-GET  /api/items/{id}              # Get item
-PATCH /api/items/{id}             # Update item state
-POST /api/items/bulk-update       # Bulk update items
+### Rules
+```
+GET    /api/rules                      # List rules
+POST   /api/rules                      # Create rule
+PUT    /api/rules/{id}                 # Update rule
+DELETE /api/rules/{id}                 # Delete rule
+```
 
-GET  /api/rules                   # List rules
-POST /api/rules                   # Create rule
-PUT  /api/rules/{id}              # Update rule
-DELETE /api/rules/{id}            # Delete rule
+### Scheduler
+```
+GET    /api/scheduler/status           # Job status
+POST   /api/scheduler/fetch/{channel_id} # Trigger channel fetch
+POST   /api/scheduler/fetch-all        # Fetch all channels
+```
 
-GET  /api/stats                   # Get statistics
+### LLM
+```
+GET    /api/llm/status                 # LLM availability
+POST   /api/llm/reprocess/{item_id}    # Reprocess single item
 ```
 
 ## License

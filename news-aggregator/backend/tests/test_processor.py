@@ -248,59 +248,57 @@ class TestPriorityLogic:
 
 
 class TestPriorityMapping:
-    """Tests for priority string to enum mapping."""
+    """Tests for LLM priority string to stored priority enum mapping.
 
-    def test_all_priority_values_map_correctly(self):
-        """Test all priority string values map to correct enums."""
+    LLM outputs: critical, high, medium, low
+    Stored priorities: high, medium, low, none
+
+    Mapping: critical→high, high→medium, medium→low, low→none
+    """
+
+    @staticmethod
+    def map_llm_priority(llm_priority: str | None) -> "Priority":
+        """Map LLM output priority to stored priority enum."""
         from models import Priority
 
+        if llm_priority == "critical":
+            return Priority.HIGH
+        elif llm_priority == "high":
+            return Priority.MEDIUM
+        elif llm_priority == "medium":
+            return Priority.LOW
+        else:
+            return Priority.NONE
+
+    def test_all_priority_values_map_correctly(self):
+        """Test all LLM priority values map to correct stored enums."""
+        from models import Priority
+
+        # LLM output → Stored priority
         test_cases = [
-            ("critical", Priority.CRITICAL),
-            ("high", Priority.HIGH),
-            ("medium", Priority.MEDIUM),
-            ("low", Priority.LOW),
+            ("critical", Priority.HIGH),  # critical → high
+            ("high", Priority.MEDIUM),    # high → medium
+            ("medium", Priority.LOW),     # medium → low
+            ("low", Priority.NONE),       # low → none
         ]
 
         for llm_priority, expected in test_cases:
-            if llm_priority == "critical":
-                result = Priority.CRITICAL
-            elif llm_priority == "high":
-                result = Priority.HIGH
-            elif llm_priority == "medium":
-                result = Priority.MEDIUM
-            else:
-                result = Priority.LOW
-            assert result == expected, f"Failed for {llm_priority}"
+            result = self.map_llm_priority(llm_priority)
+            assert result == expected, f"Failed for {llm_priority}: got {result}, expected {expected}"
 
-    def test_null_priority_maps_to_low(self):
-        """None priority should map to LOW."""
+    def test_null_priority_maps_to_none(self):
+        """None priority should map to NONE."""
         from models import Priority
 
-        llm_priority = None
-        if llm_priority == "critical":
-            result = Priority.CRITICAL
-        elif llm_priority == "high":
-            result = Priority.HIGH
-        elif llm_priority == "medium":
-            result = Priority.MEDIUM
-        else:
-            result = Priority.LOW
-        assert result == Priority.LOW
+        result = self.map_llm_priority(None)
+        assert result == Priority.NONE
 
-    def test_unknown_priority_maps_to_low(self):
-        """Unknown priority string should map to LOW."""
+    def test_unknown_priority_maps_to_none(self):
+        """Unknown priority string should map to NONE."""
         from models import Priority
 
-        llm_priority = "unknown"
-        if llm_priority == "critical":
-            result = Priority.CRITICAL
-        elif llm_priority == "high":
-            result = Priority.HIGH
-        elif llm_priority == "medium":
-            result = Priority.MEDIUM
-        else:
-            result = Priority.LOW
-        assert result == Priority.LOW
+        result = self.map_llm_priority("unknown")
+        assert result == Priority.NONE
 
 
 class TestAnalyzeMethod:
@@ -371,10 +369,10 @@ class TestAnalyzeMethod:
 
     @pytest.mark.asyncio
     async def test_analyze_truncates_long_content(self, processor):
-        """Analyze should truncate content longer than 2000 chars."""
+        """Analyze should truncate content longer than 6000 chars."""
         item = MagicMock()
         item.title = "Test"
-        item.content = "A" * 5000  # Long content
+        item.content = "A" * 10000  # Long content (exceeds 6000 char limit)
         item.source = None
         item.published_at = None
 
@@ -390,8 +388,8 @@ class TestAnalyzeMethod:
 
         call_args = processor.llm.complete.call_args
         prompt = call_args[0][0]
-        # Content should be truncated to 2000 chars
-        assert len(prompt) < 5000
+        # Content should be truncated to 6000 chars (plus title/source/date overhead ~100 chars)
+        assert len(prompt) < 7000
 
     @pytest.mark.asyncio
     async def test_analyze_returns_default_on_llm_error(self, processor):

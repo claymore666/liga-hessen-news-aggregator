@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, func
+from sqlalchemy import delete, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -194,7 +194,7 @@ async def delete_low_priority_items(
     Starred items are preserved.
     """
     stmt = delete(Item).where(
-        Item.priority == Priority.LOW,
+        Item.priority == Priority.NONE,
         Item.is_starred == False,  # noqa: E712
     )
     result = await db.execute(stmt)
@@ -346,4 +346,185 @@ async def get_application_logs(
         lines=log_lines,
         source=source,
         total_lines=len(log_lines),
+    )
+
+
+class MigrationResponse(BaseModel):
+    """Response for migration operations."""
+
+    updated_count: int
+    message: str
+
+
+@router.post("/admin/migrate-llm-retry", response_model=MigrationResponse)
+async def migrate_items_for_llm_retry(
+    db: AsyncSession = Depends(get_db),
+) -> MigrationResponse:
+    """Mark existing items without summary as needing LLM processing.
+
+    This is a one-time migration to populate the needs_llm_processing flag
+    for items that were fetched when the LLM was unavailable.
+
+    Items WITH a summary are considered already processed and skipped.
+    """
+    # Count items without summary that aren't already marked
+    count_query = select(func.count(Item.id)).where(
+        Item.summary.is_(None),
+        Item.needs_llm_processing == False,  # noqa: E712
+    )
+    count = await db.scalar(count_query) or 0
+
+    if count == 0:
+        return MigrationResponse(
+            updated_count=0,
+            message="No items need migration - all items either have summaries or are already marked for retry",
+        )
+
+    # Update items without summary to need LLM processing
+    stmt = (
+        update(Item)
+        .where(
+            Item.summary.is_(None),
+            Item.needs_llm_processing == False,  # noqa: E712
+        )
+        .values(
+            needs_llm_processing=True,
+            # Set retry priority based on current priority
+            # High/Medium priority items get processed first
+        )
+    )
+    result = await db.execute(stmt)
+    updated = result.rowcount
+
+    logger.info(f"Migration: marked {updated} items for LLM retry")
+    return MigrationResponse(
+        updated_count=updated,
+        message=f"Marked {updated} items without summary for LLM retry processing",
+    )
+
+
+class ClassifyResponse(BaseModel):
+    """Response for classify items operation."""
+
+    processed: int
+    updated: int
+    errors: int
+    message: str
+
+
+@router.post("/admin/classify-items", response_model=ClassifyResponse)
+async def classify_items_for_confidence(
+    limit: int = Query(100, ge=1, le=1000, description="Max items to classify"),
+    update_retry_priority: bool = Query(True, description="Update retry_priority based on confidence"),
+    force: bool = Query(False, description="Re-classify items that already have confidence"),
+    retry_queue_only: bool = Query(False, description="Only classify items in the retry queue"),
+    db: AsyncSession = Depends(get_db),
+) -> ClassifyResponse:
+    """Run classifier on items without relevance confidence.
+
+    This is useful to populate confidence scores for items that were
+    fetched before the classifier was available, allowing better
+    prioritization of the LLM retry queue.
+
+    Priority thresholds:
+    - high: >= 0.5 (likely relevant, process first)
+    - edge_case: 0.25-0.5 (uncertain)
+    - low: < 0.25 (certainly irrelevant, skipped by default)
+
+    The classifier is fast (embedding-based) compared to LLM processing.
+    """
+    from sqlalchemy.orm import selectinload
+    from services.relevance_filter import create_relevance_filter
+
+    # Create classifier
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        raise HTTPException(status_code=503, detail="Classifier service not available")
+
+    # Build query
+    query = select(Item).options(selectinload(Item.channel).selectinload(Channel.source))
+
+    # Filter by confidence (unless force)
+    if not force:
+        from database import json_extract_path
+        query = query.where(
+            json_extract_path(Item.metadata_, "pre_filter", "relevance_confidence").is_(None)
+        )
+
+    # Filter to retry queue only
+    if retry_queue_only:
+        query = query.where(Item.needs_llm_processing == True)  # noqa: E712
+
+    # Prioritize items that need LLM processing
+    query = query.order_by(
+        Item.needs_llm_processing.desc(),
+        Item.fetched_at.desc()
+    ).limit(limit)
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    if not items:
+        return ClassifyResponse(
+            processed=0,
+            updated=0,
+            errors=0,
+            message="No items without confidence scores found",
+        )
+
+    processed = 0
+    updated = 0
+    errors = 0
+
+    for item in items:
+        try:
+            source_name = item.channel.source.name if item.channel and item.channel.source else ""
+            classification = await relevance_filter.classify(
+                title=item.title,
+                content=item.content,
+                source=source_name,
+            )
+
+            # Store classifier results in metadata
+            # Create new dict to ensure SQLAlchemy detects the change
+            new_metadata = dict(item.metadata_) if item.metadata_ else {}
+            new_metadata["pre_filter"] = {
+                "relevance_confidence": classification.get("relevance_confidence"),
+                "ak_suggestion": classification.get("ak"),
+                "ak_confidence": classification.get("ak_confidence"),
+                "priority_suggestion": classification.get("priority"),
+                "priority_confidence": classification.get("priority_confidence"),
+                "classified_at": datetime.utcnow().isoformat(),
+            }
+
+            # Update retry_priority if item needs LLM processing
+            # Priority levels based on confidence:
+            # - high: >= 0.5 (likely relevant, process first)
+            # - edge_case: 0.25-0.5 (uncertain, process after high)
+            # - low: < 0.25 (certainly irrelevant, skip or process last)
+            if update_retry_priority and item.needs_llm_processing:
+                confidence = classification.get("relevance_confidence", 0.5)
+                if confidence >= 0.5:
+                    new_metadata["retry_priority"] = "high"
+                elif confidence >= 0.25:
+                    new_metadata["retry_priority"] = "edge_case"
+                else:
+                    new_metadata["retry_priority"] = "low"
+
+            # Assign new dict to trigger SQLAlchemy change detection
+            item.metadata_ = new_metadata
+            processed += 1
+            updated += 1
+
+        except Exception as e:
+            logger.warning(f"Failed to classify item {item.id}: {e}")
+            errors += 1
+
+    await db.commit()
+
+    logger.info(f"Classified {processed} items: {updated} updated, {errors} errors")
+    return ClassifyResponse(
+        processed=processed,
+        updated=updated,
+        errors=errors,
+        message=f"Classified {processed} items, updated {updated} with confidence scores",
     )

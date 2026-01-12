@@ -215,8 +215,8 @@ class XScraperConnector(BaseConnector):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
                     await page.wait_for_timeout(1000)
 
-                # Extract tweets
-                items = await self._extract_tweets(page, config)
+                # Extract tweets (pass context for Playwright-based article fetching)
+                items = await self._extract_tweets(page, config, context)
 
                 await browser.close()
 
@@ -230,17 +230,20 @@ class XScraperConnector(BaseConnector):
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items
 
-    async def _extract_tweets(self, page, config: XScraperConfig) -> list[RawItem]:
+    async def _extract_tweets(
+        self, page, config: XScraperConfig, browser_context=None
+    ) -> list[RawItem]:
         """Extract tweets from page with optional link following.
 
         Args:
             page: Playwright page object
             config: Scraper configuration
+            browser_context: Playwright browser context for fetching linked articles
 
         Returns:
             List of RawItem objects
         """
-        # Import article extractor if link following is enabled
+        # Import article extractor for URL extraction and fallback
         article_extractor = None
         if config.follow_links:
             try:
@@ -329,7 +332,17 @@ class XScraperConnector(BaseConnector):
                     # Try to fetch article content from first valid link(s)
                     for link_url in extracted_links[: config.max_links_per_tweet]:
                         try:
-                            article = await article_extractor.fetch_article(link_url)
+                            # Use Playwright for JS-heavy sites, fallback to httpx
+                            article = None
+                            if browser_context:
+                                article = await self._fetch_article_with_playwright(
+                                    browser_context, link_url, article_extractor
+                                )
+
+                            # Fallback to httpx-based extraction if Playwright failed
+                            if not article:
+                                article = await article_extractor.fetch_article(link_url)
+
                             if article and article.is_article:
                                 linked_articles.append({
                                     "url": article.url,
@@ -422,6 +435,180 @@ Verlinkter Artikel von {article.source_domain}:
             logger.debug(f"Error extracting card links: {e}")
 
         return links
+
+    async def _fetch_article_with_playwright(
+        self, context, url: str, article_extractor
+    ):
+        """Fetch article content using Playwright for JS-rendered pages.
+
+        This method handles:
+        - JavaScript-rendered content
+        - Cookie consent dialogs
+        - Paywalled content (visible portion)
+        - Dynamic loading
+
+        Args:
+            context: Playwright browser context
+            url: Article URL to fetch
+            article_extractor: ArticleExtractor instance for content extraction
+
+        Returns:
+            ArticleContent object or None if extraction failed
+        """
+        from services.article_extractor import ArticleContent
+
+        page = None
+        try:
+            # Resolve t.co redirects first
+            if "t.co" in url:
+                url = await article_extractor.resolve_redirect(url)
+                logger.debug(f"Resolved t.co URL to: {url}")
+
+            # Clean tracking parameters
+            url = article_extractor._clean_url(url)
+
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower().replace("www.", "")
+
+            # Open new page in existing context
+            page = await context.new_page()
+
+            # Navigate to article
+            logger.debug(f"Fetching article with Playwright: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+
+            # Handle common cookie consent dialogs
+            await self._handle_cookie_consent(page)
+
+            # Wait for content to load (JS rendering)
+            await page.wait_for_timeout(2000)
+
+            # Try to expand "read more" or similar buttons
+            await self._expand_article_content(page)
+
+            # Get page HTML after JS execution
+            html = await page.content()
+
+            # Use BeautifulSoup for parsing
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "lxml")
+
+            # Check if it's likely an article
+            is_article = article_extractor.is_likely_news_article(soup, url)
+            if not is_article:
+                logger.debug(f"URL {url} does not appear to be a news article (Playwright)")
+                return None
+
+            # Extract title
+            title = article_extractor._extract_title(soup)
+
+            # Extract content using trafilatura (works better with full HTML)
+            content = article_extractor._extract_content(soup, html)
+
+            if not content or len(content) < 100:
+                logger.debug(f"Insufficient content from {url}: {len(content) if content else 0} chars")
+                return None
+
+            logger.info(f"Extracted article via Playwright from {domain}: {len(content)} chars")
+
+            return ArticleContent(
+                url=url,
+                title=title,
+                content=content,
+                is_article=is_article,
+                source_domain=domain,
+            )
+
+        except PlaywrightTimeout:
+            logger.warning(f"Timeout fetching article with Playwright: {url}")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to fetch article with Playwright from {url}: {e}")
+            return None
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+    async def _handle_cookie_consent(self, page):
+        """Click common cookie consent buttons.
+
+        Args:
+            page: Playwright page object
+        """
+        # Common cookie consent button selectors
+        consent_selectors = [
+            # German sites
+            'button:has-text("Akzeptieren")',
+            'button:has-text("Alle akzeptieren")',
+            'button:has-text("Zustimmen")',
+            'button:has-text("Einverstanden")',
+            '[data-testid="accept-all"]',
+            # English sites
+            'button:has-text("Accept")',
+            'button:has-text("Accept All")',
+            'button:has-text("Accept all")',
+            'button:has-text("I agree")',
+            'button:has-text("Got it")',
+            # Common class patterns
+            '.accept-cookies',
+            '.cookie-accept',
+            '#accept-cookies',
+            '[class*="consent"] button',
+            '[class*="cookie"] button:first-of-type',
+            # CMP (Consent Management Platform) specific
+            '#onetrust-accept-btn-handler',
+            '.cmp-accept-all',
+            '[data-tracking="gdpr-accept"]',
+        ]
+
+        for selector in consent_selectors:
+            try:
+                button = await page.query_selector(selector)
+                if button and await button.is_visible():
+                    await button.click()
+                    logger.debug(f"Clicked cookie consent button: {selector}")
+                    await page.wait_for_timeout(500)
+                    return
+            except Exception:
+                continue
+
+    async def _expand_article_content(self, page):
+        """Click "read more" or similar buttons to expand article content.
+
+        Args:
+            page: Playwright page object
+        """
+        expand_selectors = [
+            # German
+            'button:has-text("Weiterlesen")',
+            'button:has-text("Mehr lesen")',
+            'button:has-text("Mehr anzeigen")',
+            'a:has-text("Weiterlesen")',
+            # English
+            'button:has-text("Read more")',
+            'button:has-text("Show more")',
+            'button:has-text("Continue reading")',
+            'a:has-text("Read more")',
+            # Common patterns
+            '.read-more',
+            '.show-more',
+            '[class*="expand"]',
+        ]
+
+        for selector in expand_selectors:
+            try:
+                button = await page.query_selector(selector)
+                if button and await button.is_visible():
+                    await button.click()
+                    logger.debug(f"Clicked expand button: {selector}")
+                    await page.wait_for_timeout(1000)
+                    return
+            except Exception:
+                continue
 
     def _is_external_article_url(self, url: str) -> bool:
         """Check if URL is an external article link (not X internal).

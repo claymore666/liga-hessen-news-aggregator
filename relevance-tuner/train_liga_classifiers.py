@@ -31,8 +31,6 @@ from sklearn.preprocessing import LabelEncoder
 # Import from central config and utilities
 from config import (
     AK_CLASSES,
-    IRRELEVANT_KEYWORDS,
-    LIGA_KEYWORDS,
     LR_C,
     LR_MAX_ITER,
     MODELS_DIR,
@@ -46,6 +44,18 @@ from config import (
     TFIDF_NGRAM_RANGE,
 )
 from utils import load_test_data, load_training_data
+
+# Keywords for TF-IDF feature engineering (legacy, not used in production)
+LIGA_KEYWORDS = [
+    "liga", "wohlfahrt", "awo", "caritas", "diakonie", "drk", "paritätisch",
+    "wohlfahrtsverband", "spitzenverband", "freie wohlfahrtspflege",
+]
+
+IRRELEVANT_KEYWORDS = [
+    "fußball", "bundesliga", "champions", "sport", "tennis", "olympia",
+    "mannschaft", "trainer", "spieler", "tor", "sieg", "niederlage",
+    "kino", "film", "konzert", "festival", "unterhaltung",
+]
 
 # ============================================================================
 # Configuration

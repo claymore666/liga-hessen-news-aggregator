@@ -41,26 +41,27 @@ class TestListItems:
     async def test_list_items_relevant_only_default(
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
-        """By default, excludes LOW priority items."""
+        """By default, excludes NONE priority items (not Liga-relevant)."""
         response = await client.get("/api/items")
 
         assert response.status_code == 200
         data = response.json()
-        # Should exclude LOW priority items
+        # Should exclude NONE priority items (only HIGH, MEDIUM, LOW are shown)
         for item in data["items"]:
-            assert item["priority"] != "low"
+            assert item["priority"] != "none"
 
     @pytest.mark.asyncio
     async def test_list_items_relevant_only_false(
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
-        """Can include LOW priority items."""
+        """Can include NONE priority items when relevant_only=false."""
         response = await client.get("/api/items", params={"relevant_only": False})
 
         assert response.status_code == 200
         data = response.json()
         priorities = [item["priority"] for item in data["items"]]
-        assert "low" in priorities
+        # Should include all priorities including NONE
+        assert "none" in priorities
 
     @pytest.mark.asyncio
     async def test_list_items_pagination(
@@ -113,12 +114,12 @@ class TestListItems:
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
         """Filter by specific priority."""
-        response = await client.get("/api/items", params={"priority": "critical"})
+        response = await client.get("/api/items", params={"priority": "high"})
 
         assert response.status_code == 200
         data = response.json()
         for item in data["items"]:
-            assert item["priority"] == "critical"
+            assert item["priority"] == "high"
 
     @pytest.mark.asyncio
     async def test_list_items_filter_by_read_status(
@@ -223,8 +224,8 @@ class TestListItems:
         assert response.status_code == 200
         items = response.json()["items"]
         if len(items) > 1:
-            priority_order = {"critical": 1, "high": 2, "medium": 3, "low": 4}
-            priorities = [priority_order[item["priority"]] for item in items]
+            priority_order = {"high": 1, "medium": 2, "low": 3, "none": 4}
+            priorities = [priority_order.get(item["priority"], 5) for item in items]
             assert priorities == sorted(priorities)
 
     @pytest.mark.asyncio
@@ -352,12 +353,12 @@ class TestUpdateItem:
     async def test_update_item_priority(self, client: AsyncClient, item_in_db: Item):
         """Update item priority."""
         response = await client.patch(
-            f"/api/items/{item_in_db.id}", json={"priority": "critical"}
+            f"/api/items/{item_in_db.id}", json={"priority": "high"}
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["priority"] == "critical"
+        assert data["priority"] == "high"
 
     @pytest.mark.asyncio
     async def test_update_item_invalid_priority(

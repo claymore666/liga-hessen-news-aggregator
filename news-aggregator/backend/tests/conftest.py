@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures."""
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator, Generator
 from datetime import datetime, timedelta
 from typing import Any
@@ -14,8 +15,12 @@ from database import Base, get_db
 from main import app
 from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Setting, Source
 
-# Use in-memory SQLite for tests
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+# Allow PostgreSQL testing via environment variable
+# Default to in-memory SQLite for fast local tests
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "sqlite+aiosqlite:///:memory:"
+)
 
 
 @pytest.fixture(scope="session")
@@ -221,7 +226,7 @@ async def multiple_items_in_db(
 ) -> list[Item]:
     """Create multiple items with different priorities in the database."""
     items = []
-    priorities = [Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW]
+    priorities = [Priority.HIGH, Priority.MEDIUM, Priority.LOW, Priority.NONE]
 
     for i, priority in enumerate(priorities):
         item = Item(

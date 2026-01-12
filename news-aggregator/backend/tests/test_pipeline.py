@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import ConnectorType, Item, Priority, Rule, RuleType, Source
+from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Source
 from services.pipeline import Pipeline, RawItem
 
 
@@ -116,17 +116,21 @@ class TestPipeline:
     @pytest.mark.asyncio
     async def test_is_duplicate_by_external_id(self, db_session: AsyncSession):
         """Test duplicate detection by external_id."""
-        source = Source(
-            name="Test",
+        source = Source(name="Test")
+        db_session.add(source)
+        await db_session.flush()
+
+        channel = Channel(
+            source_id=source.id,
             connector_type=ConnectorType.RSS,
             config={},
         )
-        db_session.add(source)
+        db_session.add(channel)
         await db_session.flush()
 
         # Create existing item
         existing = Item(
-            source_id=source.id,
+            channel_id=channel.id,
             external_id="existing-123",
             title="Existing",
             content="Content",
@@ -140,27 +144,31 @@ class TestPipeline:
         pipeline = Pipeline(db_session)
 
         # Same external_id should be duplicate
-        is_dup = await pipeline._is_duplicate(source.id, "existing-123", "differenthash")
+        is_dup = await pipeline._is_duplicate(channel.id, "existing-123", "differenthash")
         assert is_dup is True
 
         # Different external_id should not be duplicate
-        is_dup = await pipeline._is_duplicate(source.id, "new-456", "differenthash")
+        is_dup = await pipeline._is_duplicate(channel.id, "new-456", "differenthash")
         assert is_dup is False
 
     @pytest.mark.asyncio
     async def test_is_duplicate_by_content_hash(self, db_session: AsyncSession):
         """Test duplicate detection by content hash."""
-        source = Source(
-            name="Test",
+        source = Source(name="Test")
+        db_session.add(source)
+        await db_session.flush()
+
+        channel = Channel(
+            source_id=source.id,
             connector_type=ConnectorType.RSS,
             config={},
         )
-        db_session.add(source)
+        db_session.add(channel)
         await db_session.flush()
 
         content_hash = "abc123def456"
         existing = Item(
-            source_id=source.id,
+            channel_id=channel.id,
             external_id="original",
             title="Original",
             content="Same content",
@@ -174,7 +182,7 @@ class TestPipeline:
         pipeline = Pipeline(db_session)
 
         # Same content hash should be duplicate
-        is_dup = await pipeline._is_duplicate(source.id, "different-id", content_hash)
+        is_dup = await pipeline._is_duplicate(channel.id, "different-id", content_hash)
         assert is_dup is True
 
     @pytest.mark.asyncio
@@ -189,7 +197,7 @@ class TestPipeline:
         )
 
         item_match = Item(
-            source_id=1,
+            channel_id=1,
             external_id="1",
             title="Haushaltskürzung angekündigt",
             content="Die Regierung plant Kürzungen",
@@ -199,7 +207,7 @@ class TestPipeline:
         )
 
         item_no_match = Item(
-            source_id=1,
+            channel_id=1,
             external_id="2",
             title="Wetter morgen",
             content="Es wird sonnig",
@@ -223,7 +231,7 @@ class TestPipeline:
         )
 
         item_match = Item(
-            source_id=1,
+            channel_id=1,
             external_id="1",
             title="Budget News",
             content="Das Projekt kostet 50 Millionen Euro",
@@ -233,7 +241,7 @@ class TestPipeline:
         )
 
         item_no_match = Item(
-            source_id=1,
+            channel_id=1,
             external_id="2",
             title="Other News",
             content="Keine Zahlen hier",
@@ -250,24 +258,28 @@ class TestPipeline:
         """Test score to priority conversion."""
         pipeline = Pipeline(db_session)
 
-        assert pipeline._score_to_priority(95) == Priority.CRITICAL
-        assert pipeline._score_to_priority(90) == Priority.CRITICAL
-        assert pipeline._score_to_priority(85) == Priority.HIGH
-        assert pipeline._score_to_priority(70) == Priority.HIGH
-        assert pipeline._score_to_priority(60) == Priority.MEDIUM
-        assert pipeline._score_to_priority(40) == Priority.MEDIUM
-        assert pipeline._score_to_priority(30) == Priority.LOW
-        assert pipeline._score_to_priority(0) == Priority.LOW
+        assert pipeline._score_to_priority(95) == Priority.HIGH
+        assert pipeline._score_to_priority(90) == Priority.HIGH
+        assert pipeline._score_to_priority(85) == Priority.MEDIUM
+        assert pipeline._score_to_priority(70) == Priority.MEDIUM
+        assert pipeline._score_to_priority(60) == Priority.LOW
+        assert pipeline._score_to_priority(51) == Priority.LOW
+        assert pipeline._score_to_priority(50) == Priority.NONE
+        assert pipeline._score_to_priority(0) == Priority.NONE
 
     @pytest.mark.asyncio
     async def test_process_items(self, db_session: AsyncSession):
         """Test full pipeline processing."""
-        source = Source(
-            name="Test",
+        source = Source(name="Test")
+        db_session.add(source)
+        await db_session.flush()
+
+        channel = Channel(
+            source_id=source.id,
             connector_type=ConnectorType.RSS,
             config={},
         )
-        db_session.add(source)
+        db_session.add(channel)
 
         rule = Rule(
             name="Urgent",
@@ -295,7 +307,7 @@ class TestPipeline:
         ]
 
         pipeline = Pipeline(db_session)
-        new_items = await pipeline.process(raw_items, source)
+        new_items = await pipeline.process(raw_items, channel)
 
         assert len(new_items) == 2
 
@@ -304,22 +316,26 @@ class TestPipeline:
         normal_item = next(i for i in new_items if i.external_id == "2")
 
         assert urgent_item.priority_score > normal_item.priority_score
-        assert urgent_item.priority in [Priority.HIGH, Priority.CRITICAL]
+        assert urgent_item.priority in [Priority.HIGH, Priority.MEDIUM]
 
     @pytest.mark.asyncio
     async def test_process_skips_duplicates(self, db_session: AsyncSession):
         """Test that duplicates are skipped."""
-        source = Source(
-            name="Test",
+        source = Source(name="Test")
+        db_session.add(source)
+        await db_session.flush()
+
+        channel = Channel(
+            source_id=source.id,
             connector_type=ConnectorType.RSS,
             config={},
         )
-        db_session.add(source)
+        db_session.add(channel)
         await db_session.flush()
 
         # Create existing item
         existing = Item(
-            source_id=source.id,
+            channel_id=channel.id,
             external_id="existing-1",
             title="Existing",
             content="Content",
@@ -346,7 +362,7 @@ class TestPipeline:
         ]
 
         pipeline = Pipeline(db_session)
-        new_items = await pipeline.process(raw_items, source)
+        new_items = await pipeline.process(raw_items, channel)
 
         assert len(new_items) == 1
         assert new_items[0].external_id == "new-1"
