@@ -149,6 +149,7 @@ class ItemResponse(ItemBase, BaseSchema):
     is_manually_reviewed: bool = False
     reviewed_at: datetime | None = None
     notes: str | None
+    needs_llm_processing: bool = False
     metadata_: dict[str, Any] = Field(default_factory=dict, serialization_alias="metadata")
 
 

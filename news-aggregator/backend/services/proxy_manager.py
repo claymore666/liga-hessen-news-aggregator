@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 # Persistent storage for known good proxies
@@ -49,17 +51,16 @@ class ProxyManager:
         "https://ipinfo.io/ip",
     ]
     MAX_LATENCY_MS = 1500  # Accept proxies under 1.5 seconds for HTTPS
-    MIN_WORKING_PROXIES = 10  # Minimum pool size to maintain
-    MAX_WORKING_PROXIES = 15  # Keep a few extra as buffer
     BATCH_SIZE = 100  # Test this many proxies per batch
     REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
-
-    # Persistence settings
-    MAX_KNOWN_PROXIES = 50  # Maximum known good proxies to store
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
     KNOWN_PROXIES_TO_TRY_FIRST = 10  # Try this many from known list first
 
     def __init__(self):
+        # Configurable pool sizes from settings
+        self.min_working_proxies = settings.proxy_pool_min
+        self.max_working_proxies = settings.proxy_pool_max
+        self.max_known_proxies = settings.proxy_known_max
         self.working_proxies: list[dict] = []
         self.current_index: int = 0
         self.last_refresh: datetime | None = None
@@ -106,12 +107,12 @@ class ProxyManager:
             "last_success": datetime.utcnow().isoformat(),
         }
         # Trim to max size, keeping lowest latency proxies
-        if len(self._known_proxies) > self.MAX_KNOWN_PROXIES:
+        if len(self._known_proxies) > self.max_known_proxies:
             sorted_proxies = sorted(
                 self._known_proxies.items(),
                 key=lambda x: x[1]["latency"]
             )
-            self._known_proxies = dict(sorted_proxies[:self.MAX_KNOWN_PROXIES])
+            self._known_proxies = dict(sorted_proxies[:self.max_known_proxies])
         self._save_known_proxies()
 
     def _record_proxy_failure(self, proxy: str) -> None:
@@ -266,20 +267,20 @@ class ProxyManager:
                 logger.info(f"✓ Found fast proxy: {proxy} ({latency:.0f}ms)")
 
         self.working_proxies.sort(key=lambda x: x["latency"])
-        self.working_proxies = self.working_proxies[:self.MAX_WORKING_PROXIES]
+        self.working_proxies = self.working_proxies[:self.max_working_proxies]
         self.last_refresh = datetime.utcnow()
 
         return new_fast
 
     async def _fill_pool(self):
         """Fill proxy pool until we have MIN_WORKING_PROXIES."""
-        while len(self.working_proxies) < self.MIN_WORKING_PROXIES:
+        while len(self.working_proxies) < self.min_working_proxies:
             found = await self._search_batch()
             if found == 0:
                 # No luck this batch, small delay before next
                 await asyncio.sleep(1)
 
-            logger.info(f"Proxy pool: {len(self.working_proxies)}/{self.MIN_WORKING_PROXIES}")
+            logger.info(f"Proxy pool: {len(self.working_proxies)}/{self.min_working_proxies}")
 
     async def _revalidate_existing(self) -> int:
         """Revalidate existing proxies and remove dead ones. Returns removed count."""
@@ -325,8 +326,8 @@ class ProxyManager:
                 logger.info(f"Found {len(self.working_proxies)} working proxies from known list")
 
             # Phase 1: Fill remaining slots from fresh proxy lists
-            if len(self.working_proxies) < self.MIN_WORKING_PROXIES:
-                logger.info(f"Phase 1: Finding {self.MIN_WORKING_PROXIES - len(self.working_proxies)} more fast proxies (<{self.MAX_LATENCY_MS}ms)...")
+            if len(self.working_proxies) < self.min_working_proxies:
+                logger.info(f"Phase 1: Finding {self.min_working_proxies - len(self.working_proxies)} more fast proxies (<{self.MAX_LATENCY_MS}ms)...")
                 self._all_proxies = await self.fetch_proxy_list()
                 await self._fill_pool()
 
@@ -341,8 +342,8 @@ class ProxyManager:
                 removed = await self._revalidate_existing()
 
                 # Refill if below minimum
-                if len(self.working_proxies) < self.MIN_WORKING_PROXIES:
-                    logger.info(f"Pool below minimum ({len(self.working_proxies)}/{self.MIN_WORKING_PROXIES}), refilling...")
+                if len(self.working_proxies) < self.min_working_proxies:
+                    logger.info(f"Pool below minimum ({len(self.working_proxies)}/{self.min_working_proxies}), refilling...")
                     await self._fill_pool()
 
         except asyncio.CancelledError:
@@ -386,7 +387,8 @@ class ProxyManager:
         """Get current proxy pool status."""
         return {
             "working_count": len(self.working_proxies),
-            "min_required": self.MIN_WORKING_PROXIES,
+            "min_required": self.min_working_proxies,
+            "max_working": self.max_working_proxies,
             "max_latency_ms": self.MAX_LATENCY_MS,
             "proxies": self.working_proxies,
             "last_refresh": self.last_refresh.isoformat() if self.last_refresh else None,
@@ -396,7 +398,7 @@ class ProxyManager:
             "tested_count": len(self._tested_proxies),
             "total_available": len(self._all_proxies),
             "known_proxies_count": len(self._known_proxies),
-            "known_proxies_max": self.MAX_KNOWN_PROXIES,
+            "known_proxies_max": self.max_known_proxies,
             "max_failures_before_removal": self.MAX_FAILURES,
         }
 

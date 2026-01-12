@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
 
+    # Proxy Pool
+    proxy_pool_min: int = 20  # Minimum working proxies to maintain
+    proxy_pool_max: int = 25  # Maximum working proxies (buffer)
+    proxy_known_max: int = 100  # Maximum known good proxies to store
+
     # API
     api_prefix: str = "/api"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
