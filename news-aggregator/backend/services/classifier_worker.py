@@ -167,10 +167,11 @@ class ClassifierWorker:
 
         # Phase 1: Query items without pre_filter (read-only, no lock needed)
         async with async_session_maker() as db:
+            from database import json_extract_path
             query = (
                 select(Item)
                 .where(
-                    func.json_extract(Item.metadata_, "$.pre_filter").is_(None),
+                    json_extract_path(Item.metadata_, "pre_filter").is_(None),
                 )
                 .options(selectinload(Item.channel).selectinload(Channel.source))
                 .order_by(Item.fetched_at.desc())
@@ -371,10 +372,11 @@ async def stop_classifier_worker():
 
 async def get_unclassified_count() -> int:
     """Get count of items without classifier results."""
+    from database import json_extract_path
     async with async_session_maker() as db:
         result = await db.execute(
             select(func.count(Item.id)).where(
-                func.json_extract(Item.metadata_, "$.pre_filter").is_(None)
+                json_extract_path(Item.metadata_, "pre_filter").is_(None)
             )
         )
         return result.scalar() or 0
