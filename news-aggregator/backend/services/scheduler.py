@@ -212,6 +212,27 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         logger.error(f"Error fetching channel {channel_id}: {e}")
         raise
 
+    # Phase 2.5: Pre-filter items BEFORE entering database session
+    # This avoids async context conflicts between httpx and SQLAlchemy
+    pre_filter_results: dict[str, dict] = {}
+    if relevance_filter and not training_mode and raw_items:
+        logger.debug(f"Pre-filtering {len(raw_items)} items for channel {channel_id}")
+        for raw_item in raw_items:
+            try:
+                should_process, result = await relevance_filter.should_process(
+                    title=raw_item.title,
+                    content=raw_item.content,
+                    source=source_name,
+                )
+                if result:
+                    pre_filter_results[raw_item.external_id] = {
+                        "should_process": should_process,
+                        "result": result,
+                    }
+            except Exception as e:
+                logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
+        logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
+
     # Phase 3: Database writes - process and store items (serialized)
     async with db_write_lock:
         async with async_session_maker() as db:
@@ -222,7 +243,14 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
 
             try:
                 # Process through pipeline (includes database writes)
-                pipeline = Pipeline(db, processor=processor, relevance_filter=relevance_filter, training_mode=training_mode)
+                # Pass pre-computed filter results to avoid async context issues
+                pipeline = Pipeline(
+                    db,
+                    processor=processor,
+                    relevance_filter=relevance_filter,
+                    training_mode=training_mode,
+                    pre_filter_results=pre_filter_results,
+                )
                 new_items = await pipeline.process(raw_items, channel)
 
                 channel.last_fetch_at = datetime.utcnow()

@@ -47,6 +47,7 @@ class Pipeline:
         processor: ItemProcessor | None = None,
         relevance_filter: "RelevanceFilter | None" = None,
         training_mode: bool = False,
+        pre_filter_results: dict[str, dict] | None = None,
     ):
         """Initialize pipeline.
 
@@ -56,11 +57,15 @@ class Pipeline:
             relevance_filter: Optional pre-filter for relevance classification
             training_mode: If True, disables filtering (age, keyword, LLM relevance)
                           for training data collection. Only deduplication remains.
+            pre_filter_results: Pre-computed filter results keyed by external_id.
+                              If provided, uses these instead of calling relevance_filter
+                              to avoid async context conflicts with SQLAlchemy.
         """
         self.db = db
         self.processor = processor
         self.relevance_filter = relevance_filter
         self.training_mode = training_mode
+        self.pre_filter_results = pre_filter_results or {}
         self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
@@ -120,23 +125,35 @@ class Pipeline:
             await self._apply_rules(item)
 
             # 5. Pre-filter with embedding classifier (skip LLM for clearly irrelevant items)
+            # Use pre-computed results if available (passed from scheduler to avoid async conflicts)
             pre_filter_result = None
             skip_llm = False
-            if self.relevance_filter and not self.training_mode:
-                try:
-                    should_process, pre_filter_result = await self.relevance_filter.should_process(
-                        title=normalized.title,
-                        content=normalized.content,
-                        source=channel.source.name if channel.source else "",
-                    )
+            if not self.training_mode:
+                # Check for pre-computed results first (avoids SQLAlchemy async context issues)
+                if normalized.external_id in self.pre_filter_results:
+                    cached = self.pre_filter_results[normalized.external_id]
+                    should_process = cached["should_process"]
+                    pre_filter_result = cached["result"]
                     if not should_process:
-                        # Mark as irrelevant, skip LLM but still store
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
                         item.priority = Priority.NONE
                         item.priority_score = 10
                         skip_llm = True
-                except Exception as e:
-                    logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
+                elif self.relevance_filter:
+                    # Fallback: call classifier directly (may fail in async SQLAlchemy context)
+                    try:
+                        should_process, pre_filter_result = await self.relevance_filter.should_process(
+                            title=normalized.title,
+                            content=normalized.content,
+                            source=channel.source.name if channel.source else "",
+                        )
+                        if not should_process:
+                            logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
+                            item.priority = Priority.NONE
+                            item.priority_score = 10
+                            skip_llm = True
+                    except Exception as e:
+                        logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
 
             # 6. LLM processing is now handled by the LLM worker (llm_worker.py)
             # The worker runs continuously and processes items with priority ordering.
@@ -409,6 +426,7 @@ async def process_items(
     processor: "ItemProcessor | None" = None,
     relevance_filter: "RelevanceFilter | None" = None,
     training_mode: bool = False,
+    pre_filter_results: dict[str, dict] | None = None,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
 
@@ -419,6 +437,7 @@ async def process_items(
         processor: Optional LLM processor for summarization and semantic rules
         relevance_filter: Optional pre-filter for relevance classification
         training_mode: If True, disables filtering for training data collection
+        pre_filter_results: Pre-computed filter results keyed by external_id
 
     Returns:
         List of newly created Item objects
@@ -428,5 +447,6 @@ async def process_items(
         processor=processor,
         relevance_filter=relevance_filter,
         training_mode=training_mode,
+        pre_filter_results=pre_filter_results,
     )
     return await pipeline.process(raw_items, channel)
