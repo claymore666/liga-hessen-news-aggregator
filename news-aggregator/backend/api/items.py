@@ -190,7 +190,7 @@ async def get_retry_queue_stats(
     return {
         "total": total,
         "by_priority": by_priority,
-        "order": ["high", "unknown", "edge_case"],
+        "order": ["high", "unknown", "edge_case", "low"],
     }
 
 

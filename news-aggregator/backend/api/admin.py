@@ -416,6 +416,8 @@ class ClassifyResponse(BaseModel):
 async def classify_items_for_confidence(
     limit: int = Query(100, ge=1, le=1000, description="Max items to classify"),
     update_retry_priority: bool = Query(True, description="Update retry_priority based on confidence"),
+    force: bool = Query(False, description="Re-classify items that already have confidence"),
+    retry_queue_only: bool = Query(False, description="Only classify items in the retry queue"),
     db: AsyncSession = Depends(get_db),
 ) -> ClassifyResponse:
     """Run classifier on items without relevance confidence.
@@ -423,6 +425,11 @@ async def classify_items_for_confidence(
     This is useful to populate confidence scores for items that were
     fetched before the classifier was available, allowing better
     prioritization of the LLM retry queue.
+
+    Priority thresholds:
+    - high: >= 0.5 (likely relevant, process first)
+    - edge_case: 0.25-0.5 (uncertain)
+    - low: < 0.25 (certainly irrelevant, skipped by default)
 
     The classifier is fast (embedding-based) compared to LLM processing.
     """
@@ -434,20 +441,24 @@ async def classify_items_for_confidence(
     if not relevance_filter:
         raise HTTPException(status_code=503, detail="Classifier service not available")
 
-    # Query items without relevance_confidence
-    # Prioritize items that need LLM processing (retry queue)
-    query = (
-        select(Item)
-        .options(selectinload(Item.channel).selectinload(Channel.source))
-        .where(
+    # Build query
+    query = select(Item).options(selectinload(Item.channel).selectinload(Channel.source))
+
+    # Filter by confidence (unless force)
+    if not force:
+        query = query.where(
             func.json_extract(Item.metadata_, "$.pre_filter.relevance_confidence").is_(None)
         )
-        .order_by(
-            Item.needs_llm_processing.desc(),  # Items needing retry first
-            Item.fetched_at.desc()
-        )
-        .limit(limit)
-    )
+
+    # Filter to retry queue only
+    if retry_queue_only:
+        query = query.where(Item.needs_llm_processing == True)  # noqa: E712
+
+    # Prioritize items that need LLM processing
+    query = query.order_by(
+        Item.needs_llm_processing.desc(),
+        Item.fetched_at.desc()
+    ).limit(limit)
     result = await db.execute(query)
     items = result.scalars().all()
 
@@ -485,12 +496,18 @@ async def classify_items_for_confidence(
             }
 
             # Update retry_priority if item needs LLM processing
+            # Priority levels based on confidence:
+            # - high: >= 0.5 (likely relevant, process first)
+            # - edge_case: 0.25-0.5 (uncertain, process after high)
+            # - low: < 0.25 (certainly irrelevant, skip or process last)
             if update_retry_priority and item.needs_llm_processing:
                 confidence = classification.get("relevance_confidence", 0.5)
                 if confidence >= 0.5:
                     new_metadata["retry_priority"] = "high"
-                else:
+                elif confidence >= 0.25:
                     new_metadata["retry_priority"] = "edge_case"
+                else:
+                    new_metadata["retry_priority"] = "low"
 
             # Assign new dict to trigger SQLAlchemy change detection
             item.metadata_ = new_metadata

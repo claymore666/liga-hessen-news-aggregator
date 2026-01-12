@@ -427,17 +427,25 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
         # Use SQLite json_extract function for compatibility
         from sqlalchemy import func
 
+        # Priority order: high > unknown > edge_case > low
+        # "low" items are certainly irrelevant (confidence < 0.25)
         retry_priority = func.json_extract(Item.metadata_, "$.retry_priority")
         priority_order = case(
             (retry_priority == "high", 1),
             (retry_priority == "unknown", 2),
             (retry_priority == "edge_case", 3),
-            else_=4,
+            (retry_priority == "low", 4),
+            else_=5,
         )
+        # Skip "low" priority items (certainly irrelevant) by default
+        # They can still be processed manually if needed
         query = (
             select(Item)
             .options(selectinload(Item.channel).selectinload(Channel.source))
-            .where(Item.needs_llm_processing == True)  # noqa: E712
+            .where(
+                Item.needs_llm_processing == True,  # noqa: E712
+                retry_priority != "low",  # Skip certainly irrelevant items
+            )
             .order_by(priority_order, Item.fetched_at.desc())
             .limit(batch_size)
         )
