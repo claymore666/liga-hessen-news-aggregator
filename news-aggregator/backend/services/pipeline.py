@@ -138,67 +138,13 @@ class Pipeline:
                 except Exception as e:
                     logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
 
-            # 6. LLM-based categorization and summarization (skip if pre-filtered)
-            llm_processed = False
-            if self.processor and not self.training_mode and not skip_llm:
-                try:
-                    # Get full LLM analysis (relevance + summary + priority suggestion)
-                    # Pass source_name since item.channel relationship isn't loaded yet
-                    source_name = channel.source.name if channel.source else "Unbekannt"
-                    analysis = await self.processor.analyze(item, source_name=source_name)
+            # 6. LLM processing is now handled by the LLM worker (llm_worker.py)
+            # The worker runs continuously and processes items with priority ordering.
+            # Fresh items are enqueued after database flush for immediate processing.
 
-                    # Record relevance score (no filtering, just for reference)
-                    relevance_score = analysis.get("relevance_score", 0.5)
-
-                    # Update priority based on LLM suggestion
-                    # New model returns "priority", old model used "priority_suggestion"
-                    llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-
-                    # If LLM says not relevant, force none priority
-                    if analysis.get("relevant") is False:
-                        llm_priority = "low"
-
-                    # Map LLM output to new priority system (critical→high, high→medium, medium→low, low→none)
-                    if llm_priority == "critical":
-                        item.priority = Priority.HIGH
-                        item.priority_score = max(item.priority_score, 90)
-                    elif llm_priority == "high":
-                        item.priority = Priority.MEDIUM
-                        item.priority_score = max(item.priority_score, 70)
-                    elif llm_priority == "medium":
-                        item.priority = Priority.LOW
-                        # Keep keyword-based score for low
-                    else:
-                        # null or "low" = NONE (not relevant)
-                        item.priority = Priority.NONE
-                        item.priority_score = min(item.priority_score, 40)
-
-                    # Set summary from analysis
-                    if analysis.get("summary"):
-                        item.summary = analysis["summary"]
-
-                    # Set detailed analysis from analysis
-                    if analysis.get("detailed_analysis"):
-                        item.detailed_analysis = analysis["detailed_analysis"]
-
-                    # Store analysis metadata
-                    item.metadata_["llm_analysis"] = {
-                        "relevance_score": relevance_score,
-                        "priority_suggestion": llm_priority,
-                        "assigned_ak": analysis.get("assigned_ak"),
-                        "tags": analysis.get("tags", []),
-                        "reasoning": analysis.get("reasoning"),
-                    }
-
-                    llm_processed = True
-                    logger.info(f"LLM analysis: {normalized.title[:40]} -> relevance={relevance_score:.2f}, priority={llm_priority}")
-
-                except Exception as e:
-                    logger.warning(f"LLM analysis failed for item: {e}")
-
-            # 6a. Track if LLM processing is needed for retry
-            # Mark for retry if: LLM was unavailable OR failed, BUT not if pre-filtered as irrelevant
-            if not skip_llm and not llm_processed and not self.training_mode:
+            # 6a. Mark items for LLM processing (worker will process them)
+            # Skip if pre-filtered as irrelevant or in training mode
+            if not skip_llm and not self.training_mode:
                 item.needs_llm_processing = True
                 # Store classifier confidence for retry prioritization
                 # Thresholds: high >= 0.5, edge_case >= 0.25, low < 0.25
@@ -283,6 +229,20 @@ class Pipeline:
                         logger.info(f"Indexed {indexed} items in vector store")
                 except Exception as e:
                     logger.warning(f"Failed to index items in vector store: {e}")
+
+            # 10. Enqueue fresh items to LLM worker for immediate processing
+            if not self.training_mode:
+                from services.llm_worker import enqueue_fresh_item
+
+                items_to_process = [
+                    item for item in new_items
+                    if item.needs_llm_processing
+                ]
+                for item in items_to_process:
+                    await enqueue_fresh_item(item.id)
+
+                if items_to_process:
+                    logger.info(f"Enqueued {len(items_to_process)} fresh items to LLM worker")
 
         return new_items
 

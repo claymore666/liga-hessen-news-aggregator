@@ -582,14 +582,9 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
-    # LLM retry job (every 5 minutes) - processes items that missed LLM during GPU downtime
-    scheduler.add_job(
-        retry_llm_processing,
-        trigger=IntervalTrigger(minutes=5),
-        id="retry_llm_processing",
-        name="Retry LLM processing for missed items",
-        replace_existing=True,
-    )
+    # NOTE: LLM retry processing is now handled by the LLM worker (llm_worker.py)
+    # which runs continuously and processes items with priority ordering.
+    # The old 5-minute interval job has been removed for efficiency.
 
     scheduler.start()
     logger.info("Scheduler started")
