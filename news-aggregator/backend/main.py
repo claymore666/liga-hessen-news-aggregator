@@ -18,6 +18,10 @@ from database import init_db
 from services.scheduler import start_scheduler, stop_scheduler
 from services.proxy_manager import proxy_manager
 from services.llm_worker import start_worker, stop_worker
+from services.classifier_worker import (
+    start_classifier_worker,
+    stop_classifier_worker,
+)
 
 
 async def run_migrations() -> None:
@@ -79,6 +83,40 @@ async def run_migrations() -> None:
             await conn.execute(text("UPDATE items SET priority = 'low' WHERE priority = '_low'"))
             logging.info("Migration: Priority values converted successfully")
 
+        # One-time migration: Clear pre_filter for items that were never LLM processed
+        # This allows the classifier worker to reclassify them with the new priority logic
+        # (classifier takes precedence over keywords)
+        result = await conn.execute(text(
+            "SELECT value FROM settings WHERE key = 'classifier_reclassify_migration_done'"
+        ))
+        migration_done = result.scalar()
+
+        if not migration_done:
+            # Count items that need reclassification (no summary = not LLM processed)
+            result = await conn.execute(text(
+                "SELECT COUNT(*) FROM items WHERE (summary IS NULL OR summary = '')"
+            ))
+            items_to_reclassify = result.scalar() or 0
+
+            if items_to_reclassify > 0:
+                logging.info(f"Migration: Marking {items_to_reclassify} non-LLM-processed items for reclassification")
+                # Clear pre_filter metadata so classifier worker will reprocess them
+                await conn.execute(text("""
+                    UPDATE items
+                    SET metadata = json_remove(metadata, '$.pre_filter')
+                    WHERE (summary IS NULL OR summary = '')
+                      AND json_extract(metadata, '$.pre_filter') IS NOT NULL
+                """))
+                logging.info("Migration: Items marked for reclassification")
+
+            # Mark migration as complete
+            await conn.execute(text("""
+                INSERT OR REPLACE INTO settings (key, value, description)
+                VALUES ('classifier_reclassify_migration_done', 'true',
+                        'One-time migration to reclassify non-LLM-processed items with new priority logic')
+            """))
+            logging.info("Migration: Classifier reclassify migration marked complete")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -97,9 +135,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         backlog_batch_size=50,  # Backlog items per query
     )
 
+    # Start classifier worker for processing unclassified items
+    # Worker classifies items without pre_filter metadata
+    await start_classifier_worker(
+        batch_size=50,          # Items per batch
+        idle_sleep=60.0,        # Seconds to sleep when idle
+    )
+
     yield
 
     # Shutdown
+    await stop_classifier_worker()
     await stop_worker()
     proxy_manager.stop_background_search()
     stop_scheduler()
