@@ -607,3 +607,89 @@ async def resume_worker() -> dict:
 
     worker.resume()
     return {"status": "resumed", "message": "LLM worker resumed"}
+
+
+# ============================================================================
+# Classifier Worker Status API
+# ============================================================================
+
+
+class ClassifierWorkerStatusResponse(BaseModel):
+    """Classifier Worker status and statistics."""
+
+    running: bool
+    paused: bool
+    stats: dict
+
+
+@router.get("/classifier/worker/status", response_model=ClassifierWorkerStatusResponse)
+async def get_classifier_worker_status() -> ClassifierWorkerStatusResponse:
+    """Get classifier worker status and statistics.
+
+    The classifier worker processes items that have never been classified
+    (no pre_filter metadata) and updates their priority based on classifier confidence.
+    """
+    from services.classifier_worker import get_classifier_worker
+
+    worker = get_classifier_worker()
+    if worker is None:
+        return ClassifierWorkerStatusResponse(
+            running=False,
+            paused=False,
+            stats={
+                "processed": 0,
+                "priority_changed": 0,
+                "errors": 0,
+                "started_at": None,
+                "last_processed_at": None,
+            },
+        )
+
+    status = worker.get_status()
+    return ClassifierWorkerStatusResponse(
+        running=status["running"],
+        paused=status["paused"],
+        stats=status["stats"],
+    )
+
+
+@router.post("/classifier/worker/pause")
+async def pause_classifier_worker() -> dict:
+    """Pause classifier worker processing.
+
+    Items will still be queued but not processed until resumed.
+    """
+    from services.classifier_worker import get_classifier_worker
+
+    worker = get_classifier_worker()
+    if worker is None:
+        raise HTTPException(status_code=503, detail="Classifier worker not running")
+
+    worker.pause()
+    return {"status": "paused", "message": "Classifier worker paused"}
+
+
+@router.post("/classifier/worker/resume")
+async def resume_classifier_worker() -> dict:
+    """Resume classifier worker processing."""
+    from services.classifier_worker import get_classifier_worker
+
+    worker = get_classifier_worker()
+    if worker is None:
+        raise HTTPException(status_code=503, detail="Classifier worker not running")
+
+    worker.resume()
+    return {"status": "resumed", "message": "Classifier worker resumed"}
+
+
+@router.get("/classifier/unclassified/count")
+async def get_classifier_unclassified_count() -> dict:
+    """Get count of items that have not been classified yet.
+
+    These items have no pre_filter metadata and will be processed
+    by the classifier worker.
+    """
+    from services.classifier_worker import get_unclassified_count
+
+    count = await get_unclassified_count()
+    return {"unclassified_count": count}

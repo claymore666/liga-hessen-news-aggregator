@@ -122,38 +122,44 @@ class Pipeline:
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
+            # Keywords serve as temporary fallback until classifier processes the item
             await self._apply_rules(item)
+            keyword_priority = item.priority
+            keyword_score = item.priority_score
 
-            # 5. Pre-filter with embedding classifier (skip LLM for clearly irrelevant items)
+            # 5. Classifier takes precedence over keywords
             # Use pre-computed results if available (passed from scheduler to avoid async conflicts)
+            # Classifier worker will process items missed here (e.g., during classifier downtime)
             pre_filter_result = None
             skip_llm = False
             if not self.training_mode:
                 # Check for pre-computed results first (avoids SQLAlchemy async context issues)
                 if normalized.external_id in self.pre_filter_results:
                     cached = self.pre_filter_results[normalized.external_id]
-                    should_process = cached["should_process"]
                     pre_filter_result = cached["result"]
-                    if not should_process:
-                        logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
-                        item.priority = Priority.NONE
-                        item.priority_score = 10
-                        skip_llm = True
                 elif self.relevance_filter:
                     # Fallback: call classifier directly (may fail in async SQLAlchemy context)
                     try:
-                        should_process, pre_filter_result = await self.relevance_filter.should_process(
+                        _, pre_filter_result = await self.relevance_filter.should_process(
                             title=normalized.title,
                             content=normalized.content,
                             source=channel.source.name if channel.source else "",
                         )
-                        if not should_process:
-                            logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
-                            item.priority = Priority.NONE
-                            item.priority_score = 10
-                            skip_llm = True
                     except Exception as e:
-                        logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
+                        logger.warning(f"Pre-filter failed, using keywords as fallback: {e}")
+
+                # 5a. Apply classifier-based priority (takes precedence over keywords)
+                if pre_filter_result:
+                    confidence = pre_filter_result.get("relevance_confidence", 0.5)
+                    item.priority, item.priority_score, skip_llm = self._priority_from_confidence(confidence)
+
+                    if item.priority != keyword_priority:
+                        logger.info(
+                            f"Classifier override: {normalized.title[:40]}... "
+                            f"conf={confidence:.2f} {keyword_priority.value}->{item.priority.value}"
+                        )
+                    elif skip_llm:
+                        logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
 
             # 6. LLM processing is now handled by the LLM worker (llm_worker.py)
             # The worker runs continuously and processes items with priority ordering.
@@ -164,7 +170,6 @@ class Pipeline:
             if not skip_llm and not self.training_mode:
                 item.needs_llm_processing = True
                 # Store classifier confidence for retry prioritization
-                # Thresholds: high >= 0.5, edge_case >= 0.25, low < 0.25
                 if pre_filter_result:
                     confidence = pre_filter_result.get("relevance_confidence", 0.5)
                     if confidence >= 0.5:
@@ -174,7 +179,7 @@ class Pipeline:
                     else:
                         item.metadata_["retry_priority"] = "low"
                 else:
-                    # No classifier result - treat as unknown
+                    # No classifier result - treat as unknown (will be processed by classifier worker)
                     item.metadata_["retry_priority"] = "unknown"
                 logger.info(f"Marked for LLM retry: {normalized.title[:40]} (priority: {item.metadata_.get('retry_priority')})")
 
@@ -417,6 +422,28 @@ class Pipeline:
             return Priority.LOW
         else:
             return Priority.NONE
+
+    def _priority_from_confidence(self, confidence: float) -> tuple[Priority, int, bool]:
+        """Determine priority based on classifier confidence.
+
+        Classifier takes precedence over keywords.
+        Thresholds match classifier_worker.py and admin endpoint.
+
+        Args:
+            confidence: Relevance confidence from classifier (0-1)
+
+        Returns:
+            Tuple of (priority, score, skip_llm)
+        """
+        if confidence >= 0.5:
+            # Likely relevant - medium priority, let LLM confirm
+            return Priority.MEDIUM, 70, False
+        elif confidence >= 0.25:
+            # Edge case - low priority, let LLM decide
+            return Priority.LOW, 55, False
+        else:
+            # Certainly irrelevant - none priority, skip LLM
+            return Priority.NONE, 20, True
 
 
 async def process_items(
