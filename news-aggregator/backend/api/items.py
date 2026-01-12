@@ -73,9 +73,13 @@ async def list_items(
         # By default, exclude archived items
         query = query.where(Item.is_archived == False)  # noqa: E712
     if since is not None:
-        query = query.where(Item.published_at >= since)
+        # Strip timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE compatibility
+        since_naive = since.replace(tzinfo=None) if since.tzinfo else since
+        query = query.where(Item.published_at >= since_naive)
     if until is not None:
-        query = query.where(Item.published_at <= until)
+        # Strip timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE compatibility
+        until_naive = until.replace(tzinfo=None) if until.tzinfo else until
+        query = query.where(Item.published_at <= until_naive)
     if search:
         search_pattern = f"%{search}%"
         query = query.where(
