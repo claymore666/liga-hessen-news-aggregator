@@ -17,6 +17,7 @@ from config import settings
 from database import init_db
 from services.scheduler import start_scheduler, stop_scheduler
 from services.proxy_manager import proxy_manager
+from services.llm_worker import start_worker, stop_worker
 
 
 async def run_migrations() -> None:
@@ -87,8 +88,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await run_migrations()
     start_scheduler()
     proxy_manager.start_background_search()
+
+    # Start LLM worker for continuous processing
+    # Worker processes fresh items immediately, backlog when idle
+    await start_worker(
+        batch_size=10,          # Fresh items per batch
+        idle_sleep=30.0,        # Seconds to sleep when no work
+        backlog_batch_size=50,  # Backlog items per query
+    )
+
     yield
+
     # Shutdown
+    await stop_worker()
     proxy_manager.stop_background_search()
     stop_scheduler()
 

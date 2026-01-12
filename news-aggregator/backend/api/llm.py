@@ -530,3 +530,80 @@ async def disable_llm(db: AsyncSession = Depends(get_db)) -> LLMToggleResponse:
         message="LLM processing disabled",
         unprocessed_count=unprocessed_count,
     )
+
+
+# ============================================================================
+# LLM Worker Status API
+# ============================================================================
+
+
+class WorkerStatusResponse(BaseModel):
+    """LLM Worker status and statistics."""
+
+    running: bool
+    paused: bool
+    fresh_queue_size: int
+    stats: dict
+
+
+@router.get("/llm/worker/status", response_model=WorkerStatusResponse)
+async def get_worker_status() -> WorkerStatusResponse:
+    """Get LLM worker status and statistics.
+
+    The worker processes items continuously with priority:
+    1. Fresh items (from fetch) - immediate processing
+    2. Backlog items (needs_llm_processing=True) - when idle
+    """
+    from services.llm_worker import get_worker
+
+    worker = get_worker()
+    if worker is None:
+        return WorkerStatusResponse(
+            running=False,
+            paused=False,
+            fresh_queue_size=0,
+            stats={
+                "fresh_processed": 0,
+                "backlog_processed": 0,
+                "errors": 0,
+                "started_at": None,
+                "last_processed_at": None,
+            },
+        )
+
+    status = worker.get_status()
+    return WorkerStatusResponse(
+        running=status["running"],
+        paused=status["paused"],
+        fresh_queue_size=status["fresh_queue_size"],
+        stats=status["stats"],
+    )
+
+
+@router.post("/llm/worker/pause")
+async def pause_worker() -> dict:
+    """Pause LLM worker processing.
+
+    Items will still be queued but not processed until resumed.
+    """
+    from services.llm_worker import get_worker
+
+    worker = get_worker()
+    if worker is None:
+        raise HTTPException(status_code=503, detail="LLM worker not running")
+
+    worker.pause()
+    return {"status": "paused", "message": "LLM worker paused"}
+
+
+@router.post("/llm/worker/resume")
+async def resume_worker() -> dict:
+    """Resume LLM worker processing."""
+    from services.llm_worker import get_worker
+
+    worker = get_worker()
+    if worker is None:
+        raise HTTPException(status_code=503, detail="LLM worker not running")
+
+    worker.resume()
+    return {"status": "resumed", "message": "LLM worker resumed"}
