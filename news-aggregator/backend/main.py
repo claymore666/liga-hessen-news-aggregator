@@ -26,27 +26,32 @@ from services.classifier_worker import (
 
 async def run_migrations() -> None:
     """Run database migrations for existing databases."""
-    from database import engine
-    from sqlalchemy import text
+    from database import engine, is_sqlite
+    from sqlalchemy import inspect, text
 
     async with engine.begin() as conn:
-        # Check if items table exists
-        result = await conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='items'"
-        ))
-        if not result.fetchone():
+        # Database-agnostic table existence check
+        def check_table_exists(sync_conn):
+            inspector = inspect(sync_conn)
+            return "items" in inspector.get_table_names()
+
+        has_items = await conn.run_sync(check_table_exists)
+        if not has_items:
             return  # No items table yet, init_db will create it
 
-        # Check existing columns
-        result = await conn.execute(text("PRAGMA table_info(items)"))
-        columns = [row[1] for row in result.fetchall()]
+        # Database-agnostic column check
+        def get_columns(sync_conn):
+            inspector = inspect(sync_conn)
+            return [col["name"] for col in inspector.get_columns("items")]
 
-        # Add missing columns
+        columns = await conn.run_sync(get_columns)
+
+        # Add missing columns (SQL syntax works on both SQLite and PostgreSQL)
         migrations = [
-            ("is_archived", "ALTER TABLE items ADD COLUMN is_archived BOOLEAN DEFAULT 0"),
+            ("is_archived", "ALTER TABLE items ADD COLUMN is_archived BOOLEAN DEFAULT FALSE"),
             ("assigned_ak", "ALTER TABLE items ADD COLUMN assigned_ak VARCHAR(10)"),
-            ("is_manually_reviewed", "ALTER TABLE items ADD COLUMN is_manually_reviewed BOOLEAN DEFAULT 0"),
-            ("reviewed_at", "ALTER TABLE items ADD COLUMN reviewed_at DATETIME"),
+            ("is_manually_reviewed", "ALTER TABLE items ADD COLUMN is_manually_reviewed BOOLEAN DEFAULT FALSE"),
+            ("reviewed_at", "ALTER TABLE items ADD COLUMN reviewed_at TIMESTAMP"),
         ]
 
         for column_name, sql in migrations:
@@ -56,12 +61,20 @@ async def run_migrations() -> None:
 
         # Migrate assigned_ak from metadata to column for existing items
         if "assigned_ak" not in columns:
-            await conn.execute(text("""
-                UPDATE items
-                SET assigned_ak = json_extract(metadata, '$.llm_analysis.assigned_ak')
-                WHERE json_extract(metadata, '$.llm_analysis.assigned_ak') IS NOT NULL
-                  AND assigned_ak IS NULL
-            """))
+            if is_sqlite():
+                await conn.execute(text("""
+                    UPDATE items
+                    SET assigned_ak = json_extract(metadata, '$.llm_analysis.assigned_ak')
+                    WHERE json_extract(metadata, '$.llm_analysis.assigned_ak') IS NOT NULL
+                      AND assigned_ak IS NULL
+                """))
+            else:
+                await conn.execute(text("""
+                    UPDATE items
+                    SET assigned_ak = metadata #>> '{llm_analysis,assigned_ak}'
+                    WHERE metadata #>> '{llm_analysis,assigned_ak}' IS NOT NULL
+                      AND assigned_ak IS NULL
+                """))
 
         # Migrate priority values: critical→high, high→medium, medium→low, low→none
         # Check if any items still have old priority values ('critical' only exists in old system)
@@ -101,20 +114,36 @@ async def run_migrations() -> None:
             if items_to_reclassify > 0:
                 logging.info(f"Migration: Marking {items_to_reclassify} non-LLM-processed items for reclassification")
                 # Clear pre_filter metadata so classifier worker will reprocess them
-                await conn.execute(text("""
-                    UPDATE items
-                    SET metadata = json_remove(metadata, '$.pre_filter')
-                    WHERE (summary IS NULL OR summary = '')
-                      AND json_extract(metadata, '$.pre_filter') IS NOT NULL
-                """))
+                if is_sqlite():
+                    await conn.execute(text("""
+                        UPDATE items
+                        SET metadata = json_remove(metadata, '$.pre_filter')
+                        WHERE (summary IS NULL OR summary = '')
+                          AND json_extract(metadata, '$.pre_filter') IS NOT NULL
+                    """))
+                else:
+                    await conn.execute(text("""
+                        UPDATE items
+                        SET metadata = metadata #- '{pre_filter}'
+                        WHERE (summary IS NULL OR summary = '')
+                          AND metadata #>> '{pre_filter}' IS NOT NULL
+                    """))
                 logging.info("Migration: Items marked for reclassification")
 
-            # Mark migration as complete
-            await conn.execute(text("""
-                INSERT OR REPLACE INTO settings (key, value, description)
-                VALUES ('classifier_reclassify_migration_done', 'true',
-                        'One-time migration to reclassify non-LLM-processed items with new priority logic')
-            """))
+            # Mark migration as complete (use upsert syntax that works on both)
+            if is_sqlite():
+                await conn.execute(text("""
+                    INSERT OR REPLACE INTO settings (key, value, description)
+                    VALUES ('classifier_reclassify_migration_done', '"true"',
+                            'One-time migration to reclassify non-LLM-processed items with new priority logic')
+                """))
+            else:
+                await conn.execute(text("""
+                    INSERT INTO settings (key, value, description)
+                    VALUES ('classifier_reclassify_migration_done', '"true"',
+                            'One-time migration to reclassify non-LLM-processed items with new priority logic')
+                    ON CONFLICT (key) DO UPDATE SET value = '"true"'
+                """))
             logging.info("Migration: Classifier reclassify migration marked complete")
 
 

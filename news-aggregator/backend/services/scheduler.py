@@ -451,13 +451,11 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
 
     async with async_session_maker() as db:
         # Query items needing LLM processing, ordered by priority
-        # Priority order: high > unknown > edge_case
-        # Use SQLite json_extract function for compatibility
-        from sqlalchemy import func
-
         # Priority order: high > unknown > edge_case > low
         # "low" items are certainly irrelevant (confidence < 0.25)
-        retry_priority = func.json_extract(Item.metadata_, "$.retry_priority")
+        from database import json_extract_path
+
+        retry_priority = json_extract_path(Item.metadata_, "retry_priority")
         priority_order = case(
             (retry_priority == "high", 1),
             (retry_priority == "unknown", 2),

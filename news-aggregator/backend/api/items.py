@@ -8,7 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db, async_session_maker
+from database import get_db, async_session_maker, json_extract_path
 from models import Channel, Item, Priority, Source
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
@@ -93,7 +93,7 @@ async def list_items(
             # Filter by assigned_ak column (or fall back to metadata for legacy items)
             query = query.where(
                 (Item.assigned_ak == ak_values[0]) |
-                (func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak") == ak_values[0])
+                (json_extract_path(Item.metadata_, "llm_analysis", "assigned_ak") == ak_values[0])
             )
         elif len(ak_values) > 1:
             # Multiple AKs - use IN clause
@@ -101,7 +101,7 @@ async def list_items(
             query = query.where(
                 or_(
                     Item.assigned_ak.in_(ak_values),
-                    func.json_extract(Item.metadata_, "$.llm_analysis.assigned_ak").in_(ak_values)
+                    json_extract_path(Item.metadata_, "llm_analysis", "assigned_ak").in_(ak_values)
                 )
             )
 
@@ -170,7 +170,7 @@ async def get_retry_queue_stats(
 
     # Count by retry priority, using COALESCE to treat NULL as 'unknown'
     priority_expr = func.coalesce(
-        func.json_extract(Item.metadata_, "$.retry_priority"),
+        json_extract_path(Item.metadata_, "retry_priority"),
         literal_column("'unknown'")
     ).label("priority")
 
@@ -725,10 +725,10 @@ async def reprocess_items(
         query = query.where(Item.priority != Priority.NONE)
 
     # When not forcing, only select items without LLM analysis
-    # Use SQLite JSON extract to check if key exists
+    # Use database-agnostic JSON extract to check if key exists
     if not force:
         query = query.where(
-            func.json_extract(Item.metadata_, "$.llm_analysis").is_(None)
+            json_extract_path(Item.metadata_, "llm_analysis").is_(None)
         )
 
     query = query.limit(limit)

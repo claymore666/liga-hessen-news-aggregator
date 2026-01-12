@@ -224,7 +224,8 @@ class LLMWorker:
 
         # Query backlog items ordered by priority
         async with async_session_maker() as db:
-            retry_priority = func.json_extract(Item.metadata_, "$.retry_priority")
+            from database import json_extract_path
+            retry_priority = json_extract_path(Item.metadata_, "retry_priority")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "unknown", 2),

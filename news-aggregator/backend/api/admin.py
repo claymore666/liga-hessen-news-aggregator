@@ -446,8 +446,9 @@ async def classify_items_for_confidence(
 
     # Filter by confidence (unless force)
     if not force:
+        from database import json_extract_path
         query = query.where(
-            func.json_extract(Item.metadata_, "$.pre_filter.relevance_confidence").is_(None)
+            json_extract_path(Item.metadata_, "pre_filter", "relevance_confidence").is_(None)
         )
 
     # Filter to retry queue only
