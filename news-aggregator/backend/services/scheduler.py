@@ -388,6 +388,129 @@ async def fetch_due_channels() -> dict:
         _fetch_in_progress = False
 
 
+async def retry_llm_processing(batch_size: int = 10) -> dict:
+    """Retry LLM processing for items that were fetched during GPU unavailability.
+
+    Prioritizes items by retry_priority:
+    1. "high" - classifier marked as likely relevant
+    2. "unknown" - no classifier result available
+    3. "edge_case" - classifier was uncertain
+
+    Args:
+        batch_size: Maximum number of items to process per run
+
+    Returns:
+        Dict with processing statistics.
+    """
+    from sqlalchemy import case
+    from sqlalchemy.orm import selectinload
+
+    from models import Item
+    from services.processor import create_processor_from_settings
+
+    # Try to create LLM processor - if unavailable, skip this run
+    try:
+        processor = await create_processor_from_settings()
+        if not processor:
+            logger.debug("LLM processor not available for retry, skipping")
+            return {"skipped": True, "reason": "llm_unavailable"}
+    except Exception as e:
+        logger.debug(f"LLM processor not available for retry: {e}")
+        return {"skipped": True, "reason": str(e)}
+
+    processed = 0
+    errors = 0
+
+    async with async_session_maker() as db:
+        # Query items needing LLM processing, ordered by priority
+        # Priority order: high > unknown > edge_case
+        # Use SQLite json_extract function for compatibility
+        from sqlalchemy import func
+
+        retry_priority = func.json_extract(Item.metadata_, "$.retry_priority")
+        priority_order = case(
+            (retry_priority == "high", 1),
+            (retry_priority == "unknown", 2),
+            (retry_priority == "edge_case", 3),
+            else_=4,
+        )
+        query = (
+            select(Item)
+            .options(selectinload(Item.channel).selectinload(Channel.source))
+            .where(Item.needs_llm_processing == True)  # noqa: E712
+            .order_by(priority_order, Item.fetched_at.desc())
+            .limit(batch_size)
+        )
+        result = await db.execute(query)
+        items = result.scalars().all()
+
+        if not items:
+            return {"processed": 0, "errors": 0, "remaining": 0}
+
+        logger.info(f"Retrying LLM processing for {len(items)} items")
+
+        for item in items:
+            try:
+                source_name = item.channel.source.name if item.channel.source else "Unbekannt"
+                analysis = await processor.analyze(item, source_name=source_name)
+
+                # Update item with LLM results
+                if analysis.get("summary"):
+                    item.summary = analysis["summary"]
+                if analysis.get("detailed_analysis"):
+                    item.detailed_analysis = analysis["detailed_analysis"]
+
+                # Update priority based on LLM
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if analysis.get("relevant") is False:
+                    llm_priority = "low"
+
+                from models import Priority
+                if llm_priority == "critical":
+                    item.priority = Priority.HIGH
+                    item.priority_score = max(item.priority_score, 90)
+                elif llm_priority == "high":
+                    item.priority = Priority.MEDIUM
+                    item.priority_score = max(item.priority_score, 70)
+                elif llm_priority == "medium":
+                    item.priority = Priority.LOW
+                elif llm_priority:
+                    item.priority = Priority.NONE
+                    item.priority_score = min(item.priority_score, 40)
+
+                # Store analysis metadata
+                item.metadata_["llm_analysis"] = {
+                    "relevance_score": analysis.get("relevance_score", 0.5),
+                    "priority_suggestion": llm_priority,
+                    "assigned_ak": analysis.get("assigned_ak"),
+                    "tags": analysis.get("tags", []),
+                    "reasoning": analysis.get("reasoning"),
+                    "retried_at": datetime.utcnow().isoformat(),
+                }
+
+                # Clear retry flag
+                item.needs_llm_processing = False
+                processed += 1
+
+                logger.info(f"LLM retry success: {item.title[:40]} -> {llm_priority}")
+
+            except Exception as e:
+                logger.warning(f"LLM retry failed for item {item.id}: {e}")
+                errors += 1
+
+        await db.commit()
+
+        # Count remaining items
+        count_query = select(Item).where(Item.needs_llm_processing == True)  # noqa: E712
+        remaining_result = await db.execute(count_query)
+        remaining = len(remaining_result.scalars().all())
+
+    if processed > 0:
+        logger.info(f"LLM retry complete: {processed} processed, {errors} errors, {remaining} remaining")
+
+    return {"processed": processed, "errors": errors, "remaining": remaining}
+
+
 async def cleanup_old_items() -> int:
     """Remove items older than configured retention period.
 
@@ -448,6 +571,15 @@ def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=30),
         id="refresh_proxies",
         name="Refresh proxy list",
+        replace_existing=True,
+    )
+
+    # LLM retry job (every 5 minutes) - processes items that missed LLM during GPU downtime
+    scheduler.add_job(
+        retry_llm_processing,
+        trigger=IntervalTrigger(minutes=5),
+        id="retry_llm_processing",
+        name="Retry LLM processing for missed items",
         replace_existing=True,
     )
 

@@ -139,6 +139,7 @@ class Pipeline:
                     logger.warning(f"Pre-filter failed, continuing with LLM: {e}")
 
             # 6. LLM-based categorization and summarization (skip if pre-filtered)
+            llm_processed = False
             if self.processor and not self.training_mode and not skip_llm:
                 try:
                     # Get full LLM analysis (relevance + summary + priority suggestion)
@@ -189,10 +190,24 @@ class Pipeline:
                         "reasoning": analysis.get("reasoning"),
                     }
 
+                    llm_processed = True
                     logger.info(f"LLM analysis: {normalized.title[:40]} -> relevance={relevance_score:.2f}, priority={llm_priority}")
 
                 except Exception as e:
                     logger.warning(f"LLM analysis failed for item: {e}")
+
+            # 6a. Track if LLM processing is needed for retry
+            # Mark for retry if: LLM was unavailable OR failed, BUT not if pre-filtered as irrelevant
+            if not skip_llm and not llm_processed and not self.training_mode:
+                item.needs_llm_processing = True
+                # Store classifier confidence for retry prioritization
+                if pre_filter_result:
+                    confidence = pre_filter_result.get("relevance_confidence", 0.5)
+                    item.metadata_["retry_priority"] = "high" if confidence >= 0.5 else "edge_case"
+                else:
+                    # No classifier result - treat as unknown, medium priority
+                    item.metadata_["retry_priority"] = "unknown"
+                logger.info(f"Marked for LLM retry: {normalized.title[:40]} (priority: {item.metadata_.get('retry_priority')})")
 
             # 7. Store pre-filter result in metadata if available
             if pre_filter_result:

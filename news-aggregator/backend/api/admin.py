@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, func
+from sqlalchemy import delete, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -346,4 +346,58 @@ async def get_application_logs(
         lines=log_lines,
         source=source,
         total_lines=len(log_lines),
+    )
+
+
+class MigrationResponse(BaseModel):
+    """Response for migration operations."""
+
+    updated_count: int
+    message: str
+
+
+@router.post("/admin/migrate-llm-retry", response_model=MigrationResponse)
+async def migrate_items_for_llm_retry(
+    db: AsyncSession = Depends(get_db),
+) -> MigrationResponse:
+    """Mark existing items without summary as needing LLM processing.
+
+    This is a one-time migration to populate the needs_llm_processing flag
+    for items that were fetched when the LLM was unavailable.
+
+    Items WITH a summary are considered already processed and skipped.
+    """
+    # Count items without summary that aren't already marked
+    count_query = select(func.count(Item.id)).where(
+        Item.summary.is_(None),
+        Item.needs_llm_processing == False,  # noqa: E712
+    )
+    count = await db.scalar(count_query) or 0
+
+    if count == 0:
+        return MigrationResponse(
+            updated_count=0,
+            message="No items need migration - all items either have summaries or are already marked for retry",
+        )
+
+    # Update items without summary to need LLM processing
+    stmt = (
+        update(Item)
+        .where(
+            Item.summary.is_(None),
+            Item.needs_llm_processing == False,  # noqa: E712
+        )
+        .values(
+            needs_llm_processing=True,
+            # Set retry priority based on current priority
+            # High/Medium priority items get processed first
+        )
+    )
+    result = await db.execute(stmt)
+    updated = result.rowcount
+
+    logger.info(f"Migration: marked {updated} items for LLM retry")
+    return MigrationResponse(
+        updated_count=updated,
+        message=f"Marked {updated} items without summary for LLM retry processing",
     )

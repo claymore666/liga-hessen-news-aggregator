@@ -206,6 +206,8 @@ class Item(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    # LLM processing status - True if item needs (re)processing due to GPU unavailability
+    needs_llm_processing: Mapped[bool] = mapped_column(default=False, index=True)
 
     # Relationships
     channel: Mapped["Channel"] = relationship(back_populates="items")

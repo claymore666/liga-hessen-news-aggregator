@@ -157,6 +157,64 @@ async def list_items(
     )
 
 
+@router.get("/items/retry-queue")
+async def get_retry_queue_stats(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get statistics about items waiting for LLM retry processing.
+
+    Returns counts by retry priority (high, unknown, edge_case).
+    Items without retry_priority metadata are counted as "unknown".
+    """
+    from sqlalchemy import literal_column
+
+    # Count by retry priority, using COALESCE to treat NULL as 'unknown'
+    priority_expr = func.coalesce(
+        func.json_extract(Item.metadata_, "$.retry_priority"),
+        literal_column("'unknown'")
+    ).label("priority")
+
+    query = select(
+        priority_expr,
+        func.count().label("count"),
+    ).where(
+        Item.needs_llm_processing == True  # noqa: E712
+    ).group_by(priority_expr)
+
+    result = await db.execute(query)
+    rows = result.fetchall()
+
+    by_priority = {str(row[0]).strip('"'): row[1] for row in rows}
+    total = sum(by_priority.values())
+
+    return {
+        "total": total,
+        "by_priority": by_priority,
+        "order": ["high", "unknown", "edge_case"],
+    }
+
+
+@router.post("/items/retry-queue/process")
+async def trigger_retry_processing(
+    background_tasks: BackgroundTasks,
+    batch_size: int = Query(10, ge=1, le=50, description="Number of items to process"),
+) -> dict:
+    """Manually trigger LLM retry processing.
+
+    Processes items marked with needs_llm_processing=True, prioritized by
+    classifier confidence (high > unknown > edge_case).
+    """
+    from services.scheduler import retry_llm_processing
+
+    background_tasks.add_task(retry_llm_processing, batch_size)
+
+    return {
+        "status": "started",
+        "batch_size": batch_size,
+        "message": "Retry processing started in background. Check logs for progress.",
+    }
+
+
 @router.get("/items/{item_id}", response_model=ItemResponse)
 async def get_item(
     item_id: int,
