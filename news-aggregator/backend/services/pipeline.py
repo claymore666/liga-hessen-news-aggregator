@@ -201,11 +201,17 @@ class Pipeline:
             if not skip_llm and not llm_processed and not self.training_mode:
                 item.needs_llm_processing = True
                 # Store classifier confidence for retry prioritization
+                # Thresholds: high >= 0.5, edge_case >= 0.25, low < 0.25
                 if pre_filter_result:
                     confidence = pre_filter_result.get("relevance_confidence", 0.5)
-                    item.metadata_["retry_priority"] = "high" if confidence >= 0.5 else "edge_case"
+                    if confidence >= 0.5:
+                        item.metadata_["retry_priority"] = "high"
+                    elif confidence >= 0.25:
+                        item.metadata_["retry_priority"] = "edge_case"
+                    else:
+                        item.metadata_["retry_priority"] = "low"
                 else:
-                    # No classifier result - treat as unknown, medium priority
+                    # No classifier result - treat as unknown
                     item.metadata_["retry_priority"] = "unknown"
                 logger.info(f"Marked for LLM retry: {normalized.title[:40]} (priority: {item.metadata_.get('retry_priority')})")
 
