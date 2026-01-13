@@ -1,150 +1,243 @@
-# Classifier Training Guide
+# Embedding Classifier Training Guide
+
+Complete guide for training and retraining the embedding-based classifier used for fast pre-filtering of news items.
 
 ## Overview
 
-The embedding classifier uses a two-stage approach:
-1. **NomicV2 embeddings** - Convert text to 768-dim vectors
-2. **RandomForest classifiers** - Predict relevance, priority, and AK
+The system uses a **two-stage classification pipeline**:
 
-## Current Training Data Imbalance
+1. **Embedding Classifier** (this doc) - Fast pre-filtering using ML
+   - NomicV2 embeddings (768-dim vectors)
+   - RandomForest classifiers for relevance, priority, AK
+   - ~33 items/sec throughput
 
-As of 2026-01-12, the training data has severe AK imbalance:
+2. **LLM Classifier** - Detailed analysis for relevant items
+   - Qwen3-14B with system prompt
+   - Full analysis: summary, argumentation, affected groups
+   - See `RETRAINING.md` for LLM training
 
-| AK | Count | % | Status |
-|----|-------|---|--------|
-| null | 536 | 77.9% | OK (irrelevant items) |
-| AK2 | 42 | 6.1% | OK |
-| AK5 | 35 | 5.1% | OK |
-| QAG | 33 | 4.8% | OK |
-| AK1 | 28 | 4.1% | OK |
-| **AK3** | **8** | **1.2%** | **CRITICAL - needs more data** |
-| **AK4** | **6** | **0.9%** | **CRITICAL - needs more data** |
+## Architecture
 
-**Total: 688 training examples**
-
-### Impact
-
-The classifier performs poorly on AK3 (Health/Care) and AK4 (Disability/Inclusion) because it has almost no examples to learn from. Articles about hospitals, nursing care, disability services get misclassified as AK1 or assigned no AK.
-
-## Training Pipeline
-
-### 1. Data Collection
-
-Items flow through the news-aggregator pipeline:
 ```
-Fetch → Classifier (pre-filter) → LLM (full analysis) → Database
+┌─────────────────────────────────────────────────────────────────┐
+│                    Classification Pipeline                       │
+├─────────────────────────────────────────────────────────────────┤
+│  News Item                                                       │
+│      ↓                                                           │
+│  [Embedding Classifier] ──→ relevant=false ──→ Skip LLM         │
+│      ↓ relevant=true                                            │
+│  [LLM Classifier] ──→ Full analysis (priority, AK, summary)     │
+│      ↓                                                           │
+│  Database (curated labels)                                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-LLM-processed items with `llm_analysis` in metadata are the source of ground truth labels.
+## Training Data Sources
 
-### 2. Using VectorDB for Finding Training Candidates
+### Option 1: Export from Production Database (Recommended)
 
-The classifier API includes a ChromaDB vector store for semantic search:
+Items processed by the LLM already have curated labels. Export directly:
 
 ```bash
-# Search for AK3-related content
-curl -X POST "http://gpu1:8082/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Pflege Krankenhaus Altenpflege Pflegeheim Gesundheit", "top_k": 20}'
-
-# Search for AK4-related content
-curl -X POST "http://gpu1:8082/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Behinderung Inklusion Eingliederungshilfe BTHG Teilhabe", "top_k": 20}'
-```
-
-### 3. Manual Classification Workflow
-
-To improve AK3/AK4 classification:
-
-1. **Find candidates** using vector search (semantic similarity to AK keywords)
-2. **Review in news-aggregator UI** - check LLM analysis and correct if needed
-3. **Export corrected items** to training data
-4. **Retrain classifier** with balanced dataset
-
-### 4. Adding Items to VectorDB
-
-Items can be indexed for search:
-
-```bash
-# Single item
-curl -X POST "http://gpu1:8082/index" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "3254",
-    "title": "Betrug im Krankenhaus?: Der große Krach um die Pflegebudgets",
-    "content": "...",
-    "metadata": {"priority": "medium", "source": "FAZ", "assigned_ak": "AK3"}
-  }'
-
-# Batch index
-curl -X POST "http://gpu1:8082/index/batch" \
-  -H "Content-Type: application/json" \
-  -d '{"items": [...]}'
-```
-
-### 5. Exporting Training Data
-
-```bash
-# Export LLM-processed items from PostgreSQL
-docker compose exec db psql -U liga -d liga_news -c "
-SELECT id, title, content, priority, assigned_ak, metadata
-FROM items
-WHERE metadata->'llm_analysis' IS NOT NULL
-  AND assigned_ak IS NOT NULL
-" --csv > training_export.csv
-```
-
-### 6. Retraining the Classifier
-
-```bash
-cd ~/claude.ai/relevance-tuner/relevance-tuner
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 source venv/bin/activate
 
-# Create balanced training splits
-python scripts/create_splits.py --balance-ak
+# Preview what will be exported
+python scripts/export_training_data.py --dry-run
 
-# Train new classifier
-python train_embedding_classifier.py
-
-# Deploy to classifier API
-cp models/embedding_classifier_nomic-v2.pkl services/classifier-api/models/
-docker compose -f services/classifier-api/docker-compose.yml restart
+# Export to data/final/
+python scripts/export_training_data.py
 ```
 
-## Recommended Actions
+**What gets exported:**
+- **Relevant items**: Have `priority` in [low, medium, high, critical] + `assigned_ak`
+- **Irrelevant items**: Have `priority: "none"` - no LLM processing needed
 
-### Short-term: Get More AK3/AK4 Data
+### Option 2: Manual Labeling with Ollama
 
-1. Let LLM worker process the 908 backlog items
-2. Search database for healthcare/disability keywords
-3. Manually review and correct AK assignments
-4. Target: At least 30 examples each for AK3 and AK4
+For new unlabeled data, use the Ollama labeling pipeline:
 
-### Long-term: Automated Rebalancing
+```bash
+# Export raw items
+curl -s "http://localhost:8000/api/items?page_size=500" | \
+  jq -c '.items[]' > data/raw/new_items.jsonl
 
-1. Monitor AK distribution in production
-2. Flag underrepresented categories
-3. Prioritize manual review for weak categories
-4. Periodic retraining with balanced data
+# Label with Ollama
+python scripts/label_with_ollama.py --all --model qwen3:32b
 
-## API Endpoints Reference
+# Create splits
+python scripts/create_splits.py
+```
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/classify` | POST | Classify text → relevance, priority, AK |
-| `/search` | POST | Semantic search in vector store |
-| `/similar` | POST | Find similar items by ID |
-| `/index` | POST | Add single item to vector store |
-| `/index/batch` | POST | Add multiple items to vector store |
-| `/health` | GET | Service status + vector store count |
+## Multi-Label Classification
 
-## Files
+### The Challenge
+
+As of 2026-01, items can be assigned to **multiple AKs** (Arbeitskreise). Example:
+- "Durchleuchtet das Pflegebudget!" → AK1 (budget) + AK3 (healthcare)
+
+**Current distribution** (from 224 relevant items):
+- 39 items (17.4%) have multiple AKs
+- Most common: AK1+AK3, AK1+AK5, AK2+AK5
+
+### Single-Label vs Multi-Label
+
+| Approach | Implementation | Accuracy Trade-off |
+|----------|----------------|-------------------|
+| **Single-label** | `RandomForestClassifier` | Loses 17% of AK associations |
+| **Multi-label** | `MultiOutputClassifier` | Captures all AK associations |
+
+### Multi-Label Implementation
+
+The experimental multi-label classifier uses:
+
+```python
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestClassifier
+
+# Binary matrix: each column = one AK
+# [1,0,0,1,0,0] = AK1 + AK4
+y_ak = create_multilabel_matrix(aks_list, AK_CLASSES)
+
+ak_clf = MultiOutputClassifier(
+    RandomForestClassifier(n_estimators=200, max_depth=15)
+)
+ak_clf.fit(X_embeddings, y_ak)
+```
+
+**Files:**
+- `train_embedding_classifier.py` - Single-label (production)
+- `experiments/train_multilabel_classifier.py` - Multi-label (experimental)
+
+## Training Workflow
+
+### Prerequisites
+
+No GPU needed for embedding classifier training (CPU-only sklearn).
+
+### Step-by-Step
+
+```bash
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
+source venv/bin/activate
+
+# 1. Export training data from production
+python scripts/export_training_data.py
+
+# 2. Train classifier (uses EMBEDDING_BACKEND env var)
+EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
+
+# 3. Deploy to classifier API
+cp models/embedding/embedding_classifier_nomic-v2.pkl \
+   /home/kamienc/claude.ai/ligahessen/relevance-tuner/services/classifier-api/models/
+
+# 4. Restart classifier API
+cd /home/kamienc/claude.ai/ligahessen/relevance-tuner/services/classifier-api
+docker compose restart
+```
+
+### Comparing Models
+
+To compare classifier predictions against LLM ground truth:
+
+```bash
+# Run comparison
+python scripts/compare_classifier_vs_llm.py
+
+# Output includes:
+# - Relevance accuracy
+# - AK accuracy (exact match and partial overlap)
+# - Priority accuracy
+# - Confusion matrices
+```
+
+## Backup & Rollback
+
+### Creating Backups
+
+```bash
+# Backup classifiers + training data
+mkdir -p models/backups/$(date +%Y%m%d)
+cp models/embedding/*.pkl models/backups/$(date +%Y%m%d)/
+tar -czvf models/backups/$(date +%Y%m%d)/training_data.tar.gz data/final/
+```
+
+### Rolling Back
+
+```bash
+# Restore from backup
+cp models/backups/YYYYMMDD/embedding_classifier_nomic-v2.pkl models/embedding/
+
+# Redeploy
+cp models/embedding/embedding_classifier_nomic-v2.pkl \
+   /path/to/classifier-api/models/
+```
+
+## Embedding Backends
+
+| Backend | Relevance Acc | AK Acc | Speed |
+|---------|---------------|--------|-------|
+| **nomic-v2** | 89.9% | 71.1% | 33/sec |
+| jina-v3 | 87.9% | 57.9% | 55/sec |
+| sentence-transformers | 85.9% | 63.2% | 675/sec |
+| ollama (local) | 71.8% | 36.8% | 37/sec |
+
+**Recommendation**: Use `nomic-v2` for best accuracy.
+
+## Current Dataset Statistics
+
+As of 2026-01-13:
+
+| Metric | Value |
+|--------|-------|
+| Total items | 1680 |
+| Relevant | 224 (13.3%) |
+| Irrelevant | 1456 (86.7%) |
+| Multi-AK items | 39 (17.4% of relevant) |
+
+**AK Distribution (relevant only):**
+| AK | Count |
+|----|-------|
+| AK1 | 78 |
+| AK2 | 70 |
+| AK5 | 37 |
+| AK3 | 18 |
+| QAG | 11 |
+| AK4 | 10 |
+
+## Files Reference
 
 | Path | Description |
 |------|-------------|
-| `data/final/train.jsonl` | Training data (688 examples) |
-| `data/final/validation.jsonl` | Validation data |
-| `data/final/test.jsonl` | Test data |
-| `models/embedding_classifier_nomic-v2.pkl` | Trained classifier |
-| `services/classifier-api/` | Production API service |
+| `train_embedding_classifier.py` | Main training script (single-label) |
+| `experiments/train_multilabel_classifier.py` | Multi-label experiment |
+| `scripts/export_training_data.py` | Export from production DB |
+| `scripts/compare_classifier_vs_llm.py` | Model comparison |
+| `models/embedding/*.pkl` | Trained classifiers |
+| `models/backups/YYYYMMDD/` | Dated backups |
+| `data/final/` | Training/validation/test splits |
+| `config.py` | AK_CLASSES, PRIORITY_LEVELS, backend configs |
+
+## Troubleshooting
+
+### Low AK Accuracy
+
+- Check AK distribution - underrepresented classes perform worse
+- AK3, AK4 historically have few examples
+- Consider class weighting or oversampling
+
+### Embedding Model Not Found
+
+```bash
+# For sentence-transformers backends
+pip install sentence-transformers
+
+# For Ollama backend
+ollama pull nomic-embed-text:137m-v1.5-fp16
+```
+
+### Multi-Label vs Single-Label Mismatch
+
+If production uses single-label but training data has multi-label:
+- Use primary AK only: `assigned_ak` field (first AK)
+- Or switch to multi-label classifier
