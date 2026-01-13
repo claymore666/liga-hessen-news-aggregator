@@ -388,6 +388,22 @@ class LLMWorker:
                     item.needs_llm_processing = False
 
                     await db.flush()
+
+                    # Record LLM processing event
+                    from services.item_events import record_event, EVENT_LLM_PROCESSED
+
+                    await record_event(
+                        db,
+                        item.id,
+                        EVENT_LLM_PROCESSED,
+                        data={
+                            "priority": llm_priority,
+                            "assigned_aks": llm_aks,
+                            "relevance_score": analysis.get("relevance_score"),
+                            "source": item_type,
+                        },
+                    )
+
                     processed += 1
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 

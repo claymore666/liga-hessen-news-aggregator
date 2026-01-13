@@ -575,6 +575,32 @@ async def cleanup_old_items() -> int:
         return deleted
 
 
+async def cleanup_old_events() -> int:
+    """Remove item events older than 180 days.
+
+    Returns:
+        Number of events deleted.
+    """
+    from sqlalchemy import delete
+
+    from models import ItemEvent
+
+    logger.info("Starting cleanup of old item events")
+
+    # 180 days retention for audit trail
+    cutoff = datetime.utcnow() - timedelta(days=180)
+
+    async with async_session_maker() as db:
+        stmt = delete(ItemEvent).where(ItemEvent.timestamp < cutoff)
+        result = await db.execute(stmt)
+        await db.commit()
+
+        deleted = result.rowcount
+        if deleted > 0:
+            logger.info(f"Deleted {deleted} old item events")
+        return deleted
+
+
 def start_scheduler() -> None:
     """Start the background scheduler."""
     from services.proxy_manager import proxy_manager
@@ -596,6 +622,17 @@ def start_scheduler() -> None:
         minute=0,
         id="cleanup_old_items",
         name="Clean up old items",
+        replace_existing=True,
+    )
+
+    # Cleanup old item events (daily at 3:15 AM, 180 days retention)
+    scheduler.add_job(
+        cleanup_old_events,
+        trigger="cron",
+        hour=3,
+        minute=15,
+        id="cleanup_old_events",
+        name="Clean up old item events",
         replace_existing=True,
     )
 

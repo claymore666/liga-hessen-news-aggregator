@@ -242,6 +242,21 @@ class Pipeline:
             await self.db.flush()
             logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
 
+            # Record creation events
+            from services.item_events import record_event, EVENT_CREATED
+
+            for item in new_items:
+                await record_event(
+                    self.db,
+                    item.id,
+                    EVENT_CREATED,
+                    data={
+                        "channel_id": channel.id,
+                        "source": channel.source.name if channel.source else None,
+                        "priority": _get_priority_value(item.priority),
+                    },
+                )
+
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
                 try:

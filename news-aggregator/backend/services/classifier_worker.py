@@ -266,6 +266,8 @@ class ClassifierWorker:
 
         # Phase 3: Apply updates to database (with lock and retry for SQLite locks)
         if updates:
+            from services.item_events import record_event, EVENT_CLASSIFIER_PROCESSED
+
             max_retries = 3
             for attempt in range(max_retries):
                 try:
@@ -281,6 +283,17 @@ class ClassifierWorker:
                                         metadata_=upd["metadata_"],
                                         needs_llm_processing=upd["needs_llm_processing"],
                                     )
+                                )
+                                # Record classifier event
+                                await record_event(
+                                    db,
+                                    upd["id"],
+                                    EVENT_CLASSIFIER_PROCESSED,
+                                    data={
+                                        "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
+                                        "priority": upd["priority"],
+                                        "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
+                                    },
                                 )
                             await db.commit()
                     break  # Success, exit retry loop

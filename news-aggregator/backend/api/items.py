@@ -3,17 +3,27 @@
 import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
-from models import Channel, Item, Priority, Source
+from models import Channel, Item, ItemEvent, Priority, Source
 from schemas import ItemListResponse, ItemResponse, ItemUpdate
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Extract client IP from request, handling proxies."""
+    # Check for forwarded header (behind proxy)
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    # Direct connection
+    return request.client.host if request.client else None
 
 
 @router.get("/items", response_model=ItemListResponse)
@@ -237,6 +247,7 @@ async def get_item(
 async def update_item(
     item_id: int,
     update: ItemUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> ItemResponse:
     """Update an item (read status, starred, notes, content, summary, priority).
@@ -309,6 +320,20 @@ async def update_item(
         item.reviewed_at = datetime.utcnow()
 
     await db.flush()
+
+    # Record modification event
+    from services.item_events import record_event, EVENT_USER_MODIFIED
+
+    changes = {k: v for k, v in update.model_dump(exclude_unset=True).items()}
+    if changes:
+        await record_event(
+            db,
+            item_id,
+            EVENT_USER_MODIFIED,
+            data={"changes": changes},
+            ip_address=get_client_ip(request),
+        )
+
     await db.refresh(item)
 
     return ItemResponse.model_validate(item)
@@ -317,6 +342,7 @@ async def update_item(
 @router.post("/items/{item_id}/read")
 async def mark_as_read(
     item_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Mark an item as read."""
@@ -328,12 +354,24 @@ async def mark_as_read(
         raise HTTPException(status_code=404, detail="Item not found")
 
     item.is_read = True
+
+    # Record read event
+    from services.item_events import record_event, EVENT_READ
+
+    await record_event(
+        db,
+        item_id,
+        EVENT_READ,
+        ip_address=get_client_ip(request),
+    )
+
     return {"status": "ok"}
 
 
 @router.post("/items/{item_id}/archive")
 async def toggle_archive(
     item_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str | bool]:
     """Toggle archive status of an item."""
@@ -345,6 +383,18 @@ async def toggle_archive(
         raise HTTPException(status_code=404, detail="Item not found")
 
     item.is_archived = not item.is_archived
+
+    # Record archive event
+    from services.item_events import record_event, EVENT_ARCHIVED
+
+    await record_event(
+        db,
+        item_id,
+        EVENT_ARCHIVED,
+        data={"is_archived": item.is_archived},
+        ip_address=get_client_ip(request),
+    )
+
     return {"status": "ok", "is_archived": item.is_archived}
 
 
@@ -766,3 +816,41 @@ async def reprocess_items(
         "force": force,
         "message": "Reprocessing in background. Check logs for progress.",
     }
+
+
+@router.get("/items/{item_id}/history")
+async def get_item_history(
+    item_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Get event history for an item.
+
+    Returns a list of events in reverse chronological order (newest first).
+    """
+    # Verify item exists
+    item_query = select(Item.id).where(Item.id == item_id)
+    result = await db.execute(item_query)
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Get events
+    query = (
+        select(ItemEvent)
+        .where(ItemEvent.item_id == item_id)
+        .order_by(ItemEvent.timestamp.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    events = result.scalars().all()
+
+    return [
+        {
+            "id": event.id,
+            "event_type": event.event_type,
+            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+            "ip_address": event.ip_address,
+            "data": event.data,
+        }
+        for event in events
+    ]
