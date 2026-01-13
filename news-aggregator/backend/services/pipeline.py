@@ -246,16 +246,19 @@ class Pipeline:
             from services.item_events import record_event, EVENT_CREATED
 
             for item in new_items:
-                await record_event(
-                    self.db,
-                    item.id,
-                    EVENT_CREATED,
-                    data={
-                        "channel_id": channel.id,
-                        "source": channel.source.name if channel.source else None,
-                        "priority": _get_priority_value(item.priority),
-                    },
-                )
+                try:
+                    await record_event(
+                        self.db,
+                        item.id,
+                        EVENT_CREATED,
+                        data={
+                            "channel_id": channel.id,
+                            "source": channel.source.name if channel.source else None,
+                            "priority": _get_priority_value(item.priority),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record creation event for item {item.id}: {e}")
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
