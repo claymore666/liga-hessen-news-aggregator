@@ -240,7 +240,8 @@ class LLMWorker:
                 select(Item.id)
                 .where(
                     Item.needs_llm_processing == True,  # noqa: E712
-                    retry_priority != "low",  # Skip certainly irrelevant (classifier)
+                    # Skip certainly irrelevant (classifier), but include NULL/unknown
+                    or_(retry_priority != "low", retry_priority.is_(None)),
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
