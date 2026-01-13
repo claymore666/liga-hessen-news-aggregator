@@ -255,7 +255,7 @@ onUnmounted(() => {
           </div>
 
           <div v-if="llmWorkerStats" class="mt-2 space-y-1 text-sm text-gray-500">
-            <div>Fresh: {{ llmWorkerStats.fresh }} | Backlog: {{ llmWorkerStats.backlog }}</div>
+            <div>Warteschlange: {{ stats.processing_queue.total }} | Verarbeitet: {{ Number(llmWorkerStats.fresh) + Number(llmWorkerStats.backlog) }}</div>
             <div>Fehler: {{ llmWorkerStats.errors }} | Zuletzt: {{ llmWorkerStats.lastProcessed }}</div>
             <div v-if="llmWorkerStats.itemsTimed > 0">
               Durchschnitt: {{ llmWorkerStats.meanTime.toFixed(1) }}s/Nachricht
@@ -328,8 +328,9 @@ onUnmounted(() => {
             </span>
           </div>
 
-          <div class="mt-2 text-sm text-gray-500">
-            Warten auf Klassifizierung: {{ stats.processing_queue.awaiting_classifier }}
+          <div class="mt-2 space-y-1 text-sm text-gray-500">
+            <div>Warteschlange: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div v-if="llmWorkerStats">LLM-Nachprüfung: {{ llmWorkerStats.backlog }}</div>
           </div>
 
           <div class="mt-4 flex gap-2">
