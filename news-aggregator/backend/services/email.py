@@ -14,6 +14,19 @@ from models import Item, Priority
 logger = logging.getLogger(__name__)
 
 
+def _get_priority_value(priority) -> str:
+    """Safely get priority value whether it's an enum or string."""
+    if hasattr(priority, 'value'):
+        return priority.value
+    return str(priority) if priority else "none"
+
+
+def _priority_to_rank(priority) -> int:
+    """Convert priority to numeric rank for comparison (higher = more important)."""
+    value = _get_priority_value(priority)
+    return {"high": 3, "medium": 2, "low": 1, "none": 0}.get(value, 0)
+
+
 class EmailConfig(BaseModel):
     """Email configuration."""
     recipients: list[EmailStr]
@@ -41,9 +54,13 @@ class BriefingEmail:
     def _group_by_priority(self, items: Sequence[Item]) -> dict[Priority, list[Item]]:
         """Group items by priority level."""
         grouped: dict[Priority, list[Item]] = {p: [] for p in self.PRIORITY_ORDER}
+        min_rank = _priority_to_rank(self.config.min_priority)
         for item in items:
-            if item.priority.value >= self.config.min_priority.value:
-                grouped[item.priority].append(item)
+            if _priority_to_rank(item.priority) >= min_rank:
+                # Group by normalized priority enum
+                priority_value = _get_priority_value(item.priority)
+                priority_key = Priority(priority_value)
+                grouped[priority_key].append(item)
         return grouped
 
     def _format_item_text(self, item: Item) -> str:

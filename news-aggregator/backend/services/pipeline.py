@@ -22,6 +22,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_priority_value(priority) -> str:
+    """Safely get priority value whether it's an enum or string."""
+    if hasattr(priority, 'value'):
+        return priority.value
+    return str(priority) if priority else "none"
+
+
 @dataclass
 class RawItem:
     """Normalized item format from connectors."""
@@ -156,7 +163,7 @@ class Pipeline:
                     if item.priority != keyword_priority:
                         logger.info(
                             f"Classifier override: {normalized.title[:40]}... "
-                            f"conf={confidence:.2f} {keyword_priority.value}->{item.priority.value}"
+                            f"conf={confidence:.2f} {_get_priority_value(keyword_priority)}->{_get_priority_value(item.priority)}"
                         )
                     elif skip_llm:
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
@@ -210,7 +217,7 @@ class Pipeline:
                         # "low" or unknown → NONE (not relevant)
                         item.priority = Priority.NONE
                         item.priority_score = 30
-                    logger.debug(f"Using classifier priority: {clf_priority} -> {item.priority.value}")
+                    logger.debug(f"Using classifier priority: {clf_priority} -> {_get_priority_value(item.priority)}")
 
                 # 7b. Optionally use classifier AK instead of LLM
                 if settings.classifier_use_ak and pre_filter_result.get("ak"):
@@ -240,7 +247,7 @@ class Pipeline:
                             "content": item.content,
                             "metadata": {
                                 "source": channel.source.name if channel.source else "",
-                                "priority": item.priority.value if item.priority else None,
+                                "priority": _get_priority_value(item.priority) if item.priority else None,
                                 "channel_id": str(channel.id),
                             },
                         }
