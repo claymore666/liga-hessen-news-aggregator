@@ -7,6 +7,7 @@ import {
   RssIcon,
   AdjustmentsHorizontalIcon,
   Cog6ToothIcon,
+  ChartBarIcon,
   Bars3Icon,
   XMarkIcon,
   ChevronLeftIcon,
@@ -23,6 +24,7 @@ const navigation = [
   { name: 'Nachrichten', to: '/items', icon: NewspaperIcon },
   { name: 'Quellen', to: '/sources', icon: RssIcon },
   { name: 'Regeln', to: '/rules', icon: AdjustmentsHorizontalIcon },
+  { name: 'System', to: '/stats', icon: ChartBarIcon },
   { name: 'Einstellungen', to: '/settings', icon: Cog6ToothIcon }
 ]
 

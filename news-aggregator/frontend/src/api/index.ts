@@ -136,3 +136,68 @@ export const llmApi = {
   getModels: () => api.get<OllamaModelsResponse>('/llm/models'),
   getSettings: () => api.get<LLMSettingsResponse>('/llm/settings')
 }
+
+// System Stats Types
+export interface WorkerStatus {
+  running: boolean
+  paused: boolean
+  stats: Record<string, unknown>
+}
+
+export interface SchedulerStatus {
+  running: boolean
+  jobs: Array<{
+    id: string
+    name: string
+    next_run: string | null
+    trigger: string
+  }>
+}
+
+export interface ProcessingQueueStats {
+  total: number
+  by_retry_priority: Record<string, number>
+  awaiting_classifier: number
+}
+
+export interface ItemStats {
+  total: number
+  by_priority: Record<string, number>
+  unread: number
+  starred: number
+}
+
+export interface SystemStatsResponse {
+  scheduler: SchedulerStatus
+  llm_worker: WorkerStatus
+  classifier_worker: WorkerStatus
+  processing_queue: ProcessingQueueStats
+  items: ItemStats
+  timestamp: string
+}
+
+export interface WorkerControlResponse {
+  status: string
+  message: string
+}
+
+export const adminApi = {
+  // Stats
+  getStats: () => api.get<SystemStatsResponse>('/admin/stats'),
+
+  // Scheduler controls
+  startScheduler: () => api.post<WorkerControlResponse>('/admin/scheduler/start'),
+  stopScheduler: () => api.post<WorkerControlResponse>('/admin/scheduler/stop'),
+
+  // LLM Worker controls
+  startLlmWorker: () => api.post<WorkerControlResponse>('/admin/llm-worker/start'),
+  stopLlmWorker: () => api.post<WorkerControlResponse>('/admin/llm-worker/stop'),
+  pauseLlmWorker: () => api.post<WorkerControlResponse>('/admin/llm-worker/pause'),
+  resumeLlmWorker: () => api.post<WorkerControlResponse>('/admin/llm-worker/resume'),
+
+  // Classifier Worker controls
+  startClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/start'),
+  stopClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/stop'),
+  pauseClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/pause'),
+  resumeClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/resume'),
+}
