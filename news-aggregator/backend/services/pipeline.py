@@ -73,7 +73,8 @@ class Pipeline:
         self.relevance_filter = relevance_filter
         self.training_mode = training_mode
         self.pre_filter_results = pre_filter_results or {}
-        self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
+        # Use naive UTC datetime (consistent with DB storage)
+        self.cutoff_date = datetime.utcnow() - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
         """Process raw items through the pipeline.
@@ -98,7 +99,11 @@ class Pipeline:
 
         for raw in raw_items:
             # 1. Skip old items (older than MAX_AGE_DAYS) - disabled in training_mode
-            if not self.training_mode and raw.published_at.replace(tzinfo=UTC) < self.cutoff_date:
+            # Normalize published_at to naive UTC for comparison
+            pub_dt = raw.published_at
+            if pub_dt.tzinfo is not None:
+                pub_dt = pub_dt.astimezone(UTC).replace(tzinfo=None)
+            if not self.training_mode and pub_dt < self.cutoff_date:
                 logger.debug(f"Skipping old item: {raw.title[:50]} ({raw.published_at})")
                 continue
 
@@ -277,6 +282,13 @@ class Pipeline:
 
     def _normalize_content(self, raw: RawItem) -> RawItem:
         """Normalize content (strip HTML, fix encoding, etc.)."""
+        # Normalize published_at to UTC naive datetime
+        # Database uses TIMESTAMP WITHOUT TIME ZONE, so we must strip tzinfo
+        published_at = raw.published_at
+        if published_at.tzinfo is not None:
+            # Convert to UTC first, then remove timezone info
+            published_at = published_at.astimezone(UTC).replace(tzinfo=None)
+
         # Strip HTML tags from content
         content = re.sub(r"<[^>]+>", "", raw.content)
 
@@ -300,7 +312,7 @@ class Pipeline:
             content=content,
             url=raw.url,
             author=raw.author,
-            published_at=raw.published_at,
+            published_at=published_at,
             metadata=raw.metadata,
         )
 
