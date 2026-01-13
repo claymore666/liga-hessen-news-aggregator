@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +228,7 @@ class LLMWorker:
         async with async_session_maker() as db:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+            assigned_aks = json_extract_path(Item.metadata_, "llm_analysis", "assigned_aks")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "unknown", 2),
@@ -239,9 +240,18 @@ class LLMWorker:
             query = (
                 select(Item.id)
                 .where(
-                    Item.needs_llm_processing == True,  # noqa: E712
-                    # Skip certainly irrelevant (classifier), but include NULL/unknown
-                    or_(retry_priority != "low", retry_priority.is_(None)),
+                    or_(
+                        # Standard backlog: needs processing and not certainly irrelevant
+                        and_(
+                            Item.needs_llm_processing == True,  # noqa: E712
+                            or_(retry_priority != "low", retry_priority.is_(None)),
+                        ),
+                        # Relevant items without AK assigned need reprocessing
+                        and_(
+                            Item.priority != "none",
+                            or_(assigned_aks.is_(None), assigned_aks == "[]"),
+                        ),
+                    )
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
