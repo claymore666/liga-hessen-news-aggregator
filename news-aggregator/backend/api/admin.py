@@ -496,19 +496,21 @@ async def classify_items_for_confidence(
                 "classified_at": datetime.utcnow().isoformat(),
             }
 
-            # Update retry_priority if item needs LLM processing
-            # Priority levels based on confidence:
+            # Update retry_priority based on confidence
+            # Priority levels:
             # - high: >= 0.5 (likely relevant, process first)
             # - edge_case: 0.25-0.5 (uncertain, process after high)
-            # - low: < 0.25 (certainly irrelevant, skip or process last)
-            if update_retry_priority and item.needs_llm_processing:
+            # - low: < 0.25 (certainly irrelevant, clear needs_llm_processing)
+            if update_retry_priority:
                 confidence = classification.get("relevance_confidence", 0.5)
                 if confidence >= 0.5:
                     new_metadata["retry_priority"] = "high"
                 elif confidence >= 0.25:
                     new_metadata["retry_priority"] = "edge_case"
                 else:
+                    # Certainly irrelevant - don't process with LLM
                     new_metadata["retry_priority"] = "low"
+                    item.needs_llm_processing = False
 
             # Assign new dict to trigger SQLAlchemy change detection
             item.metadata_ = new_metadata
