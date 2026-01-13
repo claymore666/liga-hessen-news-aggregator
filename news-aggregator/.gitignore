@@ -50,3 +50,6 @@ htmlcov/
 # Build
 build/
 *.whl
+
+# Documentation (local only)
+docs/
