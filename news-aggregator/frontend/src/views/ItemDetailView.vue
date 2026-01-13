@@ -72,10 +72,11 @@ onMounted(async () => {
             <div class="flex items-center gap-3">
               <PriorityBadge :priority="itemsStore.currentItem.priority" />
               <span
-                v-if="itemsStore.currentItem.assigned_ak"
+                v-for="ak in (itemsStore.currentItem.assigned_aks || [])"
+                :key="ak"
                 class="badge bg-purple-100 text-purple-800"
               >
-                {{ itemsStore.currentItem.assigned_ak }}
+                {{ ak }}
               </span>
             </div>
             <h1 class="mt-3 text-2xl font-bold text-gray-900">

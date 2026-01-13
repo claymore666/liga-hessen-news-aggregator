@@ -15,7 +15,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:priority', priority: Priority): void
-  (e: 'update:ak', ak: string | null): void
+  (e: 'update:aks', aks: string[]): void
   (e: 'toggle:read'): void
   (e: 'archive'): void
 }>()
@@ -45,8 +45,15 @@ const setPriority = (priority: Priority) => {
 }
 
 const setAk = (ak: string) => {
-  const newAk = props.item.assigned_ak === ak ? null : ak
-  emit('update:ak', newAk)
+  const current = props.item.assigned_aks || []
+  const newAks = current.includes(ak)
+    ? current.filter(a => a !== ak)  // Remove if present
+    : [...current, ak]               // Add if not present
+  emit('update:aks', newAks)
+}
+
+const isAkSelected = (ak: string) => {
+  return (props.item.assigned_aks || []).includes(ak)
 }
 
 const toggleRelevance = () => {
@@ -95,7 +102,7 @@ const toggleRelevance = () => {
           type="button"
           class="px-2 py-1 text-xs font-medium rounded transition-all"
           :class="[
-            item.assigned_ak === ak.value
+            isAkSelected(ak.value)
               ? 'bg-purple-600 text-white ring-2 ring-purple-300'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
           ]"

@@ -52,6 +52,7 @@ async def run_migrations() -> None:
             ("assigned_ak", "ALTER TABLE items ADD COLUMN assigned_ak VARCHAR(10)"),
             ("is_manually_reviewed", "ALTER TABLE items ADD COLUMN is_manually_reviewed BOOLEAN DEFAULT FALSE"),
             ("reviewed_at", "ALTER TABLE items ADD COLUMN reviewed_at TIMESTAMP"),
+            ("assigned_aks", "ALTER TABLE items ADD COLUMN assigned_aks JSON DEFAULT '[]'"),
         ]
 
         for column_name, sql in migrations:
@@ -75,6 +76,25 @@ async def run_migrations() -> None:
                     WHERE metadata #>> '{llm_analysis,assigned_ak}' IS NOT NULL
                       AND assigned_ak IS NULL
                 """))
+
+        # Migrate assigned_ak (single) to assigned_aks (array) for existing items
+        if "assigned_aks" not in columns:
+            logging.info("Migration: Converting assigned_ak to assigned_aks array")
+            if is_sqlite():
+                await conn.execute(text("""
+                    UPDATE items
+                    SET assigned_aks = json_array(assigned_ak)
+                    WHERE assigned_ak IS NOT NULL
+                      AND (assigned_aks IS NULL OR assigned_aks = '[]')
+                """))
+            else:
+                await conn.execute(text("""
+                    UPDATE items
+                    SET assigned_aks = jsonb_build_array(assigned_ak)
+                    WHERE assigned_ak IS NOT NULL
+                      AND (assigned_aks IS NULL OR assigned_aks::text = '[]')
+                """))
+            logging.info("Migration: assigned_ak values converted to assigned_aks arrays")
 
         # Migrate priority values: critical→high, high→medium, medium→low, low→none
         # Check if any items still have old priority values ('critical' only exists in old system)

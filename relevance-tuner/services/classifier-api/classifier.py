@@ -72,6 +72,7 @@ class EmbeddingClassifier:
     """
     Production embedding classifier.
     Combines NomicV2 embeddings with sklearn RandomForest.
+    Supports both single-label and multi-label AK predictions.
     """
 
     # Label mappings (integer class index to string label)
@@ -84,6 +85,7 @@ class EmbeddingClassifier:
         self.priority_clf = None
         self.ak_clf = None
         self.backend = "nomic-v2"
+        self.multilabel = False  # Whether AK classifier is multi-label
 
     @classmethod
     def load(cls, model_path: str = "models/embedding_classifier_nomic-v2.pkl"):
@@ -97,12 +99,26 @@ class EmbeddingClassifier:
         with open(path, "rb") as f:
             data = pickle.load(f)
 
-        instance.relevance_clf = data["relevance_clf"]
-        instance.priority_clf = data["priority_clf"]
-        instance.ak_clf = data["ak_clf"]
-        instance.backend = data.get("backend", "nomic-v2")
+        # Handle dict format (both single-label and multi-label)
+        if isinstance(data, dict):
+            instance.relevance_clf = data["relevance_clf"]
+            instance.priority_clf = data["priority_clf"]
+            instance.ak_clf = data["ak_clf"]
+            instance.backend = data.get("backend", "nomic-v2")
+            instance.multilabel = data.get("multilabel", False)
+            if instance.multilabel and "ak_classes" in data:
+                instance.AK_LABELS = data["ak_classes"]
+        else:
+            # Legacy: class instance (shouldn't happen in production)
+            instance.relevance_clf = data.relevance_clf
+            instance.priority_clf = data.priority_clf
+            instance.ak_clf = data.ak_clf
+            instance.backend = getattr(data, "backend_name", "nomic-v2")
+            instance.multilabel = hasattr(data, "ak_classes")
+            if instance.multilabel:
+                instance.AK_LABELS = data.ak_classes
 
-        print(f"Loaded classifier: {instance.backend}")
+        print(f"Loaded classifier: {instance.backend} (multilabel={instance.multilabel})")
         return instance
 
     def predict(
@@ -116,7 +132,8 @@ class EmbeddingClassifier:
 
         Returns:
             dict with keys: relevant, relevance_confidence, priority,
-                           priority_confidence, ak, ak_confidence
+                           priority_confidence, ak, ak_confidence,
+                           aks (list), ak_confidences (dict) for multi-label
         """
         # Combine text fields
         text = f"{title} {content}"
@@ -133,6 +150,12 @@ class EmbeddingClassifier:
         result = {
             "relevant": is_relevant,
             "relevance_confidence": float(relevance_confidence),
+            "priority": None,
+            "priority_confidence": None,
+            "ak": None,
+            "ak_confidence": None,
+            "aks": [],
+            "ak_confidences": {},
         }
 
         # Only predict priority/AK if relevant
@@ -143,11 +166,40 @@ class EmbeddingClassifier:
             result["priority"] = self.PRIORITY_LABELS[priority_idx]
             result["priority_confidence"] = float(priority_proba[priority_idx])
 
-            # AK
-            ak_proba = self.ak_clf.predict_proba(embedding)[0]
-            ak_idx = int(np.argmax(ak_proba))
-            result["ak"] = self.AK_LABELS[ak_idx]
-            result["ak_confidence"] = float(ak_proba[ak_idx])
+            # AK prediction
+            if self.multilabel:
+                # Multi-label: predict multiple AKs
+                ak_preds = self.ak_clf.predict(embedding)[0]
+                ak_confidences = {}
+
+                # Get probabilities for each AK
+                predicted_aks = []
+                for i, estimator in enumerate(self.ak_clf.estimators_):
+                    prob = estimator.predict_proba(embedding)[0]
+                    conf = prob[1] if len(prob) > 1 else prob[0]
+                    ak_confidences[self.AK_LABELS[i]] = float(conf)
+                    if ak_preds[i] == 1:
+                        predicted_aks.append(self.AK_LABELS[i])
+
+                # Fallback if no AK predicted
+                if not predicted_aks:
+                    best_idx = max(range(len(self.AK_LABELS)),
+                                   key=lambda i: ak_confidences[self.AK_LABELS[i]])
+                    predicted_aks = [self.AK_LABELS[best_idx]]
+
+                result["aks"] = predicted_aks
+                result["ak_confidences"] = ak_confidences
+                # Primary AK for backward compatibility
+                result["ak"] = predicted_aks[0] if predicted_aks else None
+                result["ak_confidence"] = ak_confidences.get(result["ak"], 0.0)
+            else:
+                # Single-label: predict one AK
+                ak_proba = self.ak_clf.predict_proba(embedding)[0]
+                ak_idx = int(np.argmax(ak_proba))
+                result["ak"] = self.AK_LABELS[ak_idx]
+                result["ak_confidence"] = float(ak_proba[ak_idx])
+                result["aks"] = [result["ak"]]
+                result["ak_confidences"] = {result["ak"]: result["ak_confidence"]}
 
         return result
 
@@ -271,6 +323,8 @@ class VectorStore:
         for item in new_items:
             meta = item.get("metadata", {}) or {}
             meta["title"] = item["title"][:500]
+            # Filter out None values - ChromaDB doesn't accept them
+            meta = {k: v for k, v in meta.items() if v is not None}
             metadatas.append(meta)
             documents.append(texts[new_items.index(item)][:2000])
 

@@ -25,74 +25,117 @@ Zusammen betreiben diese Verbände in Hessen:
 === ARBEITSKREISE (AK) DER LIGA ===
 
 AK1 - GRUNDSATZ UND SOZIALPOLITIK:
-- Übergreifende sozialpolitische Fragen
+- Übergreifende sozialpolitische Fragen und Zukunft des Sozialstaats
 - Haushaltsdebatten (Bund, Land, Kommunen)
-- Sozialfinanzierung und Förderungen
-- Lobbyarbeit für den Sozialsektor
+- Sozialfinanzierung, Förderungen, Hessisches Sozialbudget
+- Lobbyarbeit für den Sozialsektor, Soziale Infrastruktur
 - Gemeinnützigkeit und Steuerrecht
 - Tarifpolitik im Sozialbereich
 - Allgemeine Sozialpolitik der Landesregierung
+- Wohnungslosenhilfe und Wohnungsnotfälle
+- Schuldnerberatung und Überschuldung
+- Straffälligenhilfe und Resozialisierung
+- Suchtberatung und Suchthilfe
+- Gemeinwesenarbeit und Quartiersarbeit
+- Arbeitsmarktpolitik und Langzeitarbeitslosigkeit
+- Rechtliche Basis: SGB II (Bürgergeld), SGB XII (Sozialhilfe), Insolvenzordnung
 
 AK2 - MIGRATION UND FLUCHT:
 - Geflüchtete und Asylsuchende
 - Migrationsberatung für Erwachsene (MBE)
 - Jugendmigrationsdienste (JMD)
 - Asylverfahrensberatung
-- Psychosoziale Zentren für Geflüchtete
+- Psychosoziale Zentren für Geflüchtete (PSZ)
 - Integration und Teilhabe
 - Abschiebungen und Aufenthaltsrecht
 - Sprachkurse und Integrationskurse
+- Erstaufnahme und Anschlussunterbringung
+- Unbegleitete minderjährige Ausländer (umA)
+- Härtefallkommission und Bleiberecht
+- Gesundheitskarte für Geflüchtete
+- Rechtliche Basis: AsylG, AsylbLG, AufenthG, Landesaufnahmegesetz (LAG)
 
 AK3 - GESUNDHEIT, PFLEGE UND SENIOREN:
-- Altenpflege (stationär, ambulant, Tagespflege)
+- Altenpflege (stationär, ambulant, Tagespflege, Kurzzeitpflege)
 - Pflegeversicherung und Pflegereform
-- Fachkräftemangel in der Pflege
+- Pflegefinanzierung und Eigenanteile
+- Fachkräftemangel in der Pflege, Pflegeausbildung
 - Krankenhäuser und Gesundheitsversorgung
 - Demenz und Alzheimer
-- Hospiz und Palliativversorgung
+- Hospiz und Palliativversorgung (SAPV)
 - Seniorenarbeit und Seniorenpolitik
 - Rehabilitation
 - Gesundheitsförderung und Prävention
+- Mobile Soziale Dienste, Offene Altenhilfe
+- Altenpflegeschulen, Pflegeberufegesetz
+- Hessischer Pflegemonitor
+- Rechtliche Basis: SGB XI (Pflege), SGB V (Kranken), HGBP, PflBG
 
 AK4 - EINGLIEDERUNGSHILFE:
-- Menschen mit Behinderungen
-- Inklusion und Teilhabe
+- Menschen mit geistigen, körperlichen oder seelischen Behinderungen
+- Menschen mit psychischen Erkrankungen, Gemeindepsychiatrie
+- Inklusion und Teilhabe, Selbstbestimmung
 - Werkstätten für behinderte Menschen (WfbM)
-- Bundesteilhabegesetz (BTHG)
+- Betriebsintegrierte Beschäftigungsplätze (BiB)
+- Bundesteilhabegesetz (BTHG) und Landesrahmenverträge
 - Barrierefreiheit
-- Persönliches Budget
-- Wohnen für Menschen mit Behinderung
-- Frühförderung
+- Persönliches Budget, Gesamtplanverfahren
+- Besondere Wohnformen, Ambulant Betreutes Wohnen
+- Frühförderung und Sozialpädiatrische Zentren (SPZ)
+- Personenzentrierter integrierter Teilhabeplan (PiT)
+- Rechtliche Basis: SGB IX, HAG/SGB IX, FrühV, UN-BRK
 
 AK5 - KINDER, JUGEND, FRAUEN UND FAMILIE:
-- Kindertagesstätten (Kitas) und Kinderbetreuung
-- Kita-Fachkräfte und Erzieherausbildung
+- Kindertagesstätten (Kitas), Horte, Krabbelstuben
+- Kita-Fachkräfte und Erzieherausbildung, Quereinstieg
 - Kindertagespflege
+- Hessisches Kinderförderungsgesetz (HessKiföG)
+- Familienzentren
 - Jugendhilfe und Jugendarbeit
+- Jugendberufshilfe und Jugendsozialarbeit
 - Schulsozialarbeit
 - Familienberatung und Familienbildung
-- Schwangerschaftsberatung
+- Schwangerschaftskonfliktberatung
 - Frauenhäuser und Gewaltschutz
-- Kinder- und Jugendhilfegesetz (SGB VIII)
 - Frühe Hilfen
 - Schulen und Bildungspolitik (betrifft Kinder/Jugendliche)
 - Kinderarmut und Kindergrundsicherung
+- Landeselternvertretung
+- Rechtliche Basis: SGB VIII, HKJGB, HessKiföG, SchKG, BEP
 
-QAG - QUERSCHNITTSARBEITSGEMEINSCHAFT:
-- Digitalisierung im Sozialsektor
-- Klimaschutz und Nachhaltigkeit
-- Wohnungslosenhilfe und Obdachlosigkeit
-- Bezahlbares Wohnen und Sozialer Wohnungsbau
-- Schuldnerberatung
-- Suchtberatung und Suchthilfe
-- Tafeln und Lebensmittelausgaben
-- Ehrenamt und Freiwilligenarbeit
-- Gemeinnützigkeit und Vereinsrecht
+QAG DIGITALISIERUNG:
+- Digitalisierung im Sozialsektor und Soziale Arbeit
+- Digitale Transformation der Wohlfahrtsverbände
+- Online-Zugangsgesetz (OZG) und Sozialplattform
+- Digitale Teilhabe vs. digitale Exklusion
+- Barrierefreie digitale Dienste
+- Online-Beratung und hybride Beratungsformate
+- Datenschutz (DSGVO) in der Sozialen Arbeit
+- Digitale Ausstattung für Klient*innen und Einrichtungen
 
-ÜBERGREIFENDE THEMEN (können mehrere AKs betreffen):
+QAG WOHNEN:
+- Soziale Wohnungspolitik, bezahlbarer Wohnraum
+- Sozialer Wohnungsbau und Wohnraumförderung
+- Öffentliche Wohnungsgesellschaften (Nassauische Heimstätte)
+- Sozialbindungen und Belegungsrechte
+- Mitarbeitenden-Wohnen als Fachkräftestrategie
+- Anschlussunterbringung für Geflüchtete
+- Barrierefreies Wohnen
+- Frauenhäuser und Jugendwohnen
+
+QAG KLIMASCHUTZ:
+- Klimaschutz in der Sozialwirtschaft
+- Energetische Sanierung von Sozialimmobilien
+- CO2-Reduktion in Einrichtungen
+- Hessischer Klimaplan und Umsetzung
+- Refinanzierung von Klimaschutzmaßnahmen
+- Corporate Sustainability Reporting (CSRD)
+
+ÜBERGREIFENDE THEMEN (können mehrere AKs/QAGs betreffen):
 - Bürgergeld (früher Hartz IV) - betrifft AK1, AK2, AK5
 - Fachkräftemangel im Sozialbereich - betrifft alle AKs
 - Ehrenamtliches Engagement - Liga hat 160.000 Ehrenamtliche
+- Tafeln und Lebensmittelausgaben
 - Gemeinnützigkeitsrecht und Steuerrecht für NPOs
 - Tarifpolitik TVöD/TV-L Sozial- und Erziehungsdienst
 
@@ -283,7 +326,7 @@ EHER MEDIUM:
 === OUTPUT FORMAT ===
 
 Für jeden Artikel ausgeben (eine JSON-Zeile):
-{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|...|null, "priority": "critical"|...|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}
+{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|"AK2"|"AK3"|"AK4"|"AK5"|"QAG_DIGITALISIERUNG"|"QAG_WOHNEN"|"QAG_KLIMASCHUTZ"|null, "priority": "critical"|...|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}
 
 === FELDER summary, detailed_analysis UND argumentationskette ===
 

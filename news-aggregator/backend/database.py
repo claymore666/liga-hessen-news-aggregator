@@ -63,6 +63,50 @@ def json_extract_path(column: Any, *path: str) -> ColumnElement:
         return func.jsonb_extract_path_text(cast(column, JSONB), *path)
 
 
+def json_array_contains(column: Any, value: str) -> ColumnElement:
+    """Check if a JSON array column contains a specific value.
+
+    Args:
+        column: The JSON array column to check
+        value: The value to look for in the array
+
+    Returns:
+        SQLAlchemy expression that works on both SQLite and PostgreSQL
+    """
+    import json
+    if is_sqlite():
+        # SQLite: Use LIKE pattern matching on JSON string
+        # This works because JSON arrays are stored as '["AK1","AK2"]'
+        return column.like(f'%"{value}"%')
+    else:
+        # PostgreSQL: Use @> containment operator with JSONB
+        # Use text() with bindparam for proper JSON encoding
+        from sqlalchemy import cast, text, bindparam
+        from sqlalchemy.dialects.postgresql import JSONB
+        # Cast column to JSONB and use @> with a JSON-encoded array literal
+        json_value = json.dumps([value])
+        return cast(column, JSONB).op("@>")(text(f"'{json_value}'::jsonb"))
+
+
+def json_array_overlaps(column: Any, values: list[str]) -> ColumnElement:
+    """Check if a JSON array column overlaps with any of the given values.
+
+    Args:
+        column: The JSON array column to check
+        values: List of values to check for overlap
+
+    Returns:
+        SQLAlchemy expression that works on both SQLite and PostgreSQL
+    """
+    from sqlalchemy import or_
+    if is_sqlite():
+        # SQLite: Use OR with LIKE for each value
+        return or_(*[json_array_contains(column, v) for v in values])
+    else:
+        # PostgreSQL: Use multiple containment checks with OR
+        return or_(*[json_array_contains(column, v) for v in values])
+
+
 # Global lock for serializing database writes in parallel fetch scenarios
 # This allows network I/O to run in parallel while database writes are serialized
 db_write_lock = asyncio.Lock()

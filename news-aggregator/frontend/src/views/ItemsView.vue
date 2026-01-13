@@ -419,8 +419,12 @@ onMounted(async () => {
                 <span class="hidden sm:inline">{{ item.source?.name ?? 'Unbekannt' }}</span>
                 <span class="hidden md:inline">&middot;</span>
                 <span class="hidden md:inline">{{ formatTime(item.published_at) }}</span>
-                <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
-                  {{ item.metadata.llm_analysis.assigned_ak }}
+                <span
+                  v-for="ak in (item.assigned_aks?.length ? item.assigned_aks : (item.metadata?.llm_analysis?.assigned_aks || []))"
+                  :key="ak"
+                  class="rounded bg-blue-300 px-1 text-xs font-medium text-black"
+                >
+                  {{ ak }}
                 </span>
               </span>
             </div>

@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ class LLMWorker:
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
+            "total_processing_time": 0.0,  # Total seconds spent processing
+            "items_timed": 0,  # Number of items with timing data
         }
 
     async def start(self):
@@ -226,6 +228,7 @@ class LLMWorker:
         async with async_session_maker() as db:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+            assigned_aks = json_extract_path(Item.metadata_, "llm_analysis", "assigned_aks")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "unknown", 2),
@@ -237,9 +240,18 @@ class LLMWorker:
             query = (
                 select(Item.id)
                 .where(
-                    Item.needs_llm_processing == True,  # noqa: E712
-                    retry_priority != "low",  # Skip certainly irrelevant (classifier)
-                    Item.priority != Priority.NONE,  # Skip already-irrelevant items
+                    or_(
+                        # Standard backlog: needs processing and not certainly irrelevant
+                        and_(
+                            Item.needs_llm_processing == True,  # noqa: E712
+                            or_(retry_priority != "low", retry_priority.is_(None)),
+                        ),
+                        # Relevant items without AK assigned need reprocessing
+                        and_(
+                            Item.priority != "none",
+                            or_(assigned_aks.is_(None), assigned_aks == "[]"),
+                        ),
+                    )
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
@@ -312,9 +324,14 @@ class LLMWorker:
                     if not is_fresh and not item.needs_llm_processing:
                         continue
 
-                    # Run LLM analysis
+                    # Run LLM analysis with timing
+                    import time
+                    start_time = time.time()
                     source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
                     analysis = await processor.analyze(item, source_name=source_name)
+                    elapsed = time.time() - start_time
+                    self._stats["total_processing_time"] += elapsed
+                    self._stats["items_timed"] += 1
 
                     # Update item with results
                     if analysis.get("summary"):
@@ -339,15 +356,18 @@ class LLMWorker:
                         item.priority = Priority.NONE
                         item.priority_score = min(item.priority_score or 100, 40)
 
-                    # Set assigned_ak: LLM takes precedence, classifier AK as fallback
-                    if analysis.get("assigned_ak"):
-                        item.assigned_ak = analysis["assigned_ak"]
-                    elif not item.assigned_ak:
+                    # Set assigned_aks: LLM takes precedence, classifier AK as fallback
+                    llm_aks = analysis.get("assigned_aks", [])
+                    if llm_aks:
+                        item.assigned_aks = llm_aks
+                        item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
+                    elif not item.assigned_aks:
                         # Use classifier AK suggestion as fallback
                         pre_filter = (item.metadata_ or {}).get("pre_filter", {})
                         classifier_ak = pre_filter.get("ak_suggestion")
                         if classifier_ak:
-                            item.assigned_ak = classifier_ak
+                            item.assigned_aks = [classifier_ak]
+                            item.assigned_ak = classifier_ak  # Deprecated field
                             logger.debug(f"Using classifier AK: {classifier_ak}")
 
                     # Store LLM analysis in metadata
@@ -355,7 +375,8 @@ class LLMWorker:
                     new_metadata["llm_analysis"] = {
                         "relevance_score": analysis.get("relevance_score", 0.5),
                         "priority_suggestion": llm_priority,
-                        "assigned_ak": analysis.get("assigned_ak"),
+                        "assigned_aks": llm_aks,
+                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated, for backward compat
                         "tags": analysis.get("tags", []),
                         "reasoning": analysis.get("reasoning"),
                         "processed_at": datetime.utcnow().isoformat(),
@@ -367,6 +388,22 @@ class LLMWorker:
                     item.needs_llm_processing = False
 
                     await db.flush()
+
+                    # Record LLM processing event
+                    from services.item_events import record_event, EVENT_LLM_PROCESSED
+
+                    await record_event(
+                        db,
+                        item.id,
+                        EVENT_LLM_PROCESSED,
+                        data={
+                            "priority": llm_priority,
+                            "assigned_aks": llm_aks,
+                            "relevance_score": analysis.get("relevance_score"),
+                            "source": item_type,
+                        },
+                    )
+
                     processed += 1
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 

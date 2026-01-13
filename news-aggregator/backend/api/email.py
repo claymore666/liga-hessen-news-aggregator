@@ -149,7 +149,9 @@ async def preview_briefing(
     # Count by priority
     items_by_priority = {p.value: 0 for p in Priority}
     for item in items:
-        items_by_priority[item.priority.value] += 1
+        # Handle both enum and string priority values
+        priority_value = item.priority.value if hasattr(item.priority, 'value') else str(item.priority)
+        items_by_priority[priority_value] += 1
 
     return PreviewBriefingResponse(
         subject=f"{config.subject_prefix} Briefing {date.strftime('%d.%m.%Y')}",

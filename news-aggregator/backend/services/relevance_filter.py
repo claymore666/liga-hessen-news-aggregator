@@ -240,6 +240,44 @@ class RelevanceFilter:
             logger.warning(f"Similar search failed: {e}")
             return []
 
+    async def find_duplicates(
+        self,
+        title: str,
+        content: str,
+        threshold: float = 0.80,
+    ) -> list[dict]:
+        """
+        Find semantically similar items that may be duplicates.
+
+        Used during ingestion to detect cross-channel duplicates like:
+        - RSS: "Title of Article"
+        - Twitter: "Title of Article (by Author) https://..."
+
+        Args:
+            title: Item title
+            content: Item content
+            threshold: Similarity threshold (default 0.92)
+
+        Returns:
+            List of duplicate candidates with id, title, score, metadata
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/find-duplicates",
+                    json={
+                        "title": title,
+                        "content": content,
+                        "threshold": threshold,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("duplicates", [])
+        except Exception as e:
+            logger.warning(f"Duplicate search failed: {e}")
+            return []
+
 
 async def create_relevance_filter() -> Optional[RelevanceFilter]:
     """

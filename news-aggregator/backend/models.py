@@ -201,7 +201,8 @@ class Item(Base):
     is_read: Mapped[bool] = mapped_column(default=False)
     is_starred: Mapped[bool] = mapped_column(default=False)
     is_archived: Mapped[bool] = mapped_column(default=False)
-    assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)  # Deprecated, use assigned_aks
+    assigned_aks: Mapped[list[str]] = mapped_column(JSON, default=list)  # Array of AK codes
     is_manually_reviewed: Mapped[bool] = mapped_column(default=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -213,6 +214,9 @@ class Item(Base):
     channel: Mapped["Channel"] = relationship(back_populates="items")
     matched_rules: Mapped[list["ItemRuleMatch"]] = relationship(
         back_populates="item", cascade="all, delete-orphan"
+    )
+    events: Mapped[list["ItemEvent"]] = relationship(
+        back_populates="item", cascade="all, delete-orphan", order_by="ItemEvent.timestamp.desc()"
     )
 
     __table_args__ = (
@@ -280,6 +284,29 @@ class ItemRuleMatch(Base):
     __table_args__ = (
         Index("ix_item_rule_matches_item_id", "item_id"),
         Index("ix_item_rule_matches_rule_id", "rule_id"),
+    )
+
+
+class ItemEvent(Base):
+    """Audit trail event for an item."""
+
+    __tablename__ = "item_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"))
+    event_type: Mapped[str] = mapped_column(String(50))
+    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)  # IPv6 compatible
+    session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Relationships
+    item: Mapped["Item"] = relationship(back_populates="events")
+
+    __table_args__ = (
+        Index("ix_item_events_item_id", "item_id"),
+        Index("ix_item_events_event_type", "event_type"),
+        Index("ix_item_events_timestamp", "timestamp"),
     )
 
 

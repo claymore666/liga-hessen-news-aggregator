@@ -145,7 +145,8 @@ class ItemResponse(ItemBase, BaseSchema):
     is_read: bool
     is_starred: bool
     is_archived: bool = False
-    assigned_ak: str | None = None
+    assigned_aks: list[str] = Field(default_factory=list)
+    assigned_ak: str | None = None  # Deprecated, use assigned_aks
     is_manually_reviewed: bool = False
     reviewed_at: datetime | None = None
     notes: str | None
@@ -159,7 +160,8 @@ class ItemUpdate(BaseModel):
     is_read: bool | None = None
     is_starred: bool | None = None
     is_archived: bool | None = None
-    assigned_ak: str | None = None
+    assigned_aks: list[str] | None = None
+    assigned_ak: str | None = None  # Deprecated, use assigned_aks
     notes: str | None = None
     # Admin fields for manual corrections
     content: str | None = None

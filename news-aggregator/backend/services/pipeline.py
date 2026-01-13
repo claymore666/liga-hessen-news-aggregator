@@ -22,6 +22,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_priority_value(priority) -> str:
+    """Safely get priority value whether it's an enum or string."""
+    if hasattr(priority, 'value'):
+        return priority.value
+    return str(priority) if priority else "none"
+
+
 @dataclass
 class RawItem:
     """Normalized item format from connectors."""
@@ -66,7 +73,8 @@ class Pipeline:
         self.relevance_filter = relevance_filter
         self.training_mode = training_mode
         self.pre_filter_results = pre_filter_results or {}
-        self.cutoff_date = datetime.now(UTC) - timedelta(days=self.MAX_AGE_DAYS)
+        # Use naive UTC datetime (consistent with DB storage)
+        self.cutoff_date = datetime.utcnow() - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
         """Process raw items through the pipeline.
@@ -91,7 +99,11 @@ class Pipeline:
 
         for raw in raw_items:
             # 1. Skip old items (older than MAX_AGE_DAYS) - disabled in training_mode
-            if not self.training_mode and raw.published_at.replace(tzinfo=UTC) < self.cutoff_date:
+            # Normalize published_at to naive UTC for comparison
+            pub_dt = raw.published_at
+            if pub_dt.tzinfo is not None:
+                pub_dt = pub_dt.astimezone(UTC).replace(tzinfo=None)
+            if not self.training_mode and pub_dt < self.cutoff_date:
                 logger.debug(f"Skipping old item: {raw.title[:50]} ({raw.published_at})")
                 continue
 
@@ -108,7 +120,45 @@ class Pipeline:
                 logger.debug(f"Skipping duplicate: {normalized.title[:50]}")
                 continue
 
-            # 3. Create item
+            # 3a. Check for semantic duplicates (cross-channel)
+            if self.relevance_filter and not self.training_mode:
+                try:
+                    duplicates = await self.relevance_filter.find_duplicates(
+                        title=normalized.title,
+                        content=normalized.content,
+                        threshold=0.80,
+                    )
+                    if duplicates:
+                        best_match = duplicates[0]
+                        logger.info(
+                            f"Semantic duplicate: '{normalized.title[:40]}...' "
+                            f"matches '{best_match.get('title', '')[:40]}...' "
+                            f"(score: {best_match.get('score', 0):.3f})"
+                        )
+
+                        # Record duplicate detection in audit trail of EXISTING item
+                        from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
+                        try:
+                            await record_event(
+                                self.db,
+                                int(best_match["id"]),  # Existing item ID
+                                EVENT_DUPLICATE_DETECTED,
+                                data={
+                                    "duplicate_title": normalized.title,
+                                    "duplicate_source": channel.source.name if channel.source else None,
+                                    "duplicate_channel_id": channel.id,
+                                    "duplicate_url": normalized.url,
+                                    "similarity_score": best_match.get("score"),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to record duplicate event: {e}")
+
+                        continue  # Skip creating this duplicate
+                except Exception as e:
+                    logger.warning(f"Semantic duplicate check failed, continuing: {e}")
+
+            # 4. Create item
             item = Item(
                 channel_id=channel.id,
                 external_id=normalized.external_id,
@@ -156,7 +206,7 @@ class Pipeline:
                     if item.priority != keyword_priority:
                         logger.info(
                             f"Classifier override: {normalized.title[:40]}... "
-                            f"conf={confidence:.2f} {keyword_priority.value}->{item.priority.value}"
+                            f"conf={confidence:.2f} {_get_priority_value(keyword_priority)}->{_get_priority_value(item.priority)}"
                         )
                     elif skip_llm:
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
@@ -210,7 +260,7 @@ class Pipeline:
                         # "low" or unknown → NONE (not relevant)
                         item.priority = Priority.NONE
                         item.priority_score = 30
-                    logger.debug(f"Using classifier priority: {clf_priority} -> {item.priority.value}")
+                    logger.debug(f"Using classifier priority: {clf_priority} -> {_get_priority_value(item.priority)}")
 
                 # 7b. Optionally use classifier AK instead of LLM
                 if settings.classifier_use_ak and pre_filter_result.get("ak"):
@@ -230,6 +280,24 @@ class Pipeline:
             await self.db.flush()
             logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
 
+            # Record creation events
+            from services.item_events import record_event, EVENT_CREATED
+
+            for item in new_items:
+                try:
+                    await record_event(
+                        self.db,
+                        item.id,
+                        EVENT_CREATED,
+                        data={
+                            "channel_id": channel.id,
+                            "source": channel.source.name if channel.source else None,
+                            "priority": _get_priority_value(item.priority),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record creation event for item {item.id}: {e}")
+
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
                 try:
@@ -240,7 +308,7 @@ class Pipeline:
                             "content": item.content,
                             "metadata": {
                                 "source": channel.source.name if channel.source else "",
-                                "priority": item.priority.value if item.priority else None,
+                                "priority": _get_priority_value(item.priority) if item.priority else None,
                                 "channel_id": str(channel.id),
                             },
                         }
@@ -270,6 +338,13 @@ class Pipeline:
 
     def _normalize_content(self, raw: RawItem) -> RawItem:
         """Normalize content (strip HTML, fix encoding, etc.)."""
+        # Normalize published_at to UTC naive datetime
+        # Database uses TIMESTAMP WITHOUT TIME ZONE, so we must strip tzinfo
+        published_at = raw.published_at
+        if published_at.tzinfo is not None:
+            # Convert to UTC first, then remove timezone info
+            published_at = published_at.astimezone(UTC).replace(tzinfo=None)
+
         # Strip HTML tags from content
         content = re.sub(r"<[^>]+>", "", raw.content)
 
@@ -293,7 +368,7 @@ class Pipeline:
             content=content,
             url=raw.url,
             author=raw.author,
-            published_at=raw.published_at,
+            published_at=published_at,
             metadata=raw.metadata,
         )
 

@@ -420,7 +420,8 @@ async def update_channel(
     # If config changes, recalculate identifier
     if "config" in update_data:
         new_config = update_data["config"]
-        new_identifier = Channel.extract_identifier(channel.connector_type.value, new_config)
+        connector_type_str = channel.connector_type.value if hasattr(channel.connector_type, 'value') else channel.connector_type
+        new_identifier = Channel.extract_identifier(connector_type_str, new_config)
 
         # Check for duplicates (excluding current channel)
         if new_identifier:
