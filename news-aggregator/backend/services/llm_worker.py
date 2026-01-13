@@ -66,6 +66,8 @@ class LLMWorker:
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
+            "total_processing_time": 0.0,  # Total seconds spent processing
+            "items_timed": 0,  # Number of items with timing data
         }
 
     async def start(self):
@@ -311,9 +313,14 @@ class LLMWorker:
                     if not is_fresh and not item.needs_llm_processing:
                         continue
 
-                    # Run LLM analysis
+                    # Run LLM analysis with timing
+                    import time
+                    start_time = time.time()
                     source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
                     analysis = await processor.analyze(item, source_name=source_name)
+                    elapsed = time.time() - start_time
+                    self._stats["total_processing_time"] += elapsed
+                    self._stats["items_timed"] += 1
 
                     # Update item with results
                     if analysis.get("summary"):

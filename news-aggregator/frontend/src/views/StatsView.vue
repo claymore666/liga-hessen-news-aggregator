@@ -96,14 +96,40 @@ const itemPriorities = computed(() => {
 const llmWorkerStats = computed(() => {
   if (!stats.value) return null
   const s = stats.value.llm_worker.stats as Record<string, number | string | null>
+  const totalTime = (s.total_processing_time as number) || 0
+  const itemsTimed = (s.items_timed as number) || 0
+  const meanTime = itemsTimed > 0 ? totalTime / itemsTimed : 0
+
   return {
     fresh: s.fresh_processed || 0,
     backlog: s.backlog_processed || 0,
     errors: s.errors || 0,
     lastProcessed: s.last_processed_at
       ? new Date(s.last_processed_at as string).toLocaleTimeString('de-DE')
-      : '-'
+      : '-',
+    meanTime,
+    itemsTimed
   }
+})
+
+const estimatedTimeRemaining = computed(() => {
+  if (!stats.value || !llmWorkerStats.value) return null
+  const meanTime = llmWorkerStats.value.meanTime
+  if (meanTime <= 0) return null
+
+  // Only count high, edge_case, unknown (not low, which is skipped)
+  const queue = stats.value.processing_queue.by_retry_priority
+  const itemsToProcess = (queue['high'] || 0) + (queue['edge_case'] || 0) + (queue['unknown'] || 0)
+  if (itemsToProcess === 0) return null
+
+  const totalSeconds = itemsToProcess * meanTime
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+
+  if (hours > 0) {
+    return `~${hours}h ${minutes}m`
+  }
+  return `~${minutes}m`
 })
 
 onMounted(() => {
@@ -231,6 +257,10 @@ onUnmounted(() => {
           <div v-if="llmWorkerStats" class="mt-2 space-y-1 text-sm text-gray-500">
             <div>Fresh: {{ llmWorkerStats.fresh }} | Backlog: {{ llmWorkerStats.backlog }}</div>
             <div>Fehler: {{ llmWorkerStats.errors }} | Zuletzt: {{ llmWorkerStats.lastProcessed }}</div>
+            <div v-if="llmWorkerStats.itemsTimed > 0">
+              Durchschnitt: {{ llmWorkerStats.meanTime.toFixed(1) }}s/Nachricht
+              <span class="text-gray-400">({{ llmWorkerStats.itemsTimed }} gemessen)</span>
+            </div>
           </div>
 
           <div class="mt-4 flex gap-2">
@@ -350,10 +380,18 @@ onUnmounted(() => {
 
       <!-- Processing Queue -->
       <div class="card">
-        <h2 class="font-medium text-gray-900">Verarbeitungs-Queue</h2>
-        <p class="text-sm text-gray-500">
-          {{ stats.processing_queue.total }} Nachrichten warten auf LLM-Verarbeitung
-        </p>
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-medium text-gray-900">Verarbeitungs-Queue</h2>
+            <p class="text-sm text-gray-500">
+              {{ stats.processing_queue.total }} Nachrichten warten auf LLM-Verarbeitung
+            </p>
+          </div>
+          <div v-if="estimatedTimeRemaining" class="text-right">
+            <div class="text-sm text-gray-500">Geschätzte Restzeit</div>
+            <div class="text-lg font-semibold text-gray-900">{{ estimatedTimeRemaining }}</div>
+          </div>
+        </div>
 
         <div class="mt-4 grid grid-cols-4 gap-4">
           <div
