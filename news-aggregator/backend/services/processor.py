@@ -168,7 +168,7 @@ Datum: {date_str}"""
                 prompt,
                 system=ANALYSIS_SYSTEM_PROMPT,
                 temperature=0.1,
-                max_tokens=1200,  # Increased for detailed_analysis field
+                max_tokens=6000,  # Sufficient headroom for full JSON response
             )
             return self._parse_analysis_response(response)
 
