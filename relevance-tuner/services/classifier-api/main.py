@@ -74,8 +74,10 @@ class ClassifyResponse(BaseModel):
     relevance_confidence: float
     priority: str | None = None
     priority_confidence: float | None = None
-    ak: str | None = None
+    ak: str | None = None  # Primary AK (backward compatibility)
     ak_confidence: float | None = None
+    aks: list[str] = []  # Multi-label: all predicted AKs
+    ak_confidences: dict[str, float] = {}  # Confidence per AK
 
 
 class SearchRequest(BaseModel):
