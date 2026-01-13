@@ -323,6 +323,8 @@ class VectorStore:
         for item in new_items:
             meta = item.get("metadata", {}) or {}
             meta["title"] = item["title"][:500]
+            # Filter out None values - ChromaDB doesn't accept them
+            meta = {k: v for k, v in meta.items() if v is not None}
             metadatas.append(meta)
             documents.append(texts[new_items.index(item)][:2000])
 

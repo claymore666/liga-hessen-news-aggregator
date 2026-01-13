@@ -110,6 +110,20 @@ class SimilarRequest(BaseModel):
     exclude_same_source: bool = True
 
 
+class DuplicateRequest(BaseModel):
+    """Request model for finding semantic duplicates."""
+    title: str
+    content: str
+    threshold: float = 0.80  # Cosine similarity threshold
+    n_results: int = 5
+
+
+class DuplicateResponse(BaseModel):
+    """Response model for duplicate detection."""
+    duplicates: list[SearchResult]
+    has_duplicates: bool
+
+
 class IndexRequest(BaseModel):
     """Request model for indexing a single item."""
     id: str
@@ -234,6 +248,42 @@ async def similar(request: SimilarRequest):
         )
     except Exception as e:
         logger.error(f"Similar search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/find-duplicates", response_model=DuplicateResponse)
+async def find_duplicates(request: DuplicateRequest):
+    """
+    Find semantically similar items that may be duplicates.
+
+    Used during ingestion to detect cross-channel duplicates like:
+    - RSS: "Title of Article"
+    - Twitter: "Title of Article (by Author) https://..."
+
+    Returns items with similarity >= threshold (default 0.92).
+    """
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+
+    try:
+        # Combine title and content for embedding
+        text = f"{request.title} {request.content}"
+
+        # Search for similar items
+        results = vector_store.search(
+            query=text,
+            n_results=request.n_results,
+        )
+
+        # Filter by threshold
+        duplicates = [r for r in results if r["score"] >= request.threshold]
+
+        return DuplicateResponse(
+            duplicates=[SearchResult(**r) for r in duplicates],
+            has_duplicates=len(duplicates) > 0,
+        )
+    except Exception as e:
+        logger.error(f"Duplicate search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

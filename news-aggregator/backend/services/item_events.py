@@ -20,6 +20,7 @@ EVENT_AK_CHANGED = "ak_changed"
 EVENT_READ = "read"
 EVENT_ARCHIVED = "archived"
 EVENT_STARRED = "starred"
+EVENT_DUPLICATE_DETECTED = "duplicate_detected"
 
 
 async def record_event(

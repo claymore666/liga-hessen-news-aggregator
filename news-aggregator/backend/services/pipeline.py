@@ -120,7 +120,45 @@ class Pipeline:
                 logger.debug(f"Skipping duplicate: {normalized.title[:50]}")
                 continue
 
-            # 3. Create item
+            # 3a. Check for semantic duplicates (cross-channel)
+            if self.relevance_filter and not self.training_mode:
+                try:
+                    duplicates = await self.relevance_filter.find_duplicates(
+                        title=normalized.title,
+                        content=normalized.content,
+                        threshold=0.80,
+                    )
+                    if duplicates:
+                        best_match = duplicates[0]
+                        logger.info(
+                            f"Semantic duplicate: '{normalized.title[:40]}...' "
+                            f"matches '{best_match.get('title', '')[:40]}...' "
+                            f"(score: {best_match.get('score', 0):.3f})"
+                        )
+
+                        # Record duplicate detection in audit trail of EXISTING item
+                        from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
+                        try:
+                            await record_event(
+                                self.db,
+                                int(best_match["id"]),  # Existing item ID
+                                EVENT_DUPLICATE_DETECTED,
+                                data={
+                                    "duplicate_title": normalized.title,
+                                    "duplicate_source": channel.source.name if channel.source else None,
+                                    "duplicate_channel_id": channel.id,
+                                    "duplicate_url": normalized.url,
+                                    "similarity_score": best_match.get("score"),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to record duplicate event: {e}")
+
+                        continue  # Skip creating this duplicate
+                except Exception as e:
+                    logger.warning(f"Semantic duplicate check failed, continuing: {e}")
+
+            # 4. Create item
             item = Item(
                 channel_id=channel.id,
                 external_id=normalized.external_id,

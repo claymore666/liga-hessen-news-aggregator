@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Sync LLM-processed items from PostgreSQL to ChromaDB vector store.
+Sync items from PostgreSQL to ChromaDB vector store.
 
 The vector store upserts items (no duplicates) - safe to run multiple times.
+By default syncs ALL items (needed for semantic duplicate detection).
 
 Usage:
-    python scripts/sync_vectordb.py              # Sync all LLM-processed items
+    python scripts/sync_vectordb.py              # Sync ALL items (default)
+    python scripts/sync_vectordb.py --llm-only   # Only sync LLM-processed items
     python scripts/sync_vectordb.py --dry-run    # Show what would be synced
     python scripts/sync_vectordb.py --ak AK3     # Only sync specific AK
 """
@@ -32,8 +34,15 @@ def get_vectordb_stats() -> dict:
         sys.exit(1)
 
 
-def get_llm_processed_items(page: int = 1, page_size: int = 100, ak_filter: str = None) -> tuple[list, int]:
-    """Get LLM-processed items from news-aggregator API."""
+def get_items(page: int = 1, page_size: int = 100, ak_filter: str = None, llm_only: bool = False) -> tuple[list, int]:
+    """Get items from news-aggregator API.
+
+    Args:
+        page: Page number
+        page_size: Items per page
+        ak_filter: Filter by AK
+        llm_only: If True, only return LLM-processed items (legacy behavior)
+    """
     try:
         url = f"{NEWS_API_URL}/items?page={page}&page_size={page_size}&relevant_only=false"
         if ak_filter:
@@ -45,12 +54,13 @@ def get_llm_processed_items(page: int = 1, page_size: int = 100, ak_filter: str 
             items = data.get("items", [])
             total = data.get("total", 0)
 
-            # Filter to only LLM-processed items
-            processed = [
-                item for item in items
-                if item.get("metadata", {}).get("llm_analysis")
-            ]
-            return processed, total
+            # Optionally filter to only LLM-processed items
+            if llm_only:
+                items = [
+                    item for item in items
+                    if item.get("metadata", {}).get("llm_analysis")
+                ]
+            return items, total
     except Exception as e:
         print(f"Error fetching items: {e}")
         return [], 0
@@ -64,16 +74,21 @@ def index_batch(items: list) -> int:
     batch = []
     for item in items:
         source = item.get("source", {})
+        # Build metadata, filtering out None values (ChromaDB doesn't accept them)
+        metadata = {
+            "priority": item.get("priority") or "none",
+            "source": source.get("name", "") if source else "",
+            "channel_id": str(item.get("channel_id", "")),
+        }
+        # Only add assigned_ak if it has a value
+        if item.get("assigned_ak"):
+            metadata["assigned_ak"] = item["assigned_ak"]
+
         batch.append({
             "id": str(item["id"]),
             "title": item.get("title", ""),
             "content": item.get("content", "")[:5000],
-            "metadata": {
-                "priority": item.get("priority", "none"),
-                "assigned_ak": item.get("assigned_ak"),
-                "source": source.get("name", "") if source else "",
-                "channel_id": str(item.get("channel_id", "")),
-            }
+            "metadata": metadata,
         })
 
     try:
@@ -84,34 +99,45 @@ def index_batch(items: list) -> int:
         )
         with urlopen(req, timeout=60) as resp:
             data = json.load(resp)
-            return data.get("added", 0)
+            return data.get("indexed", 0)
     except Exception as e:
         print(f"Error indexing batch: {e}")
         return 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync LLM-processed items to ChromaDB")
+    parser = argparse.ArgumentParser(description="Sync items to ChromaDB vector store")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be synced")
     parser.add_argument("--ak", type=str, help="Only sync specific AK (e.g., AK3)")
+    parser.add_argument("--llm-only", action="store_true", help="Only sync LLM-processed items (legacy behavior)")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("Syncing LLM-processed items to ChromaDB")
+    if args.llm_only:
+        print("Syncing LLM-processed items to ChromaDB")
+    else:
+        print("Syncing ALL items to ChromaDB (for duplicate detection)")
     print("=" * 60)
 
     # Initial stats
     stats = get_vectordb_stats()
     print(f"Vector store: {stats.get('vector_store_items', 0)} items")
 
-    # Collect all LLM-processed items
+    # Collect items
     all_items = []
     page = 1
 
-    print(f"\nFetching LLM-processed items{f' (AK={args.ak})' if args.ak else ''}...")
+    filter_desc = []
+    if args.llm_only:
+        filter_desc.append("LLM-processed only")
+    if args.ak:
+        filter_desc.append(f"AK={args.ak}")
+    filter_str = f" ({', '.join(filter_desc)})" if filter_desc else ""
+
+    print(f"\nFetching items{filter_str}...")
 
     while True:
-        items, total = get_llm_processed_items(page=page, ak_filter=args.ak)
+        items, total = get_items(page=page, ak_filter=args.ak, llm_only=args.llm_only)
         if not items:
             if page == 1:
                 print("  No items found")
@@ -124,7 +150,7 @@ def main():
             break
         page += 1
 
-    print(f"\nFound {len(all_items)} LLM-processed items")
+    print(f"\nFound {len(all_items)} items")
 
     # Show AK distribution
     ak_counts = {}
