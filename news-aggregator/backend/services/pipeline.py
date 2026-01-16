@@ -367,6 +367,14 @@ class Pipeline:
         title = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", title)
         title = re.sub(r"\s+", " ", title).strip()
 
+        # Fix HTML entities in title
+        title = title.replace("&amp;", "&")
+        title = title.replace("&lt;", "<")
+        title = title.replace("&gt;", ">")
+        title = title.replace("&quot;", '"')
+        title = title.replace("&#39;", "'")
+        title = title.replace("&nbsp;", " ")
+
         return RawItem(
             external_id=raw.external_id,
             title=title,
