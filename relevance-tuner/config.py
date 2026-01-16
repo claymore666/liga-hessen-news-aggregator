@@ -59,7 +59,7 @@ RF_MAX_DEPTH = 15
 # Classification Labels
 # ============================================================================
 
-PRIORITY_LEVELS = ["low", "medium", "high", "critical"]
+PRIORITY_LEVELS = ["low", "medium", "high"]
 AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
 
 # AK Definitions (for reference)

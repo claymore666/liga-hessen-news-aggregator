@@ -98,7 +98,7 @@ class EmbeddingClassifier:
     """
 
     # Label mappings (integer class index to string label)
-    PRIORITY_LABELS = ["critical", "high", "medium", "low"]
+    PRIORITY_LABELS = ["high", "medium", "low"]
     AK_LABELS = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
 
     def __init__(self):
