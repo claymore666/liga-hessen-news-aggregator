@@ -1,5 +1,6 @@
 """Mastodon/Fediverse connector."""
 
+import logging
 import re
 from datetime import datetime
 from time import mktime
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class MastodonConfig(BaseModel):
@@ -23,6 +26,9 @@ class MastodonConfig(BaseModel):
     )
     api_token: str | None = Field(
         default=None, description="API token for private accounts"
+    )
+    follow_links: bool = Field(
+        default=True, description="Follow links to fetch full article content"
     )
 
     @field_validator("handle")
@@ -77,11 +83,20 @@ class MastodonConnector(BaseConnector):
         Returns:
             List of RawItem objects from the account
         """
-        if config.use_api and config.api_token:
-            return await self._fetch_via_api(config)
-        return await self._fetch_via_rss(config)
+        # Import article extractor if link following is enabled
+        article_extractor = None
+        if config.follow_links:
+            try:
+                from services.article_extractor import ArticleExtractor
+                article_extractor = ArticleExtractor()
+            except ImportError:
+                logger.warning("ArticleExtractor not available, disabling link following")
 
-    async def _fetch_via_rss(self, config: MastodonConfig) -> list[RawItem]:
+        if config.use_api and config.api_token:
+            return await self._fetch_via_api(config, article_extractor)
+        return await self._fetch_via_rss(config, article_extractor)
+
+    async def _fetch_via_rss(self, config: MastodonConfig, article_extractor=None) -> list[RawItem]:
         """Fetch posts via RSS feed."""
         rss_url = self._get_rss_url(config)
 
@@ -109,11 +124,36 @@ class MastodonConnector(BaseConnector):
             plain_content = self._strip_html(content)
             title = plain_content[:100] + "..." if len(plain_content) > 100 else plain_content
 
+            # Try to fetch full article content if link following is enabled
+            final_content = plain_content
+            article_fetched = False
+            if article_extractor:
+                urls = article_extractor.extract_urls_from_text(content)
+                # Filter out internal Mastodon links (same instance, known Mastodon domains)
+                external_urls = [
+                    url for url in urls
+                    if not any(domain in url.lower() for domain in [
+                        config.instance,
+                        "mastodon.social", "mastodon.online", "mstdn.social",
+                        "social.hessen.de", "social.bund.de", "hessen.social",
+                    ])
+                ]
+                for url in external_urls[:1]:  # Only follow first external link
+                    try:
+                        article = await article_extractor.fetch_article(url)
+                        if article and article.content:
+                            final_content = f"Toot: {plain_content}\n\n--- Verlinkter Artikel von {article.source_domain} ---\n\n{article.content}"
+                            article_fetched = True
+                            logger.debug(f"Fetched article from {url}: {len(article.content)} chars")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch article from {url}: {e}")
+
             items.append(
                 RawItem(
                     external_id=entry.get("id", entry.link),
                     title=title,
-                    content=plain_content,
+                    content=final_content,
                     url=entry.link,
                     author=f"@{config.handle}",
                     published_at=published,
@@ -122,13 +162,14 @@ class MastodonConnector(BaseConnector):
                         "instance": config.instance,
                         "handle": config.handle,
                         "source_type": "rss",
+                        "article_extracted": article_fetched,
                     },
                 )
             )
 
         return items
 
-    async def _fetch_via_api(self, config: MastodonConfig) -> list[RawItem]:
+    async def _fetch_via_api(self, config: MastodonConfig, article_extractor=None) -> list[RawItem]:
         """Fetch posts via Mastodon API."""
         api_base = f"https://{config.instance}/api/v1"
         headers = {}
@@ -162,8 +203,9 @@ class MastodonConnector(BaseConnector):
             # Handle boosts (reblogs)
             content_status = status.get("reblog") or status
 
-            content = self._strip_html(content_status.get("content", ""))
-            title = content[:100] + "..." if len(content) > 100 else content
+            html_content = content_status.get("content", "")
+            plain_content = self._strip_html(html_content)
+            title = plain_content[:100] + "..." if len(plain_content) > 100 else plain_content
 
             # Parse date
             published = None
@@ -175,11 +217,36 @@ class MastodonConnector(BaseConnector):
                 except ValueError:
                     pass
 
+            # Try to fetch full article content if link following is enabled
+            final_content = plain_content
+            article_fetched = False
+            if article_extractor:
+                urls = article_extractor.extract_urls_from_text(html_content)
+                # Filter out internal Mastodon links (same instance, known Mastodon domains)
+                external_urls = [
+                    url for url in urls
+                    if not any(domain in url.lower() for domain in [
+                        config.instance,
+                        "mastodon.social", "mastodon.online", "mstdn.social",
+                        "social.hessen.de", "social.bund.de", "hessen.social",
+                    ])
+                ]
+                for url in external_urls[:1]:  # Only follow first external link
+                    try:
+                        article = await article_extractor.fetch_article(url)
+                        if article and article.content:
+                            final_content = f"Toot: {plain_content}\n\n--- Verlinkter Artikel von {article.source_domain} ---\n\n{article.content}"
+                            article_fetched = True
+                            logger.debug(f"Fetched article from {url}: {len(article.content)} chars")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch article from {url}: {e}")
+
             items.append(
                 RawItem(
                     external_id=status["id"],
                     title=title,
-                    content=content,
+                    content=final_content,
                     url=status["url"],
                     author=f"@{content_status['account']['acct']}",
                     published_at=published,
@@ -192,6 +259,7 @@ class MastodonConnector(BaseConnector):
                         "reblogs": status.get("reblogs_count", 0),
                         "replies": status.get("replies_count", 0),
                         "source_type": "api",
+                        "article_extracted": article_fetched,
                     },
                 )
             )
