@@ -171,6 +171,13 @@ class StorageSizeResponse(BaseModel):
     duplicate_store_items: int
 
 
+class SyncResponse(BaseModel):
+    """Response model for sync operation."""
+    synced: int
+    skipped: int
+    total_in_duplicate_store: int
+
+
 # ============== Endpoints ==============
 
 @app.get("/health", response_model=HealthResponse)
@@ -390,6 +397,7 @@ async def root():
         "endpoints": {
             "/health": "Health check (GET)",
             "/storage": "Storage sizes (GET)",
+            "/sync-duplicate-store": "Sync vector store to duplicate store (POST)",
             "/classify": "Classify article relevance (POST)",
             "/search": "Semantic search (POST)",
             "/similar": "Find similar articles (POST)",
@@ -431,6 +439,45 @@ async def get_storage_sizes():
         vector_store_items=vs_items,
         duplicate_store_size_bytes=ds_size,
         duplicate_store_items=ds_items,
+    )
+
+
+@app.post("/sync-duplicate-store", response_model=SyncResponse)
+async def sync_duplicate_store():
+    """Sync items from vector store to duplicate store.
+
+    Copies all items from the vector store (nomic embeddings) to the
+    duplicate store (paraphrase embeddings) for duplicate detection.
+    Items already in the duplicate store are skipped.
+    """
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    if duplicate_store is None:
+        raise HTTPException(status_code=503, detail="Duplicate store not initialized")
+
+    logger.info("Starting sync from vector store to duplicate store...")
+
+    # Get all items from vector store
+    items = vector_store.get_all_items()
+    logger.info(f"Found {len(items)} items in vector store")
+
+    if not items:
+        return SyncResponse(
+            synced=0,
+            skipped=0,
+            total_in_duplicate_store=duplicate_store.get_stats()["total_items"],
+        )
+
+    # Add to duplicate store in batches
+    synced = duplicate_store.add_items_batch(items)
+    skipped = len(items) - synced
+
+    logger.info(f"Sync complete: {synced} synced, {skipped} skipped")
+
+    return SyncResponse(
+        synced=synced,
+        skipped=skipped,
+        total_in_duplicate_store=duplicate_store.get_stats()["total_items"],
     )
 
 

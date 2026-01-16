@@ -471,6 +471,37 @@ class VectorStore:
             "persist_dir": self.persist_dir,
         }
 
+    def get_all_items(self, batch_size: int = 1000) -> list[dict]:
+        """Get all items from the vector store for syncing.
+
+        Returns list of dicts with id, title, content (document).
+        """
+        total = self.collection.count()
+        if total == 0:
+            return []
+
+        items = []
+        offset = 0
+
+        while offset < total:
+            results = self.collection.get(
+                limit=batch_size,
+                offset=offset,
+                include=["documents", "metadatas"],
+            )
+
+            for i, item_id in enumerate(results["ids"]):
+                items.append({
+                    "id": item_id,
+                    "title": results["metadatas"][i].get("title", ""),
+                    "content": results["documents"][i] if results["documents"] else "",
+                    "metadata": results["metadatas"][i],
+                })
+
+            offset += batch_size
+
+        return items
+
 
 class DuplicateStore:
     """
