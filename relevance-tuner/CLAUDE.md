@@ -157,3 +157,77 @@ curl -s "http://localhost:8000/api/llm/status" | jq '.model'
 # Switch to base model (recommended)
 curl -X PUT "http://localhost:8000/api/llm/model" -H "Content-Type: application/json" -d '{"model": "qwen3:14b-q8_0"}'
 ```
+
+## Classifier API (Embedding Service)
+
+Runs on port 8082. Provides classification, semantic search, and duplicate detection.
+
+### Models Used
+
+| Model | Purpose |
+|-------|---------|
+| `nomic-ai/nomic-embed-text-v2-moe` | Classification & semantic search (768d) |
+| `paraphrase-multilingual-mpnet-base-v2` | Duplicate detection (better same-story detection) |
+
+### Duplicate Detection
+
+Uses a separate `DuplicateStore` with paraphrase embeddings for better semantic similarity:
+- **Threshold**: 0.75 (catches same-story articles with different wording)
+- True duplicates (same article, different source): ~0.97 similarity
+- Same story, different angles: 0.75-0.90 similarity
+- Unrelated articles: <0.50 similarity
+
+```bash
+# Check classifier health
+curl -s http://localhost:8082/health | jq '.'
+
+# Test duplicate detection
+curl -s -X POST http://localhost:8082/find-duplicates \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Article title", "content": "Article content", "threshold": 0.75}'
+```
+
+### Rebuilding Classifier
+
+```bash
+cd /home/kamienc/claude.ai/ligahessen/relevance-tuner/services/classifier-api
+docker compose down && docker compose build --no-cache && docker compose up -d
+```
+
+## Database & Storage
+
+### PostgreSQL Database
+
+- **Container**: `liga-news-db`
+- **Database**: `liga_news`
+- **User**: `liga`
+- **Password**: stored in `.env` as `POSTGRES_PASSWORD`
+
+```bash
+# Connect to database
+docker exec -it liga-news-db psql -U liga -d liga_news
+
+# Check database size
+docker exec liga-news-db psql -U liga -d liga_news -c "SELECT pg_size_pretty(pg_database_size('liga_news'));"
+```
+
+### Vector Stores (ChromaDB)
+
+| Store | Path | Model | Purpose |
+|-------|------|-------|---------|
+| Vector store | `/app/data/vectordb` | nomic-v2 | Classification & search |
+| Duplicate store | `/app/data/duplicatedb` | paraphrase-mpnet | Duplicate detection |
+
+```bash
+# Check store sizes
+docker exec liga-classifier du -sh /app/data/vectordb /app/data/duplicatedb
+```
+
+### Disk Usage (as of Jan 2026)
+
+| Component | Size |
+|-----------|------|
+| PostgreSQL | ~24 MB |
+| Vector store (nomic) | ~51 MB |
+| Duplicate store (paraphrase) | ~45 MB |
+| **Total** | ~120 MB |
