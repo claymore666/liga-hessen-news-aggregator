@@ -1,6 +1,10 @@
 """API endpoints for sources (organizations) and their channels."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -320,7 +324,8 @@ async def trigger_fetch_all_channels(
                 new_count = await fetch_channel(channel.id, training_mode=training_mode)
                 total_new += new_count
                 channels_fetched += 1
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to fetch channel {channel.id} ({channel.name}): {e}")
                 errors += 1
 
     return {

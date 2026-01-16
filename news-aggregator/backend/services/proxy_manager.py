@@ -227,7 +227,8 @@ class ProxyManager:
                     return True, latency
                 return False, latency
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Proxy validation failed for {proxy}: {e}")
             return False, 0.0
 
     async def _search_batch(self) -> int:

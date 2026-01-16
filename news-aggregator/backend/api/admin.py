@@ -254,8 +254,8 @@ async def get_system_health(
         elif settings.openrouter_api_key:
             llm_provider = "openrouter"
             llm_available = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"LLM health check failed: {e}")
 
     # Proxy status
     proxy_count = len(proxy_manager.working_proxies)
@@ -268,7 +268,8 @@ async def get_system_health(
     try:
         items_count = await db.scalar(select(func.count(Item.id))) or 0
         sources_count = await db.scalar(select(func.count(Source.id))) or 0
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Database health check failed: {e}")
         database_ok = False
 
     overall_status = "healthy"

@@ -530,8 +530,8 @@ Verlinkter Artikel von {article.source_domain}:
             if page:
                 try:
                     await page.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error closing page: {e}")
 
     async def _handle_cookie_consent(self, page):
         """Click common cookie consent buttons.
@@ -574,6 +574,7 @@ Verlinkter Artikel von {article.source_domain}:
                     await page.wait_for_timeout(500)
                     return
             except Exception:
+                # Expected to fail for most selectors, continue trying others
                 continue
 
     async def _expand_article_content(self, page):
@@ -608,6 +609,7 @@ Verlinkter Artikel von {article.source_domain}:
                     await page.wait_for_timeout(1000)
                     return
             except Exception:
+                # Expected to fail for most selectors, continue trying others
                 continue
 
     def _is_external_article_url(self, url: str) -> bool:

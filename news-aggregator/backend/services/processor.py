@@ -348,8 +348,8 @@ async def is_llm_enabled() -> bool:
             )
             if setting is not None:
                 return setting.value.lower() == "true"
-    except Exception:
-        pass  # Fall back to env if DB check fails
+    except Exception as e:
+        logger.debug(f"Could not check DB for llm_enabled setting, using env: {e}")
 
     # Fall back to environment variable
     return settings.llm_enabled
