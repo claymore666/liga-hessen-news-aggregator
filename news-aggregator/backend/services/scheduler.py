@@ -236,8 +236,11 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     # Phase 3: Database writes - process and store items (serialized)
     async with db_write_lock:
         async with async_session_maker() as db:
-            # Re-fetch channel within this session
-            channel = await db.get(Channel, channel_id)
+            # Re-fetch channel within this session (with source eager-loaded for indexing)
+            result = await db.execute(
+                select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+            )
+            channel = result.scalar_one_or_none()
             if channel is None:
                 return 0
 
@@ -494,23 +497,24 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                 if analysis.get("detailed_analysis"):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
-                # Update priority based on LLM
+                # Use LLM priority directly (no remapping)
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if analysis.get("relevant") is False:
-                    llm_priority = "low"
+                    llm_priority = None
 
                 from models import Priority
-                if llm_priority == "critical":
+                if llm_priority == "high":
                     item.priority = Priority.HIGH
                     item.priority_score = max(item.priority_score, 90)
-                elif llm_priority == "high":
+                elif llm_priority == "medium":
                     item.priority = Priority.MEDIUM
                     item.priority_score = max(item.priority_score, 70)
-                elif llm_priority == "medium":
+                elif llm_priority == "low":
                     item.priority = Priority.LOW
-                elif llm_priority:
+                    item.priority_score = max(item.priority_score, 40)
+                else:
                     item.priority = Priority.NONE
-                    item.priority_score = min(item.priority_score, 40)
+                    item.priority_score = min(item.priority_score, 20)
 
                 # Store analysis metadata
                 item.metadata_["llm_analysis"] = {
@@ -545,34 +549,84 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
     return {"processed": processed, "errors": errors, "remaining": remaining}
 
 
-async def cleanup_old_items() -> int:
-    """Remove items older than configured retention period.
+async def cleanup_old_items() -> dict:
+    """Remove items based on per-priority retention settings.
+
+    Uses housekeeping configuration from database with different retention
+    periods per priority level.
 
     Returns:
-        Number of items deleted.
+        Dict with deletion statistics.
     """
-    from datetime import timedelta
+    from sqlalchemy import delete, and_
 
-    from sqlalchemy import delete
-
-    from models import Item
+    from models import Item, Priority, Setting
 
     logger.info("Starting cleanup of old items")
 
-    cutoff = datetime.utcnow() - timedelta(days=settings.cleanup_days)
-
     async with async_session_maker() as db:
-        # Don't delete starred items
-        stmt = delete(Item).where(
-            Item.fetched_at < cutoff,
-            Item.is_starred == False,  # noqa: E712
+        # Load housekeeping config from database
+        from api.admin import DEFAULT_HOUSEKEEPING_CONFIG
+
+        result = await db.execute(
+            select(Setting).where(Setting.key == "housekeeping")
         )
-        result = await db.execute(stmt)
+        setting = result.scalar_one_or_none()
+
+        if setting and setting.value:
+            config = dict(DEFAULT_HOUSEKEEPING_CONFIG)
+            config.update(setting.value)
+        else:
+            config = dict(DEFAULT_HOUSEKEEPING_CONFIG)
+
+        # Check if autopurge is enabled
+        if not config.get("autopurge_enabled", False):
+            logger.info("Autopurge disabled, skipping cleanup")
+            return {"deleted": 0, "skipped": True, "reason": "autopurge_disabled"}
+
+        exclude_starred = config.get("exclude_starred", True)
+        now = datetime.utcnow()
+        total_deleted = 0
+        by_priority: dict[str, int] = {}
+
+        # Delete per-priority with different retention periods
+        for priority, days_key in [
+            (Priority.HIGH, "retention_days_high"),
+            (Priority.MEDIUM, "retention_days_medium"),
+            (Priority.LOW, "retention_days_low"),
+            (Priority.NONE, "retention_days_none"),
+        ]:
+            retention_days = config.get(days_key, 30)
+            cutoff = now - timedelta(days=retention_days)
+
+            # Build conditions
+            conditions = [
+                Item.priority == priority,
+                Item.fetched_at < cutoff,
+            ]
+            if exclude_starred:
+                conditions.append(Item.is_starred == False)  # noqa: E712
+
+            stmt = delete(Item).where(and_(*conditions))
+            result = await db.execute(stmt)
+            count = result.rowcount
+
+            if count > 0:
+                by_priority[priority.value] = count
+                total_deleted += count
+                logger.info(
+                    f"Deleted {count} {priority.value} priority items "
+                    f"older than {retention_days} days"
+                )
+
         await db.commit()
 
-        deleted = result.rowcount
-        logger.info(f"Deleted {deleted} old items")
-        return deleted
+        logger.info(f"Cleanup completed: deleted {total_deleted} items ({by_priority})")
+        return {
+            "deleted": total_deleted,
+            "by_priority": by_priority,
+            "skipped": False,
+        }
 
 
 async def cleanup_old_events() -> int:

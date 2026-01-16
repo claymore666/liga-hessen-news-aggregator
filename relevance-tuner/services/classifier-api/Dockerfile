@@ -11,8 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download nomic-v2 model during build
+# Pre-download models during build
+# nomic-v2 for classification and semantic search
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nomic-ai/nomic-embed-text-v2-moe', trust_remote_code=True)"
+# paraphrase-mpnet for duplicate detection (better same-story detection)
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')"
 
 # Copy application code
 COPY . .

@@ -20,6 +20,12 @@ class GoogleAlertsConfig(BaseModel):
         ...,
         description="Google Alerts RSS-Feed URL (von google.com/alerts)"
     )
+    custom_title: str | None = Field(
+        default=None, description="Custom name for the feed (optional)"
+    )
+    follow_links: bool = Field(
+        default=True, description="Follow links to fetch full article content"
+    )
 
     @field_validator("url")
     @classmethod

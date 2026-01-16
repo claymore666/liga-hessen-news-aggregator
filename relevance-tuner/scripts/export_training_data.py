@@ -25,7 +25,7 @@ PAGE_SIZE = 100
 RANDOM_SEED = 42
 
 # Valid values (must match config.py)
-PRIORITY_LEVELS = ["low", "medium", "high", "critical"]
+PRIORITY_LEVELS = ["low", "medium", "high"]
 AK_CLASSES = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG",
               "QAG_DIGITALISIERUNG", "QAG_WOHNEN", "QAG_KLIMASCHUTZ"]
 

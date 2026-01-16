@@ -1,6 +1,10 @@
 # Training Issues and Solutions
 
-This document captures known issues, root causes, and solutions for the Liga Relevance model training pipeline.
+Known issues and solutions for the Liga Relevance model training pipeline.
+
+> **Note**: The primary classification system is now the **embedding classifier** (nomic-v2 + sklearn), which doesn't have these issues. The issues below apply to **LLM fine-tuning**, which is optional.
+
+---
 
 ## Issue #1: Model Produces Garbage Output ("zertrüten zertrüten...")
 
@@ -71,22 +75,18 @@ The workaround is using PEFT with a fresh 16-bit base model on CPU.
 ### Root Cause
 **Training data contained fake truncated summaries.**
 
-In the original `train_qwen3.py` (line 98):
+In early versions of `train_qwen3.py`:
 ```python
 summary = record.get("summary", f"{content_preview[:200]}...")
 ```
 
 This created "summaries" by truncating article content to 200 chars and adding "...".
-- The model learned this truncation pattern
-- `detailed_analysis` wasn't in training data at all
 
 ### Solution
 1. Update labeling prompt to request proper `summary` and `detailed_analysis`
 2. Labeling script stores these fields in `output` dict
 3. Training script reads from `output` dict, no fallback truncation
 4. Relabel all training data with larger model
-
-See: Training data format in DATA_CREATION.md
 
 ---
 
@@ -125,7 +125,7 @@ base_model = AutoModelForCausalLM.from_pretrained(
 
 ---
 
-## Verified Working Pipeline (2026-01-10)
+## Verified Working Pipeline
 
 1. **Train with 8-bit** (`load_in_8bit=True`)
 2. **Save LoRA adapter** (not merged model)
@@ -134,3 +134,18 @@ base_model = AutoModelForCausalLM.from_pretrained(
 5. **Import to Ollama** with `ollama create`
 
 This produces coherent German output matching the training data format.
+
+---
+
+## Current Recommendation
+
+**Use embedding classifier + base LLM** instead of fine-tuned LLM:
+
+| Aspect | Fine-tuned LLM | Embedding + Base LLM |
+|--------|---------------|---------------------|
+| Classification | Embedding classifier (fast) | Embedding classifier (fast) |
+| Analysis | Fine-tuned (complex) | Base model + prompt (simple) |
+| Quality | Training-data dependent | Prompt-controlled |
+| Iteration | Hours to retrain | Minutes to edit prompt |
+
+The embedding classifier handles relevance/priority/AK classification, while the base LLM with system prompt handles summaries and analysis.

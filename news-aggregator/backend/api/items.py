@@ -10,7 +10,31 @@ from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
-from schemas import ItemListResponse, ItemResponse, ItemUpdate
+from schemas import DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+
+
+def _build_item_response(item: Item) -> ItemResponse:
+    """Build ItemResponse with proper duplicate formatting."""
+    # Build duplicates list from relationship
+    duplicates = []
+    if hasattr(item, 'duplicates') and item.duplicates:
+        for dup in item.duplicates:
+            source_brief = None
+            if dup.channel and dup.channel.source:
+                source_brief = SourceBrief(id=dup.channel.source.id, name=dup.channel.source.name)
+            duplicates.append(DuplicateBrief(
+                id=dup.id,
+                title=dup.title,
+                url=dup.url,
+                priority=dup.priority,
+                source=source_brief,
+                published_at=dup.published_at,
+            ))
+
+    # Create base response
+    response = ItemResponse.model_validate(item)
+    response.duplicates = duplicates
+    return response
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,6 +69,7 @@ async def list_items(
     assigned_ak: str | None = Query(None, description="Filter by Arbeitskreis (comma-separated: AK1,AK2,AK3)"),
     sort_by: str = Query("date", description="Sort by: date, priority, source"),
     sort_order: str = Query("desc", description="Sort order: asc, desc"),
+    group_duplicates: bool = Query(True, description="Group duplicate articles under primary item"),
 ) -> ItemListResponse:
     """List items with filtering and pagination.
 
@@ -52,10 +77,16 @@ async def list_items(
     Set relevant_only=false to include all items including NONE priority.
     By default, archived items are excluded. Set is_archived=true to show only archived,
     or is_archived=false to explicitly exclude them.
+    When group_duplicates=true (default), duplicate articles are nested under their primary item.
     """
     query = select(Item).options(
-        selectinload(Item.channel).selectinload(Channel.source)
+        selectinload(Item.channel).selectinload(Channel.source),
+        selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
     )
+
+    # Exclude duplicates from main list (they appear nested under primary)
+    if group_duplicates:
+        query = query.where(Item.similar_to_id.is_(None))
 
     # Apply filters
     if channel_id is not None:
@@ -157,7 +188,7 @@ async def list_items(
     total_pages = (total + page_size - 1) // page_size
 
     return ItemListResponse(
-        items=[ItemResponse.model_validate(item) for item in items],
+        items=[_build_item_response(item) for item in items],
         total=total,
         page=page,
         page_size=page_size,
@@ -232,7 +263,10 @@ async def get_item(
     query = (
         select(Item)
         .where(Item.id == item_id)
-        .options(selectinload(Item.channel).selectinload(Channel.source))
+        .options(
+            selectinload(Item.channel).selectinload(Channel.source),
+            selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
+        )
     )
     result = await db.execute(query)
     item = result.scalar_one_or_none()
@@ -240,7 +274,7 @@ async def get_item(
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    return ItemResponse.model_validate(item)
+    return _build_item_response(item)
 
 
 @router.patch("/items/{item_id}", response_model=ItemResponse)
@@ -334,9 +368,19 @@ async def update_item(
             ip_address=get_client_ip(request),
         )
 
-    await db.refresh(item)
+    # Re-fetch with duplicates loaded
+    query = (
+        select(Item)
+        .where(Item.id == item_id)
+        .options(
+            selectinload(Item.channel).selectinload(Channel.source),
+            selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
+        )
+    )
+    result = await db.execute(query)
+    item = result.scalar_one()
 
-    return ItemResponse.model_validate(item)
+    return _build_item_response(item)
 
 
 @router.post("/items/{item_id}/read")
@@ -426,8 +470,54 @@ async def reprocess_single_item(
     }
 
 
+async def _refetch_rss_item_task(item_id: int):
+    """Background task to re-fetch an RSS/Google Alerts item and extract article content."""
+    from services.article_extractor import ArticleExtractor
+    from sqlalchemy.orm.attributes import flag_modified
+
+    async with async_session_maker() as db:
+        try:
+            result = await db.execute(
+                select(Item)
+                .where(Item.id == item_id)
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+            )
+            item = result.scalar_one_or_none()
+            if not item:
+                logger.error(f"Item {item_id} not found for re-fetch")
+                return
+
+            extractor = ArticleExtractor()
+            article = await extractor.fetch_article(item.url)
+
+            if article and article.content and len(article.content) > 100:
+                # Combine RSS summary with full article
+                rss_summary = item.content
+                item.content = f"RSS-Zusammenfassung: {rss_summary}\n\n--- Vollständiger Artikel von {article.source_domain} ---\n\n{article.content}"
+                item.metadata_["article_extracted"] = True
+                item.metadata_["refetched_at"] = datetime.utcnow().isoformat()
+                item.metadata_["linked_articles"] = [{
+                    "url": article.url,
+                    "title": article.title,
+                    "domain": article.source_domain,
+                    "content_length": len(article.content),
+                }]
+                flag_modified(item, "metadata_")
+
+                await db.commit()
+                logger.info(f"Re-fetched RSS item {item_id}: {len(article.content)} chars from {article.source_domain}")
+
+                # Reprocess through LLM for better analysis
+                await _reprocess_items_task([item_id], force=True)
+            else:
+                logger.warning(f"No article content extracted for RSS item {item_id}")
+
+        except Exception as e:
+            logger.error(f"Error re-fetching RSS item {item_id}: {e}")
+
+
 async def _refetch_item_task(item_id: int):
-    """Background task to re-fetch an item and extract linked articles."""
+    """Background task to re-fetch an x_scraper/linkedin item and extract linked articles."""
     from connectors import ConnectorRegistry
     from services.article_extractor import ArticleExtractor
 
@@ -445,7 +535,7 @@ async def _refetch_item_task(item_id: int):
 
             connector_type = item.channel.connector_type
             if connector_type not in ("x_scraper", "linkedin"):
-                logger.warning(f"Re-fetch only supported for x_scraper/linkedin, got {connector_type}")
+                logger.warning(f"_refetch_item_task only for x_scraper/linkedin, got {connector_type}")
                 return
 
             # Get the tweet/post URL
@@ -611,16 +701,14 @@ async def refetch_item(
 ) -> dict:
     """Re-fetch an item to extract linked article content.
 
-    For x_scraper and linkedin items, this will:
-    1. Extract any article links from the tweet/post text
-    2. Resolve t.co shortened URLs
-    3. Fetch article content from the linked URLs
-    4. Update the item with the article content
-    5. Reprocess through the LLM for better analysis
+    Supports all connector types:
+    - x_scraper/linkedin: Extract links from tweet/post, resolve t.co, fetch articles
+    - rss/google_alerts: Fetch full article from item URL (resolves Google redirects)
+    - Other connectors: Extract URLs from content and fetch articles
 
     Runs in background and returns immediately.
     """
-    # Verify item exists and is from a supported connector
+    # Verify item exists
     query = (
         select(Item)
         .where(Item.id == item_id)
@@ -633,19 +721,21 @@ async def refetch_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     connector_type = item.channel.connector_type
-    if connector_type not in ("x_scraper", "linkedin"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Re-fetch only supported for x_scraper/linkedin items, got {connector_type}"
-        )
 
-    background_tasks.add_task(_refetch_item_task, item_id)
+    # Route to appropriate task based on connector type
+    if connector_type in ("x_scraper", "linkedin"):
+        background_tasks.add_task(_refetch_item_task, item_id)
+    elif connector_type in ("rss", "google_alerts"):
+        background_tasks.add_task(_refetch_rss_item_task, item_id)
+    else:
+        # For other connectors, use RSS-style refetch (direct URL fetch)
+        background_tasks.add_task(_refetch_rss_item_task, item_id)
 
     return {
         "status": "started",
         "item_id": item_id,
         "connector_type": connector_type,
-        "message": "Re-fetching article links in background. Check logs for progress.",
+        "message": "Re-fetching article content in background. Check logs for progress.",
     }
 
 

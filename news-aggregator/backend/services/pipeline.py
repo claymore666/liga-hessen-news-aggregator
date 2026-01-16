@@ -121,18 +121,21 @@ class Pipeline:
                 continue
 
             # 3a. Check for semantic duplicates (cross-channel)
+            # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
+            similar_to_id = None
             if self.relevance_filter and not self.training_mode:
                 try:
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=normalized.title,
                         content=normalized.content,
-                        threshold=0.80,
+                        threshold=0.75,  # Paraphrase model threshold for same-story detection
                     )
                     if duplicates:
                         best_match = duplicates[0]
+                        similar_to_id = int(best_match["id"])
                         logger.info(
                             f"Semantic duplicate: '{normalized.title[:40]}...' "
-                            f"matches '{best_match.get('title', '')[:40]}...' "
+                            f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
                             f"(score: {best_match.get('score', 0):.3f})"
                         )
 
@@ -141,7 +144,7 @@ class Pipeline:
                         try:
                             await record_event(
                                 self.db,
-                                int(best_match["id"]),  # Existing item ID
+                                similar_to_id,  # Existing item ID
                                 EVENT_DUPLICATE_DETECTED,
                                 data={
                                     "duplicate_title": normalized.title,
@@ -153,8 +156,6 @@ class Pipeline:
                             )
                         except Exception as e:
                             logger.warning(f"Failed to record duplicate event: {e}")
-
-                        continue  # Skip creating this duplicate
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
 
@@ -169,6 +170,7 @@ class Pipeline:
                 published_at=normalized.published_at,
                 content_hash=content_hash,
                 metadata_=normalized.metadata,
+                similar_to_id=similar_to_id,  # Link to primary item if duplicate
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
@@ -244,22 +246,22 @@ class Pipeline:
                 }
 
                 # 7a. Optionally use classifier priority instead of LLM
-                # Map classifier output to new priority system (critical→high, high→medium, medium→low, low→none)
+                # Direct mapping: classifier high/medium/low → backend HIGH/MEDIUM/LOW
                 if settings.classifier_use_priority and pre_filter_result.get("priority"):
                     clf_priority = pre_filter_result["priority"]
-                    if clf_priority == "critical":
+                    if clf_priority == "high":
                         item.priority = Priority.HIGH
                         item.priority_score = 90
-                    elif clf_priority == "high":
+                    elif clf_priority == "medium":
                         item.priority = Priority.MEDIUM
                         item.priority_score = 70
-                    elif clf_priority == "medium":
+                    elif clf_priority == "low":
                         item.priority = Priority.LOW
                         item.priority_score = 50
                     else:
-                        # "low" or unknown → NONE (not relevant)
-                        item.priority = Priority.NONE
-                        item.priority_score = 30
+                        # unknown → default to MEDIUM
+                        item.priority = Priority.MEDIUM
+                        item.priority_score = 60
                     logger.debug(f"Using classifier priority: {clf_priority} -> {_get_priority_value(item.priority)}")
 
                 # 7b. Optionally use classifier AK instead of LLM
@@ -348,6 +350,10 @@ class Pipeline:
         # Strip HTML tags from content
         content = re.sub(r"<[^>]+>", "", raw.content)
 
+        # Remove control characters (except newline, tab, carriage return)
+        # This prevents issues with parsing, storing, and JSON serialization
+        content = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", content)
+
         # Normalize whitespace
         content = re.sub(r"\s+", " ", content).strip()
 
@@ -358,9 +364,18 @@ class Pipeline:
         content = content.replace("&quot;", '"')
         content = content.replace("&#39;", "'")
 
-        # Strip HTML tags from title and normalize whitespace
+        # Strip HTML tags from title, remove control chars, normalize whitespace
         title = re.sub(r"<[^>]+>", "", raw.title)
+        title = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", title)
         title = re.sub(r"\s+", " ", title).strip()
+
+        # Fix HTML entities in title
+        title = title.replace("&amp;", "&")
+        title = title.replace("&lt;", "<")
+        title = title.replace("&gt;", ">")
+        title = title.replace("&quot;", '"')
+        title = title.replace("&#39;", "'")
+        title = title.replace("&nbsp;", " ")
 
         return RawItem(
             external_id=raw.external_id,

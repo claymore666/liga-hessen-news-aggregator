@@ -7,6 +7,10 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen to monitor
 - **Multi-Channel Monitoring**: RSS, X/Twitter, Bluesky, Mastodon, Instagram, LinkedIn, Telegram, Google Alerts, PDF documents, HTML scraping
 - **LLM Integration**: Ollama for relevance classification, summarization, and priority scoring
 - **Embedding-based Pre-filter**: Fast relevance classification using sentence transformers
+- **Semantic Duplicate Detection**: Groups similar articles across sources using paraphrase embeddings
+- **Multi-AK Assignment**: Items can be assigned to multiple Arbeitskreise (AK1-5, QAG)
+- **System Stats Dashboard**: Real-time monitoring with worker controls
+- **Item Audit Trail**: Full history of processing events per item
 - **Vue 3 Frontend**: Dashboard with keyboard navigation, source/channel management, rule configuration
 - **Smart Scheduling**: Per-channel fetch intervals with parallel fetching by source type
 - **Rule-based Filtering**: Keyword matching, regex patterns, LLM-powered semantic rules
@@ -27,19 +31,15 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen to monitor
 | Docker Deployment | ✅ Complete |
 | Test Suite | ✅ Complete |
 
-## Known Issues
-
-- [#74](https://github.com/claymore666/liga-hessen-news-aggregator/issues/74): Articles fetched during GPU downtime are not retried for LLM processing
-
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vue 3 + Vite + TailwindCSS + Pinia |
 | Backend | Python 3.12 + FastAPI + SQLAlchemy (async) |
-| Database | SQLite |
-| LLM | Ollama (local) |
-| Embeddings | sentence-transformers |
+| Database | PostgreSQL 17 |
+| LLM | Ollama (qwen3:14b-q8_0) |
+| Embeddings | nomic-embed-text-v2-moe (classification), paraphrase-multilingual-mpnet (duplicates) |
 | Scraping | Playwright (for X/Instagram) |
 | Deployment | Docker Compose |
 

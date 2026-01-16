@@ -112,6 +112,17 @@ class RelevanceFilter:
             logger.debug(f"Failed to get classifier health: {e}")
             return None
 
+    async def get_storage_stats(self) -> Optional[dict]:
+        """Get storage statistics from classifier API."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(f"{self.base_url}/storage")
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.warning(f"Failed to get storage stats: {e}")
+            return None
+
     async def index_item(
         self,
         item_id: str,

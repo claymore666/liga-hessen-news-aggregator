@@ -1,31 +1,30 @@
 # Liga Hessen Relevance Tuner
 
-Fine-tuned LLM for classifying news relevance to the Liga der Freien Wohlfahrtspflege Hessen.
+Fine-tuned LLM and embedding classifier for news relevance classification for the Liga der Freien Wohlfahrtspflege Hessen.
 
-## High-Level Process
+## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        RELEVANCE TUNER PIPELINE                             │
+│                         NEWS CLASSIFICATION SYSTEM                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-1. DATA COLLECTION
-   news-aggregator API → news_unlabeled.jsonl → batches/batch_XX.jsonl
-
-2. LABELING (local Ollama)
-   batches/ → qwen3:14b-q8_0 → ollama_results/batch_XX_labeled.jsonl
-   ~16 items/min | Uses LABELING_PROMPT.md criteria
-
-3. SPLIT CREATION
-   ollama_results/*.jsonl → train.jsonl (70%) / val.jsonl (15%) / test.jsonl (15%)
-   Stratified by relevant/irrelevant ratio
-
-4. FINE-TUNING (Unsloth + LoRA)
-   Qwen3-14B (4-bit) + LoRA adapters → GGUF export
-   ~25 min on RTX 3090
-
-5. DEPLOYMENT
-   GGUF → ollama create liga-relevance → production inference
+                    ┌─────────────────────┐
+                    │   news-aggregator   │
+                    │      (backend)      │
+                    └──────────┬──────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+   │  Ollama LLM     │ │ Classifier API  │ │ Classifier API  │
+   │  qwen3:14b-q8_0 │ │ (nomic-v2)      │ │ (paraphrase)    │
+   │                 │ │                 │ │                 │
+   │  • Summary      │ │  • Relevance    │ │  • Duplicate    │
+   │  • Analysis     │ │  • Priority     │ │    Detection    │
+   │  • Tags         │ │  • AK (multi)   │ │  • Threshold    │
+   └─────────────────┘ └─────────────────┘ │    0.75         │
+                                           └─────────────────┘
 ```
 
 ## Quick Start
@@ -40,12 +39,11 @@ python scripts/label_with_ollama.py --all --model qwen3:14b-q8_0
 # Create train/val/test splits
 python scripts/create_splits.py
 
-# Train model
-python train_qwen3.py
+# Train embedding classifier
+python train_embedding_classifier.py
 
-# Import to Ollama
-cd models/qwen3-trained/gguf
-ollama create liga-relevance -f Modelfile
+# Deploy to classifier-api
+docker compose -f services/classifier-api/docker-compose.yml up -d --build
 ```
 
 ## Project Structure
@@ -55,7 +53,6 @@ relevance-tuner/
 ├── data/
 │   ├── raw/
 │   │   ├── batches/           # Input batches for labeling
-│   │   ├── liga_reactions/    # Liga press releases, statements
 │   │   └── news_unlabeled.jsonl
 │   ├── reviewed/
 │   │   └── ollama_results/    # Labeled output from Ollama
@@ -67,173 +64,159 @@ relevance-tuner/
 ├── scripts/
 │   ├── label_with_ollama.py   # Batch labeling with local LLM
 │   ├── create_splits.py       # Create train/val/test splits
-│   └── benchmark_models.py    # Compare model approaches
+│   ├── export_training_data.py # Export from news-aggregator DB
+│   ├── sync_vectordb.py       # Sync vector store with DB
+│   └── compare_classifier_vs_llm.py  # Evaluate classifier accuracy
+├── services/
+│   └── classifier-api/        # FastAPI embedding classifier service
+│       ├── classifier.py      # EmbeddingClassifier + VectorStore + DuplicateStore
+│       ├── main.py            # API endpoints
+│       └── Dockerfile
 ├── models/
-│   ├── qwen3-trained/         # Fine-tuned Qwen3 model (production)
-│   │   └── gguf/              # GGUF + Modelfile for Ollama
-│   └── sklearn/               # Experimental sklearn classifier
-├── train_qwen3.py             # Training script (Unsloth + LoRA)
-├── train_sklearn.py           # Sklearn training (experimental)
+│   └── embedding_classifier_nomic-v2.pkl  # Trained classifier
+├── train_embedding_classifier.py  # Embedding classifier training
+├── train_qwen3.py             # LLM fine-tuning (optional)
 ├── LABELING_PROMPT.md         # Detailed labeling instructions
 └── DATA_CREATION.md           # Data pipeline documentation
 ```
 
-## Current Dataset (v2)
+## Current Dataset (v3 - 2026-01-13)
 
 | Split | Total | Relevant | Irrelevant |
 |-------|-------|----------|------------|
-| Train | 704 | 205 (29%) | 499 (71%) |
-| Validation | 151 | 44 (29%) | 107 (71%) |
-| Test | 153 | 45 (29%) | 108 (71%) |
-| **Total** | **1008** | **294** | **714** |
+| Train | 1175 | 157 (13%) | 1018 (87%) |
+| Validation | 252 | 34 (13%) | 218 (87%) |
+| Test | 253 | 33 (13%) | 220 (87%) |
+| **Total** | **1680** | **224** | **1456** |
 
-### AK Distribution
-- QAG: 101 (34%) - Querschnitt (Digitalisierung, Wohnen, Klima)
-- AK2: 63 (21%) - Migration und Flucht
-- AK5: 56 (19%) - Kinder, Jugend, Familie
-- AK1: 51 (17%) - Grundsatz und Sozialpolitik
-- AK4: 12 (4%) - Eingliederungshilfe
-- AK3: 11 (4%) - Gesundheit, Pflege, Senioren
+### AK Distribution (Multi-label)
 
-### Priority Distribution
-- medium: 199 (68%)
-- high: 48 (16%)
-- low: 44 (15%)
-- critical: 3 (1%)
+| AK | Count | Description |
+|----|-------|-------------|
+| AK1 | 78 | Grundsatz und Sozialpolitik |
+| AK2 | 70 | Migration und Flucht |
+| AK5 | 37 | Kinder, Jugend, Familie |
+| AK3 | 18 | Gesundheit, Pflege, Senioren |
+| QAG | 11 | Querschnitt (Digitalisierung, Wohnen, Klima) |
+| AK4 | 10 | Eingliederungshilfe |
 
-## Training Configuration
+### Priority Distribution (3-tier)
 
-| Parameter | Value |
-|-----------|-------|
-| Base Model | Qwen3-14B (4-bit) |
-| Method | LoRA (rank 16) |
-| Epochs | 3 |
-| Batch Size | 6 |
-| Learning Rate | 2e-4 |
-| Output | GGUF (q8_0) for Ollama |
+| Priority | Count | Description |
+|----------|-------|-------------|
+| low | 145 | Background info, general news |
+| medium | 55 | Policy statements, party positions |
+| high | 24 | Budget cuts, law changes, deadlines |
 
-## Scripts
+## Classifier API
 
-### `scripts/label_with_ollama.py`
+GPU-accelerated embedding classifier running on port 8082.
 
-Batch labeling using local Ollama LLM. Reads batches from `data/raw/batches/`, applies the labeling criteria from `LABELING_PROMPT.md`, outputs to `data/reviewed/ollama_results/`.
+### Models
 
-**Features**:
-- Processes items in chunks of 10 for better accuracy
-- Live progress bar with ETA calculation
-- Resume support (skips already-completed batches)
-- Handles JSON parsing edge cases from LLM output
+| Model | Purpose | Dimension |
+|-------|---------|-----------|
+| `nomic-ai/nomic-embed-text-v2-moe` | Classification & semantic search | 768d |
+| `paraphrase-multilingual-mpnet-base-v2` | Duplicate detection | 768d |
 
-```bash
-python scripts/label_with_ollama.py --batch 0        # Single batch
-python scripts/label_with_ollama.py --all            # All batches
-python scripts/label_with_ollama.py --all --resume   # Skip done
-python scripts/label_with_ollama.py --all --model qwen3:32b  # Different model
-```
+### Endpoints
 
-**Performance**: ~16-20 items/min with qwen3:14b-q8_0 on RTX 3090
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check with store stats |
+| `/classify` | POST | Classify article (relevance, priority, AKs) |
+| `/search` | POST | Semantic search |
+| `/find-duplicates` | POST | Find similar articles (threshold 0.75) |
+| `/index` | POST | Index single item |
+| `/index/batch` | POST | Batch index items |
 
-### `scripts/create_splits.py`
-
-Creates stratified train/val/test splits from labeled data. Maintains class balance (relevant/irrelevant ratio) across all splits.
-
-**Features**:
-- Deduplication by title
-- Stratified splitting (preserves class ratios)
-- Generates `stats.json` with dataset statistics
+### Example
 
 ```bash
-python scripts/create_splits.py              # From Ollama results only
-python scripts/create_splits.py --include-old  # Merge with old data
-```
+# Classify an article
+curl -s -X POST http://localhost:8082/classify \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Hessen kürzt Mittel für Kitas", "content": "Die Landesregierung plant Kürzungen..."}' | jq
 
-### `train_qwen3.py`
-
-Fine-tunes Qwen3-14B using Unsloth + LoRA. Exports to GGUF for Ollama.
-
-**Features**:
-- 4-bit quantized base model (fits in 24GB VRAM)
-- LoRA adapters (only 0.43% of params trained)
-- Automatic GGUF export with Modelfile
-- Cosine learning rate schedule
-
-**Config** (editable in script):
-```python
-BATCH_SIZE = 6           # Per-device batch size
-GRADIENT_ACCUMULATION = 1  # No accumulation needed
-EPOCHS = 3
-LORA_RANK = 16
-LEARNING_RATE = 2e-4
-```
-
-### `data/final/analyze_quality.py`
-
-Quality analysis of training data. Checks for duplicates, class balance, AK distribution, cross-split contamination.
-
-```bash
-cd data/final && python analyze_quality.py
-```
-
-## Model Usage
-
-After training and importing to Ollama:
-
-```bash
-ollama run liga-relevance "Titel: Hessen kürzt Mittel für Kitas
-Inhalt: Die Landesregierung plant Kürzungen..."
-```
-
-Output format (JSON):
-```json
+# Response
 {
-  "summary": "Die hessische Landesregierung plant drastische Kürzungen...",
   "relevant": true,
-  "relevance_score": 1.0,
-  "priority": "critical",
-  "assigned_ak": "AK5",
-  "tags": ["ak5", "critical"],
-  "reasoning": "Kürzungen bei Kitas betreffen direkt AK5 (Kinder, Jugend, Familie)"
+  "relevance_confidence": 0.92,
+  "priority": "high",
+  "priority_confidence": 0.85,
+  "ak": "AK5",
+  "ak_confidence": 0.78,
+  "aks": ["AK5", "AK1"],
+  "ak_confidences": {"AK5": 0.78, "AK1": 0.45}
 }
 ```
 
-### Production Performance
+## LLM Analysis (Ollama)
 
-| Metric | Value |
-|--------|-------|
-| Speed | ~46 items/min (~1.3s per item) |
-| Relevance Accuracy | ~90% |
-| AK Accuracy | ~60% |
-| Model Size | 15.7GB (q8_0 GGUF) |
+For detailed analysis (summary, reasoning, tags), the backend uses `qwen3:14b-q8_0` with a system prompt.
 
-## Alternative Approaches
+```bash
+# Check current model
+curl -s "http://localhost:8000/api/llm/status" | jq '.model'
 
-### Scikit-learn (Knowledge Distillation)
+# Switch model
+curl -X PUT "http://localhost:8000/api/llm/model" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:14b-q8_0"}'
+```
 
-We experimented with training a fast scikit-learn classifier using the Qwen3-labeled data (teacher-student approach). Results:
+## Training
 
-| Metric | Sklearn | Qwen3 Fine-tuned |
-|--------|---------|------------------|
-| Relevance Accuracy | 75% | 90% |
-| AK Accuracy | 50% | 60% |
-| Speed | 0.7ms | 1300ms |
+### Embedding Classifier
 
-**Conclusion**: Qwen3 is significantly more accurate, especially on nuanced cases. At ~46 items/min, it's fast enough for current needs.
+```bash
+source venv/bin/activate
 
-**Future consideration**: With significantly more training data (5000+ items), sklearn accuracy may improve enough to justify a hybrid approach:
-- Sklearn for high-confidence cases (fast path)
-- Qwen3 for uncertain cases (accurate fallback)
+# Export training data from production DB
+python scripts/export_training_data.py
 
-Scripts preserved in `train_sklearn.py` and `scripts/benchmark_models.py` for future experimentation.
+# Create splits
+python scripts/create_splits.py
+
+# Train classifier
+python train_embedding_classifier.py
+
+# Deploy
+cd services/classifier-api
+docker compose down && docker compose build && docker compose up -d
+```
+
+### LLM Fine-tuning (Optional)
+
+See `RETRAINING.md` for full LLM fine-tuning workflow. Currently using base model with system prompt (better quality than fine-tuned).
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/export_training_data.py` | Export items from PostgreSQL to training format |
+| `scripts/label_with_ollama.py` | Label batches with Ollama LLM |
+| `scripts/create_splits.py` | Create stratified train/val/test splits |
+| `scripts/sync_vectordb.py` | Sync vector store with database |
+| `scripts/compare_classifier_vs_llm.py` | Compare classifier vs LLM accuracy |
+
+## Storage
+
+| Component | Size | Items |
+|-----------|------|-------|
+| PostgreSQL (liga_news) | ~24 MB | ~6400 |
+| Vector store (nomic) | ~51 MB | ~2900 |
+| Duplicate store (paraphrase) | ~45 MB | ~2900 |
 
 ## Requirements
 
 - Python 3.11+
 - CUDA GPU (RTX 3090 recommended)
-- Ollama (for labeling and inference)
-- ~20GB VRAM for training
+- Docker & Docker Compose
+- Ollama (for LLM inference)
 
 ### Python Dependencies
 
 ```bash
-pip install unsloth datasets trl requests
+pip install -r requirements.txt
 ```

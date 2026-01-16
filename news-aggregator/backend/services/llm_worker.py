@@ -339,22 +339,23 @@ class LLMWorker:
                     if analysis.get("detailed_analysis"):
                         item.detailed_analysis = analysis["detailed_analysis"]
 
-                    # Map LLM priority to Item.priority enum
+                    # Use LLM priority directly (no remapping)
                     llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                     if analysis.get("relevant") is False:
-                        llm_priority = "low"
+                        llm_priority = None
 
-                    if llm_priority == "critical":
+                    if llm_priority == "high":
                         item.priority = Priority.HIGH
                         item.priority_score = max(item.priority_score or 0, 90)
-                    elif llm_priority == "high":
+                    elif llm_priority == "medium":
                         item.priority = Priority.MEDIUM
                         item.priority_score = max(item.priority_score or 0, 70)
-                    elif llm_priority == "medium":
+                    elif llm_priority == "low":
                         item.priority = Priority.LOW
-                    elif llm_priority:
+                        item.priority_score = max(item.priority_score or 0, 40)
+                    else:
                         item.priority = Priority.NONE
-                        item.priority_score = min(item.priority_score or 100, 40)
+                        item.priority_score = min(item.priority_score or 100, 20)
 
                     # Set assigned_aks: LLM takes precedence, classifier AK as fallback
                     llm_aks = analysis.get("assigned_aks", [])

@@ -209,9 +209,17 @@ class Item(Base):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     # LLM processing status - True if item needs (re)processing due to GPU unavailability
     needs_llm_processing: Mapped[bool] = mapped_column(default=False, index=True)
+    # Semantic duplicate grouping - points to the "primary" item this is a duplicate of
+    similar_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Relationships
     channel: Mapped["Channel"] = relationship(back_populates="items")
+    # Self-referential relationship for duplicates
+    similar_to: Mapped["Item | None"] = relationship(
+        "Item", remote_side="Item.id", foreign_keys=[similar_to_id], backref="duplicates"
+    )
     matched_rules: Mapped[list["ItemRuleMatch"]] = relationship(
         back_populates="item", cascade="all, delete-orphan"
     )

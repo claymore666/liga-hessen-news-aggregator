@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from time import mktime
+from urllib.parse import urljoin, urlparse
 
 import feedparser
 import httpx
@@ -94,6 +95,11 @@ class RSSConnector(BaseConnector):
             link = entry.get("link", "")
             if not link and hasattr(entry, "links") and entry.links:
                 link = entry.links[0].get("href", "")
+
+            # Resolve relative URLs against feed URL
+            if link and not link.startswith(("http://", "https://")):
+                link = urljoin(str(config.url), link)
+                logger.debug(f"Resolved relative URL to: {link}")
 
             # Get author
             author = entry.get("author")

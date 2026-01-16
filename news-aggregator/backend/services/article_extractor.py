@@ -7,7 +7,7 @@ Uses heuristic detection to identify news articles and trafilatura for content e
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -36,6 +36,8 @@ NEWS_DOMAINS = {
     "finanzministerium.hessen.de", "wirtschaft.hessen.de",
     # Wire services
     "dpa.de", "epd.de", "kna.de",
+    # Research institutes
+    "diw.de",
 }
 
 # URL patterns to skip (not articles)
@@ -219,6 +221,15 @@ class ArticleExtractor:
             if "t.co" in url:
                 url = await self.resolve_redirect(url)
                 logger.debug(f"Resolved t.co URL to: {url}")
+
+            # Resolve Google redirect URLs (used by Google Alerts RSS)
+            # Format: https://www.google.com/url?rct=j&sa=t&url=ACTUAL_URL&ct=ga&...
+            if "google.com/url" in url or "google.de/url" in url:
+                parsed = urlparse(url)
+                params = parse_qs(parsed.query)
+                if "url" in params:
+                    url = params["url"][0]
+                    logger.debug(f"Resolved Google redirect to: {url}")
 
             # Clean up URL - remove common tracking parameters
             url = self._clean_url(url)
