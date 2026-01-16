@@ -1,10 +1,68 @@
-# Model Retraining Process
+# Model Retraining Guide
 
-Complete guide for retraining the `liga-relevance` model when training data, prompts, or output format changes.
+Complete guide for retraining the embedding classifier and (optionally) the LLM when training data changes.
 
-## Prerequisites
+## Embedding Classifier Retraining (Primary)
 
-1. **Stop news-aggregator backend** (frees GPU memory):
+The embedding classifier is the primary classification system. Retrain when:
+- Training data significantly changes
+- Classification accuracy drops
+- New AK categories are added
+
+### Step 1: Export Training Data
+
+```bash
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
+source venv/bin/activate
+
+# Export from production database
+python scripts/export_training_data.py
+```
+
+This creates `data/final/{train,validation,test}.jsonl` with current labeled data.
+
+### Step 2: Train Classifier
+
+```bash
+python train_embedding_classifier.py
+```
+
+**Output**: `services/classifier-api/models/embedding_classifier_nomic-v2.pkl`
+
+### Step 3: Deploy
+
+```bash
+cd services/classifier-api
+docker compose down && docker compose build && docker compose up -d
+```
+
+### Step 4: Verify
+
+```bash
+# Check health
+curl -s http://localhost:8082/health | jq
+
+# Test classification
+curl -s -X POST http://localhost:8082/classify \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Hessen kürzt Kita-Mittel", "content": "Die Landesregierung..."}' | jq
+```
+
+---
+
+## LLM Retraining (Optional)
+
+The LLM provides summaries and detailed analysis. Currently using **base model with system prompt** (recommended over fine-tuning).
+
+### When to Consider LLM Fine-tuning
+
+- If base model quality degrades
+- If specific output patterns are needed
+- If faster inference is required
+
+### Prerequisites
+
+1. **Stop news-aggregator backend** (frees GPU):
    ```bash
    cd /home/kamienc/claude.ai/ligahessen/news-aggregator
    docker compose stop backend
@@ -12,8 +70,7 @@ Complete guide for retraining the `liga-relevance` model when training data, pro
 
 2. **Unload Ollama models**:
    ```bash
-   ollama stop liga-relevance 2>/dev/null
-   ollama stop qwen3:32b 2>/dev/null
+   ollama stop qwen3:14b-q8_0
    ```
 
 3. **Verify GPU is free** (~500MB or less):
@@ -21,27 +78,9 @@ Complete guide for retraining the `liga-relevance` model when training data, pro
    nvidia-smi --query-gpu=memory.used --format=csv,noheader
    ```
 
-## Files to Update When Changing Output Format
+### LLM Fine-tuning Steps
 
-| File | What to change |
-|------|----------------|
-| `LABELING_PROMPT.md` | Output format definition, field descriptions |
-| `scripts/label_with_ollama.py` | Parse new fields, update `merge_labels()` |
-| `train_qwen3.py` | `SYSTEM_PROMPT`, `format_example()` response_obj |
-| `models/qwen3-trained/gguf/Modelfile` | `SYSTEM` prompt for inference |
-| `news-aggregator/backend/services/processor.py` | Parse new fields from LLM response |
-| `news-aggregator/backend/models.py` | Add new database columns if needed |
-| `news-aggregator/backend/schemas.py` | Add new fields to API schemas |
-| `news-aggregator/frontend/src/types/index.ts` | Add TypeScript types |
-| `news-aggregator/frontend/src/views/ItemDetailView.vue` | Display new fields |
-
-## Step-by-Step Retraining
-
-### Step 1: Update Format Definitions
-
-Edit `LABELING_PROMPT.md` with new output format, then update all files listed above to match.
-
-### Step 2: Relabel Training Data
+#### Step 1: Relabel Training Data
 
 ```bash
 cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
@@ -51,38 +90,26 @@ source venv/bin/activate
 python scripts/label_with_ollama.py --all --model qwen3:32b
 ```
 
-**Duration**: ~3 hours for 1000 items at 5 items/min
+**Duration**: ~3 hours for 1000 items
 
-**Output**: `data/reviewed/ollama_results/batch_*_labeled.jsonl`
-
-### Step 3: Create Train/Val/Test Splits
+#### Step 2: Create Splits
 
 ```bash
 python scripts/create_splits.py
 ```
 
-**Output**: `data/final/{train,val,test}.jsonl`
-
-### Step 4: Train Model
+#### Step 3: Train Model
 
 ```bash
-# Ensure GPU is free first!
 python train_qwen3.py
 ```
 
 **Duration**: ~45 min for 700 training examples
 
-**Output**: `models/qwen3-trained/`
-
-### Step 5: Merge LoRA and Convert to GGUF
-
-**Important**: Unsloth's built-in merge is broken for 8-bit models. Use manual merge on CPU:
+#### Step 4: Merge and Convert
 
 ```bash
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
-source venv/bin/activate
-
-# Manual merge with PEFT (avoids Unsloth's broken 8-bit merge)
+# Manual merge with PEFT (Unsloth's 8-bit merge is broken)
 python << 'EOF'
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -93,7 +120,7 @@ print("Loading 16-bit base model on CPU...")
 base_model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen3-14B",
     torch_dtype=torch.bfloat16,
-    device_map="cpu",  # Force CPU (GPU OOM with 16-bit)
+    device_map="cpu",
 )
 
 tokenizer = AutoTokenizer.from_pretrained("models/qwen3-trained/lora_adapter")
@@ -118,71 +145,59 @@ python llama.cpp/convert_hf_to_gguf.py models/qwen3-trained/merged_manual \
   --outtype q8_0
 ```
 
-**Duration**: ~5 min merge + ~1 min GGUF conversion
-
-**Output**: `models/qwen3-trained/gguf/liga-relevance-q8_0.gguf` (~15.7GB)
-
-### Step 6: Deploy to Ollama
+#### Step 5: Deploy to Ollama
 
 ```bash
 cd models/qwen3-trained/gguf
 ollama create liga-relevance -f Modelfile
 ```
 
-### Step 7: Restart Backend & Reprocess
+#### Step 6: Restart Services
 
 ```bash
-# Start backend
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
 docker compose up -d backend
-
-# Wait for startup
-sleep 10
-
-# Reprocess all items with new model
-curl -X POST "http://localhost:8000/api/items/reprocess?force=true"
 ```
 
-**Duration**: ~1.5 hours for 1600 items at 3 sec/item
+---
 
-## Fully Automated Script
+## Automated Scripts
 
-**One command to do everything** (runs ~5 hours total):
+| Script | Purpose | Duration |
+|--------|---------|----------|
+| `scripts/full_retrain.sh` | Complete LLM pipeline: relabel → train → GGUF → deploy | ~5h |
+| `scripts/auto_train_pipeline.sh` | Train → GGUF → deploy (skips relabeling) | ~1h |
 
 ```bash
-cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
-./scripts/full_retrain.sh
-```
-
-This script:
-1. Stops backend & unloads Ollama models (frees GPU)
-2. Relabels all training data (~3h)
-3. Creates train/val/test splits
-4. Trains the model (~45min)
-5. Converts to GGUF
-6. Deploys to Ollama
-7. Starts backend & triggers reprocessing
-
-**Run in background** (recommended):
-```bash
+# Run full retrain in background
 nohup ./scripts/full_retrain.sh > /tmp/full_retrain.log 2>&1 &
 tail -f /tmp/full_retrain.log
 ```
 
-Logs are saved to `/tmp/retrain_YYYYMMDD_HHMMSS/`
+---
 
-## Verification
+## Configuration Reference
 
-After retraining, test the model:
+### Embedding Classifier
 
-```bash
-ollama run liga-relevance "Titel: Test Kürzungen im Sozialbereich
-Inhalt: Die Landesregierung plant massive Kürzungen bei sozialen Einrichtungen...
-Quelle: Hessenschau
-Datum: 2026-01-09"
-```
+| Parameter | Value |
+|-----------|-------|
+| Embedding model | nomic-ai/nomic-embed-text-v2-moe |
+| Dimension | 768 |
+| Classifier | Scikit-learn (Logistic Regression) |
+| Training examples | ~1680 |
 
-Expected output should include all defined fields (summary, detailed_analysis, etc.) with proper content.
+### LLM (if fine-tuning)
+
+| Parameter | Value |
+|-----------|-------|
+| Base model | Qwen3-14B (8-bit quantized) |
+| Training method | LoRA (rank 16) |
+| Batch size | 4 |
+| Epochs | 3 |
+| Output quantization | q8_0 (15.7GB GGUF) |
+
+---
 
 ## Troubleshooting
 
@@ -191,29 +206,25 @@ Expected output should include all defined fields (summary, detailed_analysis, e
 - Unload Ollama models
 - Check `nvidia-smi` for other GPU processes
 
-### Training Too Slow
-- Reduce batch size in `train_qwen3.py` (default: 6)
-- Reduce `max_seq_length` (default: 4096)
+### Classifier Accuracy Drops
+- Check if training data distribution changed
+- Verify labels are correct
+- Consider adding more training examples
 
-### Model Outputs Wrong Format
+### LLM Output Wrong Format
 - Check `SYSTEM_PROMPT` in `train_qwen3.py` matches `Modelfile`
-- Verify training data has correct format in `data/final/train.jsonl`
+- Verify training data has correct format
 
-## Current Configuration
+---
 
-| Parameter | Value |
-|-----------|-------|
-| Base model | Qwen3-14B (8-bit quantized during training) |
-| Training method | LoRA (rank 16) |
-| Batch size | 4 |
-| Epochs | 3 |
-| Max sequence length | 2048 |
-| Output quantization | q8_0 (15.7GB GGUF) |
-| Training examples | ~700 |
+## Files Reference
 
-## Known Issues
-
-See `TRAINING_ISSUES.md` for:
-- 4-bit merge corruption (SOLVED: use 8-bit training)
-- 8-bit Unsloth merge failure (SOLVED: manual PEFT merge)
-- GPU OOM during merge (SOLVED: use CPU)
+| File | Purpose |
+|------|---------|
+| `train_embedding_classifier.py` | Train embedding classifier |
+| `train_qwen3.py` | Train LLM (optional) |
+| `scripts/export_training_data.py` | Export from PostgreSQL |
+| `scripts/label_with_ollama.py` | Label with Ollama |
+| `scripts/create_splits.py` | Create train/val/test splits |
+| `LABELING_PROMPT.md` | Labeling instructions |
+| `TRAINING_ISSUES.md` | Known issues and solutions |

@@ -1,121 +1,148 @@
-# Current Status (2026-01-10)
+# Current Status (2026-01-16)
 
-## Solution: Option B Implemented
+## Production System
 
-**Option B (base model + system prompt) is now live and working.**
+The classification system uses a **hybrid approach**:
 
-### What's Working
+1. **Embedding Classifier** (primary) - Fast classification via classifier-api
+2. **LLM Analysis** (secondary) - Detailed summaries and analysis via Ollama
 
-- **Base model `qwen3:14b-q8_0`** with detailed system prompt produces high-quality output
-- **Distinct `summary` and `detailed_analysis`** - no more identical content
-- **Correct AK classification** - tested with Pflege (AK3), Migration (AK2), Sozialpolitik (AK1)
-- **Appropriate priority levels** - critical for budget cuts, high for reforms, low for irrelevant news
-- **Valid JSON output** - parser handles responses correctly
-- **No Liga speculation** - summaries focus on article facts, not hypothetical Liga reactions
+### Active Components
 
-### Test Results
+| Component | Model | Purpose | Status |
+|-----------|-------|---------|--------|
+| Classifier API | nomic-v2 + sklearn | Relevance, Priority, AK | ✅ Production |
+| Duplicate Store | paraphrase-mpnet | Same-story detection | ✅ Production |
+| Ollama LLM | qwen3:14b-q8_0 | Summary, detailed_analysis | ✅ Production |
 
-| Item ID | Topic | AK | Priority | Relevance |
-|---------|-------|----|---------:|-----------|
-| 2438 | Pflege-Umfrage Hessen | AK3 | high | 0.85 |
-| 2531 | Kommunalwahl Hessen | AK1 | critical | 1.0 |
-| 2032 | Abschiebungen | AK2 | critical | 1.0 |
-| 2897 | US ICE Policy | null | low | 0.0 |
+### Classifier API Health
 
-Irrelevant items (US politics, sports, entertainment) correctly classified as low priority with null AK.
+```bash
+curl -s http://localhost:8082/health | jq
+```
 
-### Implementation Details
+```json
+{
+  "status": "ok",
+  "model": "nomic-ai/nomic-embed-text-v2-moe",
+  "gpu": true,
+  "gpu_name": "NVIDIA GeForce RTX 3090",
+  "vector_store_items": 2898,
+  "duplicate_store_items": 2898,
+  "duplicate_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+}
+```
 
-**File modified**: `news-aggregator/backend/services/processor.py`
-
-1. Added `ANALYSIS_SYSTEM_PROMPT` constant (~52 lines) with:
-   - Liga organization context
-   - Arbeitskreise definitions
-   - Priority criteria
-   - Output format specification
-   - Explicit "no speculation" rules
-
-2. Modified `analyze()` method to pass system prompt:
-   ```python
-   response = await self.llm.complete(
-       prompt,
-       system=ANALYSIS_SYSTEM_PROMPT,
-       temperature=0.1,
-       max_tokens=1200,
-   )
-   ```
-
-3. Model selection via API: `qwen3:14b-q8_0` (base model, not fine-tuned)
-
-### Why This Works Better Than Fine-tuning
-
-| Aspect | Fine-tuned Model | Base Model + Prompt |
-|--------|-----------------|---------------------|
-| Training data quality | Garbage-in-garbage-out | N/A |
-| Output repetition | High (learned from training) | Low |
-| Liga speculation | Present (learned from training) | Controlled by prompt |
-| Iteration speed | Hours (retrain) | Minutes (edit prompt) |
-| Model size | Same (15.7GB q8_0) | Same |
-
-The fine-tuned model faithfully reproduced the flaws in its training data. The base model with a well-crafted prompt gives us direct control over output quality.
-
----
-
-## Previous Issues (Resolved)
-
-### Fine-tuned Model Problems
-- `detailed_analysis` was repetitive (same sentences repeated)
-- Liga speculation appeared despite training instructions
-- Content felt formulaic, not insightful
-
-### Root Cause
-The labeling LLM (qwen3:14b-q8_0) produced low-quality training data:
-- Repetitive filler text to meet minimum length requirements
-- Liga speculation despite explicit instructions not to
-
-**This was a garbage-in-garbage-out problem.**
-
----
-
-## Assets
-
-| Asset | Location | Status |
-|-------|----------|--------|
-| **Active model** | `qwen3:14b-q8_0` | Live in production |
-| System prompt | `processor.py:ANALYSIS_SYSTEM_PROMPT` | Working |
-| Fine-tuned model | `ollama: liga-relevance` | Backup (not recommended) |
-| Training data | `data/final/*.jsonl` | 688 train / 148 val / 149 test |
-| Training script | `train_qwen3.py` | 8-bit workflow working |
-
----
-
-## Future Considerations
-
-### If Classification Accuracy Needs Improvement
-
-Consider **Option C (Hybrid)**:
-- Use fine-tuned model for classification only (relevant, ak, priority)
-- Use base model with prompt for summary/detailed_analysis generation
-
-### If Response Time is Too Slow
-
-Consider using a smaller base model:
-- `qwen3:8b-q8_0` - faster but less accurate
-- `qwen3:4b-q8_0` - much faster but may miss nuances
-
-### To Improve Training Data Quality (if revisiting Option A)
-
-- Use larger labeling model (qwen3:70b or claude-3.5-sonnet)
-- Manually review/curate 200+ high-quality examples
-- More diverse training examples (~2000+)
-
----
-
-## Git History
+## Classification Pipeline
 
 ```
-16600f6 docs: add STATUS.md with current state and options
-8d9c075 docs(retraining): update with 8-bit workflow and manual merge steps
-1b18bd3 fix(training): switch to 8-bit training + manual CPU merge
-f0749db docs: consolidate CLAUDE.md with API reference and Swagger links
+New Article → Duplicate Check (0.75 threshold)
+                    ↓
+            [Not duplicate]
+                    ↓
+            Embedding Classifier
+                    ↓
+        ┌───────────┴───────────┐
+        ↓                       ↓
+   [Relevant]              [Irrelevant]
+        ↓                       ↓
+   LLM Analysis              Archive
+        ↓
+   Store with AK/Priority
+```
+
+### Multi-label AK Classification
+
+Items can be assigned to multiple Arbeitskreise (working groups). The classifier returns:
+- `ak`: Primary AK (highest confidence)
+- `aks`: All AKs above threshold
+- `ak_confidences`: Confidence scores per AK
+
+## Duplicate Detection
+
+Uses `paraphrase-multilingual-mpnet-base-v2` for semantic similarity:
+
+| Score Range | Interpretation |
+|-------------|----------------|
+| 0.95-1.00 | Same article, different source |
+| 0.75-0.95 | Same story, different wording |
+| 0.50-0.75 | Related topic |
+| < 0.50 | Different stories |
+
+**Threshold**: 0.75 (catches same-story articles from different sources)
+
+## Dataset
+
+| Metric | Value |
+|--------|-------|
+| Total items | 1680 |
+| Relevant | 224 (13%) |
+| Irrelevant | 1456 (87%) |
+| Train/Val/Test | 70/15/15 split |
+
+## Storage
+
+| Component | Size |
+|-----------|------|
+| PostgreSQL | ~24 MB |
+| Vector store (nomic) | ~51 MB |
+| Duplicate store (paraphrase) | ~45 MB |
+| **Total** | ~120 MB |
+
+## Known Issues
+
+None currently.
+
+## Recent Changes
+
+| Date | Change |
+|------|--------|
+| 2026-01-16 | Added duplicate store with paraphrase model |
+| 2026-01-16 | Lowered duplicate threshold to 0.75 |
+| 2026-01-15 | Fixed async context bug in vector store indexing |
+| 2026-01-13 | Added multi-label AK classification |
+| 2026-01-13 | Migrated training data export to PostgreSQL |
+| 2026-01-12 | Added item processing audit trail |
+
+## Monitoring Commands
+
+```bash
+# Check classifier health
+curl -s http://localhost:8082/health | jq
+
+# Check LLM status
+curl -s http://localhost:8000/api/llm/status | jq
+
+# Check backend health
+curl -s http://localhost:8000/health | jq
+
+# View classifier logs
+docker logs liga-classifier --tail 50
+
+# View backend logs
+docker logs liga-news-backend --tail 50
+```
+
+## Deployment
+
+### Rebuild Classifier API
+
+```bash
+cd /home/kamienc/claude.ai/ligahessen/relevance-tuner/services/classifier-api
+docker compose down && docker compose build --no-cache && docker compose up -d
+```
+
+### Restart Backend
+
+```bash
+cd /home/kamienc/claude.ai/ligahessen/news-aggregator
+docker compose restart backend
+```
+
+### Sync Vector Stores
+
+```bash
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
+source venv/bin/activate
+python scripts/sync_vectordb.py
 ```
