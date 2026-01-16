@@ -236,8 +236,11 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     # Phase 3: Database writes - process and store items (serialized)
     async with db_write_lock:
         async with async_session_maker() as db:
-            # Re-fetch channel within this session
-            channel = await db.get(Channel, channel_id)
+            # Re-fetch channel within this session (with source eager-loaded for indexing)
+            result = await db.execute(
+                select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+            )
+            channel = result.scalar_one_or_none()
             if channel is None:
                 return 0
 
@@ -494,23 +497,24 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                 if analysis.get("detailed_analysis"):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
-                # Update priority based on LLM
+                # Use LLM priority directly (no remapping)
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if analysis.get("relevant") is False:
-                    llm_priority = "low"
+                    llm_priority = None
 
                 from models import Priority
-                if llm_priority == "critical":
+                if llm_priority == "high":
                     item.priority = Priority.HIGH
                     item.priority_score = max(item.priority_score, 90)
-                elif llm_priority == "high":
+                elif llm_priority == "medium":
                     item.priority = Priority.MEDIUM
                     item.priority_score = max(item.priority_score, 70)
-                elif llm_priority == "medium":
+                elif llm_priority == "low":
                     item.priority = Priority.LOW
-                elif llm_priority:
+                    item.priority_score = max(item.priority_score, 40)
+                else:
                     item.priority = Priority.NONE
-                    item.priority_score = min(item.priority_score, 40)
+                    item.priority_score = min(item.priority_score, 20)
 
                 # Store analysis metadata
                 item.metadata_["llm_analysis"] = {
