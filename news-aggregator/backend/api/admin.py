@@ -886,14 +886,14 @@ class StorageStats(BaseModel):
     """Storage usage statistics."""
     postgresql_size_bytes: int
     postgresql_size_human: str
-    postgresql_items: int
-    postgresql_duplicates: int  # Items with similar_to_id set
-    vector_store_size_bytes: int
-    vector_store_size_human: str
-    vector_store_items: int
-    duplicate_store_size_bytes: int
-    duplicate_store_size_human: str
-    duplicate_store_items: int  # Items indexed for duplicate detection
+    postgresql_items: int = Field(description="Total items in PostgreSQL database")
+    postgresql_duplicates: int = Field(description="Items marked as duplicates (similar_to_id set)")
+    search_index_size_bytes: int = Field(description="Disk size of semantic search index (nomic embeddings)")
+    search_index_size_human: str
+    search_index_items: int = Field(description="Items indexed for semantic search")
+    duplicate_index_size_bytes: int = Field(description="Disk size of duplicate detection index (paraphrase embeddings)")
+    duplicate_index_size_human: str
+    duplicate_index_items: int = Field(description="Items indexed for duplicate detection")
     total_size_bytes: int
     total_size_human: str
 
@@ -1091,8 +1091,8 @@ async def get_storage_stats(
     ) or 0
 
     # Get classifier storage stats
-    vector_size_bytes = 0
-    vector_items = 0
+    search_size_bytes = 0
+    search_items = 0
     duplicate_size_bytes = 0
     duplicate_items = 0
 
@@ -1101,26 +1101,26 @@ async def get_storage_stats(
         if relevance_filter:
             storage_stats = await relevance_filter.get_storage_stats()
             if storage_stats:
-                vector_size_bytes = storage_stats.get("vector_store_size_bytes", 0)
-                vector_items = storage_stats.get("vector_store_items", 0)
-                duplicate_size_bytes = storage_stats.get("duplicate_store_size_bytes", 0)
-                duplicate_items = storage_stats.get("duplicate_store_items", 0)
+                search_size_bytes = storage_stats.get("search_index_size_bytes", 0)
+                search_items = storage_stats.get("search_index_items", 0)
+                duplicate_size_bytes = storage_stats.get("duplicate_index_size_bytes", 0)
+                duplicate_items = storage_stats.get("duplicate_index_items", 0)
     except Exception as e:
         logger.warning(f"Failed to get classifier storage stats: {e}")
 
-    total_size = pg_size_bytes + vector_size_bytes + duplicate_size_bytes
+    total_size = pg_size_bytes + search_size_bytes + duplicate_size_bytes
 
     return StorageStats(
         postgresql_size_bytes=pg_size_bytes,
         postgresql_size_human=_format_bytes(pg_size_bytes),
         postgresql_items=items_count,
         postgresql_duplicates=duplicates_count,
-        vector_store_size_bytes=vector_size_bytes,
-        vector_store_size_human=_format_bytes(vector_size_bytes),
-        vector_store_items=vector_items,
-        duplicate_store_size_bytes=duplicate_size_bytes,
-        duplicate_store_size_human=_format_bytes(duplicate_size_bytes),
-        duplicate_store_items=duplicate_items,
+        search_index_size_bytes=search_size_bytes,
+        search_index_size_human=_format_bytes(search_size_bytes),
+        search_index_items=search_items,
+        duplicate_index_size_bytes=duplicate_size_bytes,
+        duplicate_index_size_human=_format_bytes(duplicate_size_bytes),
+        duplicate_index_items=duplicate_items,
         total_size_bytes=total_size,
         total_size_human=_format_bytes(total_size),
     )

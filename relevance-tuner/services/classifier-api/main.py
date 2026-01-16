@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from classifier import EmbeddingClassifier, VectorStore, DuplicateStore
 
@@ -158,24 +158,40 @@ class HealthResponse(BaseModel):
     model: str
     gpu: bool
     gpu_name: str | None = None
-    vector_store_items: int = 0
-    duplicate_store_items: int = 0
+    search_index_items: int = Field(
+        default=0,
+        description="Number of items indexed for semantic search (nomic embeddings)"
+    )
+    duplicate_index_items: int = Field(
+        default=0,
+        description="Number of items indexed for duplicate detection (paraphrase embeddings)"
+    )
     duplicate_model: str | None = None
 
 
 class StorageSizeResponse(BaseModel):
     """Response model for storage sizes."""
-    vector_store_size_bytes: int
-    vector_store_items: int
-    duplicate_store_size_bytes: int
-    duplicate_store_items: int
+    search_index_size_bytes: int = Field(
+        description="Disk size of semantic search index (nomic embeddings) in bytes"
+    )
+    search_index_items: int = Field(
+        description="Number of items indexed for semantic search"
+    )
+    duplicate_index_size_bytes: int = Field(
+        description="Disk size of duplicate detection index (paraphrase embeddings) in bytes"
+    )
+    duplicate_index_items: int = Field(
+        description="Number of items indexed for duplicate detection"
+    )
 
 
 class SyncResponse(BaseModel):
     """Response model for sync operation."""
-    synced: int
-    skipped: int
-    total_in_duplicate_store: int
+    synced: int = Field(description="Number of items newly added to duplicate index")
+    skipped: int = Field(description="Number of items already in duplicate index (skipped)")
+    total_in_duplicate_index: int = Field(
+        description="Total items now in duplicate detection index"
+    )
 
 
 # ============== Endpoints ==============
@@ -195,8 +211,8 @@ async def health():
         model=info["backend"],
         gpu=info["gpu_available"],
         gpu_name=info["gpu_name"],
-        vector_store_items=vs_items,
-        duplicate_store_items=ds_stats.get("total_items", 0),
+        search_index_items=vs_items,
+        duplicate_index_items=ds_stats.get("total_items", 0),
         duplicate_model=ds_stats.get("model"),
     )
 
@@ -393,16 +409,21 @@ async def root():
     """Root endpoint with API info."""
     return {
         "service": "Embedding Classifier API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "endpoints": {
-            "/health": "Health check (GET)",
-            "/storage": "Storage sizes (GET)",
-            "/sync-duplicate-store": "Sync vector store to duplicate store (POST)",
+            "/health": "Health check with index item counts (GET)",
+            "/storage": "Storage sizes for search and duplicate indexes (GET)",
+            "/sync-duplicate-store": "Sync search index to duplicate index (POST)",
             "/classify": "Classify article relevance (POST)",
-            "/search": "Semantic search (POST)",
+            "/search": "Semantic search in search index (POST)",
             "/similar": "Find similar articles (POST)",
-            "/index": "Index single article (POST)",
-            "/index/batch": "Batch index articles (POST)",
+            "/find-duplicates": "Find duplicate articles using paraphrase embeddings (POST)",
+            "/index": "Index single article to both indexes (POST)",
+            "/index/batch": "Batch index articles to both indexes (POST)",
+        },
+        "indexes": {
+            "search_index": "ChromaDB with nomic embeddings for semantic search",
+            "duplicate_index": "ChromaDB with paraphrase embeddings for duplicate detection",
         },
     }
 
@@ -424,9 +445,11 @@ def _get_dir_size(path: str) -> int:
 
 @app.get("/storage", response_model=StorageSizeResponse)
 async def get_storage_sizes():
-    """Get storage sizes for vector stores.
+    """Get storage sizes for search and duplicate detection indexes.
 
-    Returns disk usage for vector store and duplicate store directories.
+    Returns disk usage and item counts for both ChromaDB indexes:
+    - Search index: nomic embeddings for semantic search
+    - Duplicate index: paraphrase embeddings for duplicate detection
     """
     vs_size = _get_dir_size("/app/data/vectordb")
     ds_size = _get_dir_size("/app/data/duplicatedb")
@@ -435,40 +458,43 @@ async def get_storage_sizes():
     ds_items = duplicate_store.get_stats()["total_items"] if duplicate_store else 0
 
     return StorageSizeResponse(
-        vector_store_size_bytes=vs_size,
-        vector_store_items=vs_items,
-        duplicate_store_size_bytes=ds_size,
-        duplicate_store_items=ds_items,
+        search_index_size_bytes=vs_size,
+        search_index_items=vs_items,
+        duplicate_index_size_bytes=ds_size,
+        duplicate_index_items=ds_items,
     )
 
 
 @app.post("/sync-duplicate-store", response_model=SyncResponse)
 async def sync_duplicate_store():
-    """Sync items from vector store to duplicate store.
+    """Sync items from search index to duplicate detection index.
 
-    Copies all items from the vector store (nomic embeddings) to the
-    duplicate store (paraphrase embeddings) for duplicate detection.
-    Items already in the duplicate store are skipped.
+    Copies all items from the search index (nomic embeddings) to the
+    duplicate index (paraphrase embeddings) for duplicate detection.
+    Items already in the duplicate index are skipped.
+
+    Use this endpoint to backfill the duplicate index after adding
+    the duplicate detection feature to an existing deployment.
     """
     if vector_store is None:
-        raise HTTPException(status_code=503, detail="Vector store not initialized")
+        raise HTTPException(status_code=503, detail="Search index not initialized")
     if duplicate_store is None:
-        raise HTTPException(status_code=503, detail="Duplicate store not initialized")
+        raise HTTPException(status_code=503, detail="Duplicate index not initialized")
 
-    logger.info("Starting sync from vector store to duplicate store...")
+    logger.info("Starting sync from search index to duplicate index...")
 
-    # Get all items from vector store
+    # Get all items from search index
     items = vector_store.get_all_items()
-    logger.info(f"Found {len(items)} items in vector store")
+    logger.info(f"Found {len(items)} items in search index")
 
     if not items:
         return SyncResponse(
             synced=0,
             skipped=0,
-            total_in_duplicate_store=duplicate_store.get_stats()["total_items"],
+            total_in_duplicate_index=duplicate_store.get_stats()["total_items"],
         )
 
-    # Add to duplicate store in batches
+    # Add to duplicate index in batches
     synced = duplicate_store.add_items_batch(items)
     skipped = len(items) - synced
 
@@ -477,7 +503,7 @@ async def sync_duplicate_store():
     return SyncResponse(
         synced=synced,
         skipped=skipped,
-        total_in_duplicate_store=duplicate_store.get_stats()["total_items"],
+        total_in_duplicate_index=duplicate_store.get_stats()["total_items"],
     )
 
 

@@ -171,20 +171,23 @@ Runs on port 8082. Provides classification, semantic search, and duplicate detec
 
 ### Duplicate Detection
 
-Uses a separate `DuplicateStore` with paraphrase embeddings for better semantic similarity:
+Uses a separate duplicate index with paraphrase embeddings for better semantic similarity:
 - **Threshold**: 0.75 (catches same-story articles with different wording)
 - True duplicates (same article, different source): ~0.97 similarity
 - Same story, different angles: 0.75-0.90 similarity
 - Unrelated articles: <0.50 similarity
 
 ```bash
-# Check classifier health
+# Check classifier health (shows search_index_items and duplicate_index_items)
 curl -s http://localhost:8082/health | jq '.'
 
 # Test duplicate detection
 curl -s -X POST http://localhost:8082/find-duplicates \
   -H "Content-Type: application/json" \
   -d '{"title": "Article title", "content": "Article content", "threshold": 0.75}'
+
+# Sync search index to duplicate index (backfill after adding duplicate detection)
+curl -s -X POST http://localhost:8082/sync-duplicate-store | jq '.'
 ```
 
 ### Rebuilding Classifier
@@ -211,12 +214,12 @@ docker exec -it liga-news-db psql -U liga -d liga_news
 docker exec liga-news-db psql -U liga -d liga_news -c "SELECT pg_size_pretty(pg_database_size('liga_news'));"
 ```
 
-### Vector Stores (ChromaDB)
+### ChromaDB Indexes
 
-| Store | Path | Model | Purpose |
+| Index | Path | Model | Purpose |
 |-------|------|-------|---------|
-| Vector store | `/app/data/vectordb` | nomic-v2 | Classification & search |
-| Duplicate store | `/app/data/duplicatedb` | paraphrase-mpnet | Duplicate detection |
+| Search index | `/app/data/vectordb` | nomic-v2 | Classification & semantic search |
+| Duplicate index | `/app/data/duplicatedb` | paraphrase-mpnet | Duplicate detection |
 
 ```bash
 # Check store sizes

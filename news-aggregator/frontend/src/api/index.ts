@@ -205,14 +205,20 @@ export interface CleanupResult {
 export interface StorageStats {
   postgresql_size_bytes: number
   postgresql_size_human: string
+  /** Total items in PostgreSQL database */
   postgresql_items: number
+  /** Items marked as duplicates (similar_to_id set) */
   postgresql_duplicates: number
-  vector_store_size_bytes: number
-  vector_store_size_human: string
-  vector_store_items: number
-  duplicate_store_size_bytes: number
-  duplicate_store_size_human: string
-  duplicate_store_items: number
+  /** Disk size of semantic search index (nomic embeddings) */
+  search_index_size_bytes: number
+  search_index_size_human: string
+  /** Items indexed for semantic search */
+  search_index_items: number
+  /** Disk size of duplicate detection index (paraphrase embeddings) */
+  duplicate_index_size_bytes: number
+  duplicate_index_size_human: string
+  /** Items indexed for duplicate detection */
+  duplicate_index_items: number
   total_size_bytes: number
   total_size_human: string
 }
