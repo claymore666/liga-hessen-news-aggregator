@@ -163,6 +163,14 @@ class HealthResponse(BaseModel):
     duplicate_model: str | None = None
 
 
+class StorageSizeResponse(BaseModel):
+    """Response model for storage sizes."""
+    vector_store_size_bytes: int
+    vector_store_items: int
+    duplicate_store_size_bytes: int
+    duplicate_store_items: int
+
+
 # ============== Endpoints ==============
 
 @app.get("/health", response_model=HealthResponse)
@@ -381,6 +389,7 @@ async def root():
         "version": "2.0.0",
         "endpoints": {
             "/health": "Health check (GET)",
+            "/storage": "Storage sizes (GET)",
             "/classify": "Classify article relevance (POST)",
             "/search": "Semantic search (POST)",
             "/similar": "Find similar articles (POST)",
@@ -388,6 +397,41 @@ async def root():
             "/index/batch": "Batch index articles (POST)",
         },
     }
+
+
+def _get_dir_size(path: str) -> int:
+    """Get total size of a directory in bytes."""
+    import os
+    total = 0
+    if os.path.exists(path):
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                try:
+                    total += os.path.getsize(fp)
+                except OSError:
+                    pass
+    return total
+
+
+@app.get("/storage", response_model=StorageSizeResponse)
+async def get_storage_sizes():
+    """Get storage sizes for vector stores.
+
+    Returns disk usage for vector store and duplicate store directories.
+    """
+    vs_size = _get_dir_size("/app/data/vectordb")
+    ds_size = _get_dir_size("/app/data/duplicatedb")
+
+    vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
+    ds_items = duplicate_store.get_stats()["total_items"] if duplicate_store else 0
+
+    return StorageSizeResponse(
+        vector_store_size_bytes=vs_size,
+        vector_store_items=vs_items,
+        duplicate_store_size_bytes=ds_size,
+        duplicate_store_items=ds_items,
+    )
 
 
 if __name__ == "__main__":

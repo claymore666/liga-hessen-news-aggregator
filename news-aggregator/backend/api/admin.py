@@ -841,3 +841,279 @@ async def resume_classifier_worker_endpoint():
 
     worker.resume()
     return {"status": "resumed", "message": "Classifier worker resumed"}
+
+
+# =============================================================================
+# Housekeeping / Data Management
+# =============================================================================
+
+
+# Default retention periods in days
+DEFAULT_HOUSEKEEPING_CONFIG = {
+    "retention_days_high": 365,
+    "retention_days_medium": 180,
+    "retention_days_low": 90,
+    "retention_days_none": 30,
+    "autopurge_enabled": False,
+    "exclude_starred": True,
+}
+
+
+class HousekeepingConfig(BaseModel):
+    """Housekeeping configuration."""
+    retention_days_high: int = 365
+    retention_days_medium: int = 180
+    retention_days_low: int = 90
+    retention_days_none: int = 30
+    autopurge_enabled: bool = False
+    exclude_starred: bool = True
+
+
+class CleanupPreview(BaseModel):
+    """Preview of items to be deleted."""
+    total: int
+    by_priority: dict[str, int]
+    oldest_item_date: str | None
+
+
+class CleanupResult(BaseModel):
+    """Result of cleanup operation."""
+    deleted: int
+    by_priority: dict[str, int]
+
+
+class StorageStats(BaseModel):
+    """Storage usage statistics."""
+    postgresql_size_bytes: int
+    postgresql_size_human: str
+    postgresql_items: int
+    vector_store_size_bytes: int
+    vector_store_size_human: str
+    vector_store_items: int
+    duplicate_store_size_bytes: int
+    duplicate_store_size_human: str
+    duplicate_store_items: int
+    total_size_bytes: int
+    total_size_human: str
+
+
+def _format_bytes(size_bytes: int) -> str:
+    """Format bytes as human-readable string."""
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} PB"
+
+
+async def get_housekeeping_config(db: AsyncSession) -> dict:
+    """Load housekeeping config from database."""
+    from models import Setting
+
+    result = await db.execute(
+        select(Setting).where(Setting.key == "housekeeping")
+    )
+    setting = result.scalar_one_or_none()
+
+    if setting and setting.value:
+        # Merge with defaults to handle new fields
+        config = dict(DEFAULT_HOUSEKEEPING_CONFIG)
+        config.update(setting.value)
+        return config
+    return dict(DEFAULT_HOUSEKEEPING_CONFIG)
+
+
+async def save_housekeeping_config(db: AsyncSession, config: HousekeepingConfig) -> dict:
+    """Save housekeeping config to database."""
+    from models import Setting
+
+    result = await db.execute(
+        select(Setting).where(Setting.key == "housekeeping")
+    )
+    setting = result.scalar_one_or_none()
+
+    config_dict = config.model_dump()
+
+    if setting:
+        setting.value = config_dict
+    else:
+        new_setting = Setting(
+            key="housekeeping",
+            value=config_dict,
+            description="Housekeeping and retention configuration",
+        )
+        db.add(new_setting)
+
+    await db.commit()
+    return config_dict
+
+
+async def get_items_to_delete(
+    db: AsyncSession,
+    config: dict,
+    execute: bool = False,
+) -> tuple[int, dict[str, int], str | None]:
+    """Get or delete items based on retention config.
+
+    Args:
+        db: Database session
+        config: Housekeeping configuration
+        execute: If True, delete the items; if False, just count them
+
+    Returns:
+        Tuple of (total_count, by_priority_counts, oldest_date)
+    """
+    from sqlalchemy import and_, or_
+
+    now = datetime.utcnow()
+    by_priority: dict[str, int] = {}
+    total = 0
+    oldest_date: datetime | None = None
+
+    exclude_starred = config.get("exclude_starred", True)
+
+    # Process each priority level
+    for priority, days_key in [
+        (Priority.HIGH, "retention_days_high"),
+        (Priority.MEDIUM, "retention_days_medium"),
+        (Priority.LOW, "retention_days_low"),
+        (Priority.NONE, "retention_days_none"),
+    ]:
+        retention_days = config.get(days_key, 30)
+        cutoff = now - timedelta(days=retention_days)
+
+        # Build the where clause
+        conditions = [
+            Item.priority == priority,
+            Item.fetched_at < cutoff,
+        ]
+        if exclude_starred:
+            conditions.append(Item.is_starred == False)  # noqa: E712
+
+        if execute:
+            # Delete items
+            stmt = delete(Item).where(and_(*conditions))
+            result = await db.execute(stmt)
+            count = result.rowcount
+        else:
+            # Count items
+            count_stmt = select(func.count(Item.id)).where(and_(*conditions))
+            count = await db.scalar(count_stmt) or 0
+
+            # Get oldest date for this priority
+            if count > 0:
+                oldest_stmt = (
+                    select(func.min(Item.fetched_at))
+                    .where(and_(*conditions))
+                )
+                priority_oldest = await db.scalar(oldest_stmt)
+                if priority_oldest and (oldest_date is None or priority_oldest < oldest_date):
+                    oldest_date = priority_oldest
+
+        if count > 0:
+            by_priority[priority.value] = count
+            total += count
+
+    return total, by_priority, oldest_date.isoformat() if oldest_date else None
+
+
+@router.get("/admin/housekeeping", response_model=HousekeepingConfig)
+async def get_housekeeping(
+    db: AsyncSession = Depends(get_db),
+) -> HousekeepingConfig:
+    """Get current housekeeping configuration."""
+    config = await get_housekeeping_config(db)
+    return HousekeepingConfig(**config)
+
+
+@router.put("/admin/housekeeping", response_model=HousekeepingConfig)
+async def update_housekeeping(
+    config: HousekeepingConfig,
+    db: AsyncSession = Depends(get_db),
+) -> HousekeepingConfig:
+    """Update housekeeping configuration."""
+    saved = await save_housekeeping_config(db, config)
+    logger.info(f"Housekeeping config updated: {saved}")
+    return HousekeepingConfig(**saved)
+
+
+@router.post("/admin/housekeeping/preview", response_model=CleanupPreview)
+async def preview_cleanup(
+    db: AsyncSession = Depends(get_db),
+) -> CleanupPreview:
+    """Preview items that would be deleted based on current retention settings."""
+    config = await get_housekeeping_config(db)
+    total, by_priority, oldest_date = await get_items_to_delete(db, config, execute=False)
+
+    return CleanupPreview(
+        total=total,
+        by_priority=by_priority,
+        oldest_item_date=oldest_date,
+    )
+
+
+@router.post("/admin/housekeeping/cleanup", response_model=CleanupResult)
+async def execute_cleanup(
+    db: AsyncSession = Depends(get_db),
+) -> CleanupResult:
+    """Execute cleanup based on current retention settings."""
+    config = await get_housekeeping_config(db)
+    total, by_priority, _ = await get_items_to_delete(db, config, execute=True)
+    await db.commit()
+
+    logger.info(f"Housekeeping cleanup completed: deleted {total} items ({by_priority})")
+    return CleanupResult(
+        deleted=total,
+        by_priority=by_priority,
+    )
+
+
+@router.get("/admin/storage", response_model=StorageStats)
+async def get_storage_stats(
+    db: AsyncSession = Depends(get_db),
+) -> StorageStats:
+    """Get storage usage statistics."""
+    from services.relevance_filter import create_relevance_filter
+
+    # Get PostgreSQL database size
+    pg_size_result = await db.execute(
+        select(func.pg_database_size(func.current_database()))
+    )
+    pg_size_bytes = pg_size_result.scalar() or 0
+
+    # Get item count
+    items_count = await db.scalar(select(func.count(Item.id))) or 0
+
+    # Get classifier storage stats
+    vector_size_bytes = 0
+    vector_items = 0
+    duplicate_size_bytes = 0
+    duplicate_items = 0
+
+    try:
+        relevance_filter = await create_relevance_filter()
+        if relevance_filter:
+            storage_stats = await relevance_filter.get_storage_stats()
+            if storage_stats:
+                vector_size_bytes = storage_stats.get("vector_store_size_bytes", 0)
+                vector_items = storage_stats.get("vector_store_items", 0)
+                duplicate_size_bytes = storage_stats.get("duplicate_store_size_bytes", 0)
+                duplicate_items = storage_stats.get("duplicate_store_items", 0)
+    except Exception as e:
+        logger.warning(f"Failed to get classifier storage stats: {e}")
+
+    total_size = pg_size_bytes + vector_size_bytes + duplicate_size_bytes
+
+    return StorageStats(
+        postgresql_size_bytes=pg_size_bytes,
+        postgresql_size_human=_format_bytes(pg_size_bytes),
+        postgresql_items=items_count,
+        vector_store_size_bytes=vector_size_bytes,
+        vector_store_size_human=_format_bytes(vector_size_bytes),
+        vector_store_items=vector_items,
+        duplicate_store_size_bytes=duplicate_size_bytes,
+        duplicate_store_size_human=_format_bytes(duplicate_size_bytes),
+        duplicate_store_items=duplicate_items,
+        total_size_bytes=total_size,
+        total_size_human=_format_bytes(total_size),
+    )

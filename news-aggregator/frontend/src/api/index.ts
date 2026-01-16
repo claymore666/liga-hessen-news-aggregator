@@ -181,6 +181,40 @@ export interface WorkerControlResponse {
   message: string
 }
 
+export interface HousekeepingConfig {
+  retention_days_high: number
+  retention_days_medium: number
+  retention_days_low: number
+  retention_days_none: number
+  autopurge_enabled: boolean
+  exclude_starred: boolean
+}
+
+export interface CleanupPreview {
+  total: number
+  by_priority: Record<string, number>
+  oldest_item_date: string | null
+}
+
+export interface CleanupResult {
+  deleted: number
+  by_priority: Record<string, number>
+}
+
+export interface StorageStats {
+  postgresql_size_bytes: number
+  postgresql_size_human: string
+  postgresql_items: number
+  vector_store_size_bytes: number
+  vector_store_size_human: string
+  vector_store_items: number
+  duplicate_store_size_bytes: number
+  duplicate_store_size_human: string
+  duplicate_store_items: number
+  total_size_bytes: number
+  total_size_human: string
+}
+
 export const adminApi = {
   // Stats
   getStats: () => api.get<SystemStatsResponse>('/admin/stats'),
@@ -200,4 +234,12 @@ export const adminApi = {
   stopClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/stop'),
   pauseClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/pause'),
   resumeClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/resume'),
+
+  // Housekeeping / Data Management
+  getHousekeeping: () => api.get<HousekeepingConfig>('/admin/housekeeping'),
+  updateHousekeeping: (config: HousekeepingConfig) =>
+    api.put<HousekeepingConfig>('/admin/housekeeping', config),
+  previewCleanup: () => api.post<CleanupPreview>('/admin/housekeeping/preview'),
+  executeCleanup: () => api.post<CleanupResult>('/admin/housekeeping/cleanup'),
+  getStorage: () => api.get<StorageStats>('/admin/storage'),
 }
