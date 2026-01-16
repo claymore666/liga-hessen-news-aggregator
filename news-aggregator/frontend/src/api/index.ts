@@ -205,6 +205,7 @@ export interface StorageStats {
   postgresql_size_bytes: number
   postgresql_size_human: string
   postgresql_items: number
+  postgresql_duplicates: number
   vector_store_size_bytes: number
   vector_store_size_human: string
   vector_store_items: number

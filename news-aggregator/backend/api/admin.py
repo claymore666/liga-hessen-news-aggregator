@@ -887,12 +887,13 @@ class StorageStats(BaseModel):
     postgresql_size_bytes: int
     postgresql_size_human: str
     postgresql_items: int
+    postgresql_duplicates: int  # Items with similar_to_id set
     vector_store_size_bytes: int
     vector_store_size_human: str
     vector_store_items: int
     duplicate_store_size_bytes: int
     duplicate_store_size_human: str
-    duplicate_store_items: int
+    duplicate_store_items: int  # Items indexed for duplicate detection
     total_size_bytes: int
     total_size_human: str
 
@@ -1084,6 +1085,11 @@ async def get_storage_stats(
     # Get item count
     items_count = await db.scalar(select(func.count(Item.id))) or 0
 
+    # Get duplicate count (items with similar_to_id set)
+    duplicates_count = await db.scalar(
+        select(func.count(Item.id)).where(Item.similar_to_id.isnot(None))
+    ) or 0
+
     # Get classifier storage stats
     vector_size_bytes = 0
     vector_items = 0
@@ -1108,6 +1114,7 @@ async def get_storage_stats(
         postgresql_size_bytes=pg_size_bytes,
         postgresql_size_human=_format_bytes(pg_size_bytes),
         postgresql_items=items_count,
+        postgresql_duplicates=duplicates_count,
         vector_store_size_bytes=vector_size_bytes,
         vector_store_size_human=_format_bytes(vector_size_bytes),
         vector_store_items=vector_items,
