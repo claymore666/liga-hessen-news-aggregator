@@ -25,10 +25,9 @@ ARBEITSKREISE:
 - QAG: Querschnitt (Digitalisierung, Wohnen, Schuldnerberatung)
 
 PRIORITÄTEN:
-- critical: Sofortige Reaktion nötig - Kürzungen, Schließungen, Gesetzesentwürfe mit Frist
-- high: Zeitnah (1-2 Wochen) - Anhörungen, Reformen, Förderrichtlinien
-- medium: Beobachten - Politische Debatten, Studien, Ankündigungen
-- low: Zur Kenntnis - Hintergrundberichte, Porträts
+- high: Sofortige Reaktion nötig - Kürzungen, Schließungen, Gesetzesentwürfe mit Frist
+- medium: Zeitnah (1-2 Wochen) - Anhörungen, Reformen, Förderrichtlinien
+- low: Beobachten/Zur Kenntnis - Politische Debatten, Studien, Hintergrundberichte
 
 RELEVANT wenn: Wohlfahrtsverbände, soziale Einrichtungen, Sozialpolitik in Deutschland/Hessen, Haushalt/Kürzungen, Pflege, Kita, Migration in DE, Behinderung, Armut, Fachkräftemangel im Sozialbereich.
 NICHT RELEVANT (relevant=false, priority=null):
@@ -45,7 +44,7 @@ AUSGABE als valides JSON:
   "argumentationskette": ["Konkrete Argumente für Liga-Lobbying", "Keine Konjunktive"],
   "relevant": true/false,
   "relevance_score": 0.0-1.0,
-  "priority": "critical|high|medium|low|null",
+  "priority": "high|medium|low|null",
   "assigned_aks": ["AK1", "AK3"],
   "tags": ["thema1", "thema2"],
   "reasoning": "Kurze Begründung der Klassifikation"
@@ -63,28 +62,23 @@ WICHTIG:
 
 # Trigger keywords for priority scoring
 PRIORITY_KEYWORDS = {
-    "critical": {
+    "high": {
         "weight": 40,
         "keywords": [
             "kürzung", "streichung", "haushaltssperre", "finanzierungslücke",
             "kahlschlag", "förderentzug", "nothaushalt", "haushaltskrise",
-        ],
-    },
-    "high": {
-        "weight": 25,
-        "keywords": [
             "schließung", "abbau", "existenzbedrohend", "insolvenz",
             "personalreduzierung", "stellenabbau", "einschnitte",
         ],
     },
-    "reform": {
-        "weight": 15,
+    "medium": {
+        "weight": 20,
         "keywords": [
             "gesetzesänderung", "novelle", "anhörung", "regierungsentwurf",
             "bundesratsentscheidung", "gesetzgebung", "reform",
         ],
     },
-    "topic": {
+    "low": {
         "weight": 10,
         "keywords": [
             "pflegenotstand", "kitaplätze", "migrationsberatung", "fachkräftemangel",
@@ -144,7 +138,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             - summary: str
             - relevant: bool
             - relevance_score: float (0.0-1.0)
-            - priority: str (critical/high/medium/low/null)
+            - priority: str (high/medium/low/null)
             - assigned_aks: list[str] (0-3 AK codes)
             - tags: list[str]
             - reasoning: str
@@ -299,8 +293,22 @@ Antworte NUR mit JA oder NEIN."""
 
         # Fallback to default if parsing failed
         if result is None:
-            logger.warning(f"Could not parse LLM response as JSON: {text[:100]}")
-            return self._default_analysis(text[:500])
+            logger.warning(f"Could not parse LLM response as JSON: {text[:200]}")
+
+            # Try to extract summary from partial/invalid JSON using regex
+            # This handles cases where JSON is truncated but summary field is complete
+            import re
+            summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)', text)
+            if summary_match:
+                extracted_summary = summary_match.group(1)
+                # Unescape JSON string escapes
+                extracted_summary = extracted_summary.replace('\\"', '"').replace('\\n', '\n')
+                logger.info(f"Extracted summary from invalid JSON: {extracted_summary[:100]}...")
+                return self._default_analysis(extracted_summary)
+
+            # Don't store raw JSON as summary - return empty instead
+            logger.warning("Could not extract summary from LLM response")
+            return self._default_analysis("")
 
         # Normalize assigned_ak (single) to assigned_aks (array) for backward compatibility
         if "assigned_ak" in result and "assigned_aks" not in result:
