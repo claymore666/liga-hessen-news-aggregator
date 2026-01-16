@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from classifier import EmbeddingClassifier, VectorStore
+from classifier import EmbeddingClassifier, VectorStore, DuplicateStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 # Global instances
 classifier: EmbeddingClassifier | None = None
 vector_store: VectorStore | None = None
+duplicate_store: DuplicateStore | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load classifier and vector store on startup."""
-    global classifier, vector_store
+    """Load classifier, vector store, and duplicate store on startup."""
+    global classifier, vector_store, duplicate_store
     logger.info("Loading embedding classifier...")
     try:
         classifier = EmbeddingClassifier.load("models/embedding_classifier_nomic-v2.pkl")
@@ -38,10 +39,18 @@ async def lifespan(app: FastAPI):
         )
         logger.info(f"Vector store ready: {vector_store.get_stats()}")
 
-        # Warm up the model with a test prediction
-        logger.info("Warming up model...")
+        # Initialize duplicate store (separate paraphrase embedder)
+        logger.info("Initializing duplicate store (paraphrase model)...")
+        duplicate_store = DuplicateStore(
+            persist_dir="/app/data/duplicatedb",
+        )
+        logger.info(f"Duplicate store ready: {duplicate_store.get_stats()}")
+
+        # Warm up the models with test predictions
+        logger.info("Warming up models...")
         _ = classifier.predict("Test", "Test content", "test")
-        logger.info("Model ready!")
+        _ = duplicate_store.find_duplicates("Test", "Test content")
+        logger.info("Models ready!")
     except Exception as e:
         logger.error(f"Failed to load classifier: {e}")
         raise
@@ -114,7 +123,7 @@ class DuplicateRequest(BaseModel):
     """Request model for finding semantic duplicates."""
     title: str
     content: str
-    threshold: float = 0.80  # Cosine similarity threshold
+    threshold: float = 0.75  # Cosine similarity threshold (paraphrase model)
     n_results: int = 5
 
 
@@ -150,6 +159,8 @@ class HealthResponse(BaseModel):
     gpu: bool
     gpu_name: str | None = None
     vector_store_items: int = 0
+    duplicate_store_items: int = 0
+    duplicate_model: str | None = None
 
 
 # ============== Endpoints ==============
@@ -162,6 +173,7 @@ async def health():
 
     info = classifier.get_info()
     vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
+    ds_stats = duplicate_store.get_stats() if duplicate_store else {}
 
     return HealthResponse(
         status="ok",
@@ -169,6 +181,8 @@ async def health():
         gpu=info["gpu_available"],
         gpu_name=info["gpu_name"],
         vector_store_items=vs_items,
+        duplicate_store_items=ds_stats.get("total_items", 0),
+        duplicate_model=ds_stats.get("model"),
     )
 
 
@@ -256,27 +270,24 @@ async def find_duplicates(request: DuplicateRequest):
     """
     Find semantically similar items that may be duplicates.
 
-    Used during ingestion to detect cross-channel duplicates like:
-    - RSS: "Title of Article"
-    - Twitter: "Title of Article (by Author) https://..."
+    Uses paraphrase-multilingual-mpnet model for better same-story detection.
+    Default threshold 0.75 catches same-story articles with different wording.
 
-    Returns items with similarity >= threshold (default 0.92).
+    Used during ingestion to detect cross-channel duplicates like:
+    - RSS: "Title of Article" from Source A
+    - RSS: "Same Story Different Words" from Source B
     """
-    if vector_store is None:
-        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    if duplicate_store is None:
+        raise HTTPException(status_code=503, detail="Duplicate store not initialized")
 
     try:
-        # Combine title and content for embedding
-        text = f"{request.title} {request.content}"
-
-        # Search for similar items
-        results = vector_store.search(
-            query=text,
+        # Use dedicated duplicate store with paraphrase embeddings
+        duplicates = duplicate_store.find_duplicates(
+            title=request.title,
+            content=request.content,
+            threshold=request.threshold,
             n_results=request.n_results,
         )
-
-        # Filter by threshold
-        duplicates = [r for r in results if r["score"] >= request.threshold]
 
         return DuplicateResponse(
             duplicates=[SearchResult(**r) for r in duplicates],
@@ -290,9 +301,11 @@ async def find_duplicates(request: DuplicateRequest):
 @app.post("/index", response_model=IndexResponse)
 async def index_item(request: IndexRequest):
     """
-    Index a single article for semantic search.
+    Index a single article for semantic search and duplicate detection.
 
-    Articles must be indexed before they can be searched or used for similarity.
+    Articles are indexed in both stores:
+    - Vector store (nomic): for semantic search and similarity
+    - Duplicate store (paraphrase): for duplicate detection
     """
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
@@ -304,6 +317,15 @@ async def index_item(request: IndexRequest):
             content=request.content,
             metadata=request.metadata,
         )
+
+        # Also add to duplicate store
+        if duplicate_store:
+            duplicate_store.add_item(
+                item_id=request.id,
+                title=request.title,
+                content=request.content,
+                metadata=request.metadata,
+            )
 
         return IndexResponse(
             indexed=1 if added else 0,
@@ -320,6 +342,7 @@ async def index_batch(request: IndexBatchRequest):
     Index multiple articles in batch.
 
     More efficient than indexing one by one for bulk operations.
+    Indexes to both vector store (semantic search) and duplicate store.
     """
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
@@ -336,6 +359,10 @@ async def index_batch(request: IndexBatchRequest):
         ]
 
         added = vector_store.add_items_batch(items)
+
+        # Also add to duplicate store
+        if duplicate_store:
+            duplicate_store.add_items_batch(items)
 
         return IndexResponse(
             indexed=added,
