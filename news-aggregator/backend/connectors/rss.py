@@ -25,6 +25,9 @@ class RSSConfig(BaseModel):
     follow_links: bool = Field(
         default=True, description="Follow links to fetch full article content"
     )
+    verify_ssl: bool = Field(
+        default=True, description="Verify SSL certificates (disable for sites with certificate issues)"
+    )
 
 
 @ConnectorRegistry.register
@@ -57,7 +60,7 @@ class RSSConnector(BaseConnector):
             except ImportError:
                 logger.warning("ArticleExtractor not available, disabling link following")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=config.verify_ssl) as client:
             response = await client.get(
                 str(config.url),
                 headers={"User-Agent": "NewsAggregator/1.0"},
@@ -156,7 +159,7 @@ class RSSConnector(BaseConnector):
             Tuple of (success, message)
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, verify=config.verify_ssl) as client:
                 response = await client.get(
                     str(config.url),
                     headers={"User-Agent": "NewsAggregator/1.0"},
