@@ -276,12 +276,16 @@ class EmbeddingClassifier:
         Save model with backend-specific filename.
 
         Saves as dict format for compatibility with classifier-api.
+        Automatically backs up existing model before overwriting.
 
         Args:
             path: Directory to save to (default: MODEL_DIR)
             backend_name: Backend identifier for filename (e.g., "bge-m3", "sentence-transformers")
                          If None, uses generic name
         """
+        from datetime import datetime
+        import shutil
+
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +294,17 @@ class EmbeddingClassifier:
             filename = f"embedding_classifier_{backend_name}.pkl"
         else:
             filename = "embedding_classifier.pkl"
+
+        filepath = path / filename
+
+        # Backup existing model if it exists
+        if filepath.exists():
+            backup_dir = path / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = backup_dir / f"{filename}.{timestamp}"
+            shutil.copy2(filepath, backup_path)
+            print(f"  Backed up existing model to: {backup_path}")
 
         # Save as dict format (compatible with classifier-api)
         data = {
@@ -302,7 +317,6 @@ class EmbeddingClassifier:
             "multilabel": False,  # Single-label for now
         }
 
-        filepath = path / filename
         with open(filepath, "wb") as f:
             pickle.dump(data, f)
 
