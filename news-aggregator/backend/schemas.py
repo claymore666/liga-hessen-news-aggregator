@@ -127,6 +127,17 @@ class ItemBase(BaseModel):
     published_at: datetime
 
 
+class DuplicateBrief(BaseSchema):
+    """Minimal duplicate item info for collapsible grouping."""
+
+    id: int
+    title: str
+    url: str
+    priority: Priority
+    source: SourceBrief | None = None
+    published_at: datetime
+
+
 class ItemResponse(ItemBase, BaseSchema):
     """Schema for item response."""
 
@@ -152,6 +163,9 @@ class ItemResponse(ItemBase, BaseSchema):
     notes: str | None
     needs_llm_processing: bool = False
     metadata_: dict[str, Any] = Field(default_factory=dict, serialization_alias="metadata")
+    # Duplicate grouping
+    similar_to_id: int | None = None  # ID of primary item if this is a duplicate
+    duplicates: list[DuplicateBrief] = Field(default_factory=list)  # Child duplicates if this is primary
 
 
 class ItemUpdate(BaseModel):

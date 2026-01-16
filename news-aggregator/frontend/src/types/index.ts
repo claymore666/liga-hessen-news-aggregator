@@ -79,6 +79,16 @@ export interface SourceBrief {
   is_stakeholder: boolean
 }
 
+// Brief duplicate info for collapsible grouping
+export interface DuplicateBrief {
+  id: number
+  title: string
+  url: string
+  priority: Priority
+  source?: SourceBrief
+  published_at: string | null
+}
+
 export interface Item {
   id: number
   channel_id: number
@@ -107,6 +117,9 @@ export interface Item {
   metadata?: ItemMetadata
   created_at: string
   updated_at: string
+  // Duplicate grouping
+  similar_to_id: number | null
+  duplicates: DuplicateBrief[]
 }
 
 export interface Rule {

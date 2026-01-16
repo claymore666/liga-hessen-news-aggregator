@@ -10,7 +10,31 @@ from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
-from schemas import ItemListResponse, ItemResponse, ItemUpdate
+from schemas import DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+
+
+def _build_item_response(item: Item) -> ItemResponse:
+    """Build ItemResponse with proper duplicate formatting."""
+    # Build duplicates list from relationship
+    duplicates = []
+    if hasattr(item, 'duplicates') and item.duplicates:
+        for dup in item.duplicates:
+            source_brief = None
+            if dup.channel and dup.channel.source:
+                source_brief = SourceBrief(id=dup.channel.source.id, name=dup.channel.source.name)
+            duplicates.append(DuplicateBrief(
+                id=dup.id,
+                title=dup.title,
+                url=dup.url,
+                priority=dup.priority,
+                source=source_brief,
+                published_at=dup.published_at,
+            ))
+
+    # Create base response
+    response = ItemResponse.model_validate(item)
+    response.duplicates = duplicates
+    return response
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,6 +69,7 @@ async def list_items(
     assigned_ak: str | None = Query(None, description="Filter by Arbeitskreis (comma-separated: AK1,AK2,AK3)"),
     sort_by: str = Query("date", description="Sort by: date, priority, source"),
     sort_order: str = Query("desc", description="Sort order: asc, desc"),
+    group_duplicates: bool = Query(True, description="Group duplicate articles under primary item"),
 ) -> ItemListResponse:
     """List items with filtering and pagination.
 
@@ -52,10 +77,16 @@ async def list_items(
     Set relevant_only=false to include all items including NONE priority.
     By default, archived items are excluded. Set is_archived=true to show only archived,
     or is_archived=false to explicitly exclude them.
+    When group_duplicates=true (default), duplicate articles are nested under their primary item.
     """
     query = select(Item).options(
-        selectinload(Item.channel).selectinload(Channel.source)
+        selectinload(Item.channel).selectinload(Channel.source),
+        selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
     )
+
+    # Exclude duplicates from main list (they appear nested under primary)
+    if group_duplicates:
+        query = query.where(Item.similar_to_id.is_(None))
 
     # Apply filters
     if channel_id is not None:
@@ -157,7 +188,7 @@ async def list_items(
     total_pages = (total + page_size - 1) // page_size
 
     return ItemListResponse(
-        items=[ItemResponse.model_validate(item) for item in items],
+        items=[_build_item_response(item) for item in items],
         total=total,
         page=page,
         page_size=page_size,
@@ -232,7 +263,10 @@ async def get_item(
     query = (
         select(Item)
         .where(Item.id == item_id)
-        .options(selectinload(Item.channel).selectinload(Channel.source))
+        .options(
+            selectinload(Item.channel).selectinload(Channel.source),
+            selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
+        )
     )
     result = await db.execute(query)
     item = result.scalar_one_or_none()
@@ -240,7 +274,7 @@ async def get_item(
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    return ItemResponse.model_validate(item)
+    return _build_item_response(item)
 
 
 @router.patch("/items/{item_id}", response_model=ItemResponse)
@@ -334,9 +368,19 @@ async def update_item(
             ip_address=get_client_ip(request),
         )
 
-    await db.refresh(item)
+    # Re-fetch with duplicates loaded
+    query = (
+        select(Item)
+        .where(Item.id == item_id)
+        .options(
+            selectinload(Item.channel).selectinload(Channel.source),
+            selectinload(Item.duplicates).selectinload(Item.channel).selectinload(Channel.source),
+        )
+    )
+    result = await db.execute(query)
+    item = result.scalar_one()
 
-    return ItemResponse.model_validate(item)
+    return _build_item_response(item)
 
 
 @router.post("/items/{item_id}/read")

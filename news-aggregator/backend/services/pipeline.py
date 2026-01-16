@@ -121,6 +121,8 @@ class Pipeline:
                 continue
 
             # 3a. Check for semantic duplicates (cross-channel)
+            # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
+            similar_to_id = None
             if self.relevance_filter and not self.training_mode:
                 try:
                     duplicates = await self.relevance_filter.find_duplicates(
@@ -130,9 +132,10 @@ class Pipeline:
                     )
                     if duplicates:
                         best_match = duplicates[0]
+                        similar_to_id = int(best_match["id"])
                         logger.info(
                             f"Semantic duplicate: '{normalized.title[:40]}...' "
-                            f"matches '{best_match.get('title', '')[:40]}...' "
+                            f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
                             f"(score: {best_match.get('score', 0):.3f})"
                         )
 
@@ -141,7 +144,7 @@ class Pipeline:
                         try:
                             await record_event(
                                 self.db,
-                                int(best_match["id"]),  # Existing item ID
+                                similar_to_id,  # Existing item ID
                                 EVENT_DUPLICATE_DETECTED,
                                 data={
                                     "duplicate_title": normalized.title,
@@ -153,8 +156,6 @@ class Pipeline:
                             )
                         except Exception as e:
                             logger.warning(f"Failed to record duplicate event: {e}")
-
-                        continue  # Skip creating this duplicate
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
 
@@ -169,6 +170,7 @@ class Pipeline:
                 published_at=normalized.published_at,
                 content_hash=content_hash,
                 metadata_=normalized.metadata,
+                similar_to_id=similar_to_id,  # Link to primary item if duplicate
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
