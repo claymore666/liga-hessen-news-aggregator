@@ -348,6 +348,10 @@ class Pipeline:
         # Strip HTML tags from content
         content = re.sub(r"<[^>]+>", "", raw.content)
 
+        # Remove control characters (except newline, tab, carriage return)
+        # This prevents issues with parsing, storing, and JSON serialization
+        content = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", content)
+
         # Normalize whitespace
         content = re.sub(r"\s+", " ", content).strip()
 
@@ -358,8 +362,9 @@ class Pipeline:
         content = content.replace("&quot;", '"')
         content = content.replace("&#39;", "'")
 
-        # Strip HTML tags from title and normalize whitespace
+        # Strip HTML tags from title, remove control chars, normalize whitespace
         title = re.sub(r"<[^>]+>", "", raw.title)
+        title = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", title)
         title = re.sub(r"\s+", " ", title).strip()
 
         return RawItem(
