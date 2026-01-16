@@ -148,6 +148,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             try:
                 source_name = item.source.name if item.source else "Unbekannt"
             except Exception:
+                # Relationship may not be loaded, use fallback
                 source_name = "Unbekannt"
         date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 

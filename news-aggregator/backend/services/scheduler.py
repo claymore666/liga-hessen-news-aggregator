@@ -272,8 +272,9 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                     if channel:
                         channel.last_error = str(e)
                         await db.commit()
-                except Exception:
-                    pass
+                except Exception as store_err:
+                    # Don't let error storage failure mask original error
+                    logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
                 raise
 
 

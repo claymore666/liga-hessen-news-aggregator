@@ -205,7 +205,8 @@ class ArticleExtractor:
                     },
                 )
                 return str(response.url)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not resolve redirects for {url}: {e}")
             return url
 
     async def fetch_article(self, url: str) -> ArticleContent | None:
