@@ -199,3 +199,11 @@ export interface ValidationResult {
   message: string
   sample_items?: number
 }
+
+export interface ItemEvent {
+  id: number
+  event_type: string
+  timestamp: string
+  ip_address: string | null
+  data: Record<string, unknown> | null
+}

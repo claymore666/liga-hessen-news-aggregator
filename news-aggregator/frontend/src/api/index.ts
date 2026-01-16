@@ -1,5 +1,5 @@
 import api from './client'
-import type { Source, SourceCreate, Channel, ChannelCreate, Item, Rule, Stats, SourceStats, ChannelStats, PaginatedResponse } from '@/types'
+import type { Source, SourceCreate, Channel, ChannelCreate, Item, Rule, Stats, SourceStats, ChannelStats, PaginatedResponse, ItemEvent } from '@/types'
 
 export const sourcesApi = {
   list: (params?: { enabled?: boolean; has_errors?: boolean }) =>
@@ -54,7 +54,8 @@ export const itemsApi = {
   markRead: (id: number) => api.post(`/items/${id}/read`),
   markUnread: (id: number) => api.patch(`/items/${id}`, { is_read: false }),
   bulkMarkRead: (ids: number[]) => api.post('/items/mark-all-read', { ids }),
-  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`)
+  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`),
+  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`)
 }
 
 export const rulesApi = {
