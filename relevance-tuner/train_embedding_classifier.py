@@ -275,6 +275,8 @@ class EmbeddingClassifier:
         """
         Save model with backend-specific filename.
 
+        Saves as dict format for compatibility with classifier-api.
+
         Args:
             path: Directory to save to (default: MODEL_DIR)
             backend_name: Backend identifier for filename (e.g., "bge-m3", "sentence-transformers")
@@ -283,26 +285,27 @@ class EmbeddingClassifier:
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
 
-        # Temporarily remove embedder (will reload on demand)
-        embedder = self.embedder
-        embedder_repr = str(embedder) if embedder else "unknown"
-        self.embedder = None
-
-        # Store backend info in the model for reference
-        self.backend_name = backend_name or "generic"
-        self.embedder_info = embedder_repr
-
         # Backend-specific filename
         if backend_name:
             filename = f"embedding_classifier_{backend_name}.pkl"
         else:
             filename = "embedding_classifier.pkl"
 
+        # Save as dict format (compatible with classifier-api)
+        data = {
+            "relevance_clf": self.relevance_clf,
+            "priority_clf": self.priority_clf,
+            "ak_clf": self.ak_clf,
+            "priority_encoder": self.priority_encoder,
+            "ak_encoder": self.ak_encoder,
+            "backend": backend_name or "generic",
+            "multilabel": False,  # Single-label for now
+        }
+
         filepath = path / filename
         with open(filepath, "wb") as f:
-            pickle.dump(self, f)
+            pickle.dump(data, f)
 
-        self.embedder = embedder
         print(f"  Model saved to: {filepath}")
 
     @classmethod
