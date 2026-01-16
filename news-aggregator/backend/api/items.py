@@ -516,6 +516,86 @@ async def _refetch_rss_item_task(item_id: int):
             logger.error(f"Error re-fetching RSS item {item_id}: {e}")
 
 
+async def _refetch_social_item_task(item_id: int):
+    """Background task to re-fetch a social media item (Mastodon/Bluesky/Telegram) and extract linked articles."""
+    from services.article_extractor import ArticleExtractor
+    from sqlalchemy.orm.attributes import flag_modified
+
+    async with async_session_maker() as db:
+        try:
+            result = await db.execute(
+                select(Item)
+                .where(Item.id == item_id)
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+            )
+            item = result.scalar_one_or_none()
+            if not item:
+                logger.error(f"Item {item_id} not found for re-fetch")
+                return
+
+            connector_type = item.channel.connector_type
+            extractor = ArticleExtractor()
+
+            # Extract URLs from content
+            content_text = item.content
+            links = extractor.extract_urls_from_text(content_text)
+
+            if not links:
+                logger.info(f"No links found in {connector_type} item {item_id}")
+                return
+
+            logger.info(f"Found {len(links)} links in {connector_type} item {item_id}: {links}")
+
+            # Try to fetch first valid article
+            for link_url in links[:3]:
+                # Skip links to the same social media platform
+                if any(domain in link_url for domain in ["mastodon.", "social.", "bsky.app", "t.me", "telegram."]):
+                    continue
+
+                try:
+                    article = await extractor.fetch_article(link_url)
+                    if article and article.is_article and len(article.content) > 100:
+                        # Keep original post, append article
+                        original_content = item.content
+                        # Remove the "Toot: " or similar prefix if present for cleaner output
+                        if original_content.startswith("Toot: "):
+                            original_content = original_content[6:]
+
+                        item.content = f"""{original_content}
+
+---
+
+Verlinkter Artikel von {article.source_domain}:
+{article.title or 'Unbekannter Titel'}
+
+{article.content[:4000]}"""
+
+                        item.metadata_["extracted_links"] = links
+                        item.metadata_["linked_articles"] = [{
+                            "url": article.url,
+                            "title": article.title,
+                            "domain": article.source_domain,
+                            "content_length": len(article.content),
+                        }]
+                        item.metadata_["refetched_at"] = datetime.utcnow().isoformat()
+                        flag_modified(item, "metadata_")
+
+                        await db.commit()
+                        logger.info(f"Re-fetched {connector_type} item {item_id} with article from {article.source_domain} ({len(article.content)} chars)")
+
+                        # Reprocess through LLM for better analysis
+                        await _reprocess_items_task([item_id], force=True)
+                        return
+
+                except Exception as e:
+                    logger.debug(f"Failed to fetch article from {link_url}: {e}")
+
+            logger.warning(f"No valid articles found for {connector_type} item {item_id}")
+
+        except Exception as e:
+            logger.error(f"Error re-fetching {connector_type} item {item_id}: {e}")
+
+
 async def _refetch_item_task(item_id: int):
     """Background task to re-fetch an x_scraper/linkedin item and extract linked articles."""
     from connectors import ConnectorRegistry
@@ -725,6 +805,9 @@ async def refetch_item(
     # Route to appropriate task based on connector type
     if connector_type in ("x_scraper", "linkedin"):
         background_tasks.add_task(_refetch_item_task, item_id)
+    elif connector_type in ("mastodon", "bluesky", "telegram"):
+        # Social media posts: extract links from content and follow them
+        background_tasks.add_task(_refetch_social_item_task, item_id)
     elif connector_type in ("rss", "google_alerts"):
         background_tasks.add_task(_refetch_rss_item_task, item_id)
     else:
