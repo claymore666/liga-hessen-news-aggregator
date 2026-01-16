@@ -388,7 +388,8 @@ class LLMWorker:
                     # Clear retry flag
                     item.needs_llm_processing = False
 
-                    await db.flush()
+                    # Commit after each item so count updates in real-time
+                    await db.commit()
 
                     # Record LLM processing event
                     from services.item_events import record_event, EVENT_LLM_PROCESSED
@@ -413,8 +414,6 @@ class LLMWorker:
                 except Exception as e:
                     logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
                     self._stats["errors"] += 1
-
-            await db.commit()
 
         return processed
 
