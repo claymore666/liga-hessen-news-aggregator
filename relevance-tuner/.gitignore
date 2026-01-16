@@ -25,3 +25,4 @@ data/reviewed/
 # Temporary
 *.log
 *.tmp
+\!models/embedding/metrics.json
