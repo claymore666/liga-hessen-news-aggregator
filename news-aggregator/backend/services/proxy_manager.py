@@ -10,6 +10,7 @@ import json
 import logging
 import random
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -72,6 +73,8 @@ class ProxyManager:
         self._initial_fill_complete = False
         # Known good proxies with failure tracking: {proxy: {latency, failures, last_success}}
         self._known_proxies: dict[str, dict] = {}
+        # Per-connector proxy reservations: {connector_type: {proxy1, proxy2, ...}}
+        self._reserved: dict[str, set[str]] = defaultdict(set)
         self._load_known_proxies()
 
     def _load_known_proxies(self) -> None:
@@ -384,6 +387,65 @@ class ProxyManager:
         self.current_index += 1
         return proxy_info["proxy"]
 
+    async def checkout_proxy(self, connector_type: str) -> str | None:
+        """Reserve a proxy for exclusive use by a connector type.
+
+        This ensures concurrent scrapers of the same type get different proxies,
+        preventing multiple scrapers from using the same IP to hit rate-limited sites.
+
+        Args:
+            connector_type: The connector type (e.g., "x_scraper", "instagram_scraper")
+
+        Returns:
+            Reserved proxy string (ip:port) or None if no proxies available
+        """
+        async with self._lock:
+            # Get set of all working proxy addresses
+            working_set = {p["proxy"] for p in self.working_proxies}
+
+            # Get proxies already reserved by this connector type
+            reserved_by_type = self._reserved[connector_type]
+
+            # Find available proxies (working but not reserved by this connector type)
+            available = working_set - reserved_by_type
+
+            if not available:
+                logger.debug(f"No available proxies for {connector_type} "
+                           f"(working={len(working_set)}, reserved={len(reserved_by_type)})")
+                return None
+
+            # Pick a random available proxy
+            proxy = random.choice(list(available))
+            self._reserved[connector_type].add(proxy)
+
+            logger.debug(f"Checked out proxy {proxy} for {connector_type} "
+                        f"({len(available)-1} remaining)")
+            return proxy
+
+    async def checkin_proxy(self, connector_type: str, proxy: str) -> None:
+        """Release a reserved proxy back to the pool.
+
+        Args:
+            connector_type: The connector type that reserved the proxy
+            proxy: The proxy to release
+        """
+        async with self._lock:
+            self._reserved[connector_type].discard(proxy)
+            logger.debug(f"Checked in proxy {proxy} for {connector_type}")
+
+    def available_count(self, connector_type: str) -> int:
+        """Get count of proxies available for a connector type.
+
+        Args:
+            connector_type: The connector type to check
+
+        Returns:
+            Number of working proxies not reserved by this connector type
+        """
+        working_set = {p["proxy"] for p in self.working_proxies}
+        reserved_by_type = self._reserved.get(connector_type, set())
+        return len(working_set - reserved_by_type)
+
     def get_status(self) -> dict:
         """Get current proxy pool status."""
         return {
@@ -401,6 +463,7 @@ class ProxyManager:
             "known_proxies_count": len(self._known_proxies),
             "known_proxies_max": self.max_known_proxies,
             "max_failures_before_removal": self.MAX_FAILURES,
+            "reserved_by_type": {k: len(v) for k, v in self._reserved.items()},
         }
 
 

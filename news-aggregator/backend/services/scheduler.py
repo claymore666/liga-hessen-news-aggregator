@@ -17,9 +17,11 @@ from models import Channel, Source
 logger = logging.getLogger(__name__)
 
 # Per-source-type concurrency limits for parallel fetching
+# For proxy-using connectors (x_scraper, instagram_scraper), the actual limit
+# is dynamically capped by available proxies via get_effective_limit()
 SOURCE_TYPE_LIMITS = {
-    "x_scraper": 2,  # Heavy browser + rate limits
-    "instagram_scraper": 2,
+    "x_scraper": 4,  # Heavy browser + rate limits, uses proxies
+    "instagram_scraper": 4,  # Heavy browser, uses proxies
     "instagram": 3,
     "mastodon": 5,
     "twitter": 5,
@@ -31,6 +33,39 @@ SOURCE_TYPE_LIMITS = {
     "google_alerts": 5,
     "linkedin": 2,
 }
+
+# Connector types that use proxy reservation
+PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
+
+
+def get_effective_limit(source_type: str) -> int:
+    """Get effective concurrency limit for a source type.
+
+    For proxy-using connectors, the limit is capped by available proxies
+    to prevent multiple scrapers from using the same proxy.
+
+    Args:
+        source_type: The connector type
+
+    Returns:
+        Effective concurrency limit
+    """
+    base_limit = SOURCE_TYPE_LIMITS.get(source_type, 3)
+
+    if source_type in PROXY_USING_CONNECTORS:
+        try:
+            from services.proxy_manager import proxy_manager
+            available = proxy_manager.available_count(source_type)
+            # Cap at available proxies, but always allow at least 1 (direct connection)
+            effective = max(1, min(base_limit, available)) if available > 0 else 1
+            if effective < base_limit:
+                logger.debug(f"Dynamic limit for {source_type}: {effective} "
+                           f"(base={base_limit}, proxies={available})")
+            return effective
+        except Exception as e:
+            logger.warning(f"Failed to get proxy count for {source_type}: {e}")
+
+    return base_limit
 
 # Track if a fetch is currently running to avoid overlapping fetches
 _fetch_in_progress = False
@@ -86,9 +121,9 @@ async def fetch_all_channels(training_mode: bool = False) -> dict:
             f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
         )
 
-        # Create semaphores per source type
+        # Create semaphores per source type (dynamic limits for proxy-using connectors)
         semaphores = {
-            source_type: asyncio.Semaphore(SOURCE_TYPE_LIMITS.get(source_type, 3))
+            source_type: asyncio.Semaphore(get_effective_limit(source_type))
             for source_type in by_type.keys()
         }
 
@@ -381,9 +416,9 @@ async def fetch_due_channels() -> dict:
                 f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
             )
 
-            # Create semaphores per source type
+            # Create semaphores per source type (dynamic limits for proxy-using connectors)
             semaphores = {
-                source_type: asyncio.Semaphore(SOURCE_TYPE_LIMITS.get(source_type, 3))
+                source_type: asyncio.Semaphore(get_effective_limit(source_type))
                 for source_type in by_type.keys()
             }
 

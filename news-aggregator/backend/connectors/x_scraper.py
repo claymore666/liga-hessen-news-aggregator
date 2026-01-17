@@ -111,17 +111,20 @@ class XScraperConnector(BaseConnector):
         Returns:
             List of RawItem objects containing tweets
         """
-        # Get proxy if enabled
+        # Get proxy if enabled (using checkout for exclusive reservation)
+        proxy = None
         proxy_server = None
         if config.use_proxy:
             try:
                 from services.proxy_manager import proxy_manager
-                proxy = proxy_manager.get_next_proxy()
+                proxy = await proxy_manager.checkout_proxy(self.connector_type)
                 if proxy:
                     proxy_server = f"http://{proxy}"
-                    logger.info(f"Using proxy: {proxy}")
+                    logger.info(f"Checked out proxy for {self.connector_type}: {proxy}")
+                else:
+                    logger.warning(f"No proxies available for {self.connector_type}, using direct connection")
             except Exception as e:
-                logger.warning(f"Failed to get proxy: {e}, continuing without proxy")
+                logger.warning(f"Failed to checkout proxy: {e}, continuing without proxy")
 
         # Try with proxy first, fallback to direct if proxy fails
         try:
@@ -131,6 +134,15 @@ class XScraperConnector(BaseConnector):
                 logger.warning(f"Proxy failed: {e}. Retrying without proxy...")
                 return await self._fetch_with_browser(config, None)
             raise
+        finally:
+            # Always release the proxy back to the pool
+            if proxy:
+                try:
+                    from services.proxy_manager import proxy_manager
+                    await proxy_manager.checkin_proxy(self.connector_type, proxy)
+                    logger.debug(f"Released proxy {proxy} for {self.connector_type}")
+                except Exception as e:
+                    logger.warning(f"Failed to checkin proxy: {e}")
 
     async def _fetch_with_browser(
         self, config: XScraperConfig, proxy_server: str | None
