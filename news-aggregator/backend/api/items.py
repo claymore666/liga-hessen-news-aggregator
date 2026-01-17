@@ -1,7 +1,7 @@
 """API endpoints for news items."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import case, func, select

@@ -1,7 +1,6 @@
 """Admin API endpoints for backend management."""
 
 import logging
-import os
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
