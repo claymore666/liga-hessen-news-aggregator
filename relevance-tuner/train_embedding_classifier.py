@@ -275,22 +275,19 @@ class EmbeddingClassifier:
         """
         Save model with backend-specific filename.
 
+        Saves as dict format for compatibility with classifier-api.
+        Automatically backs up existing model before overwriting.
+
         Args:
             path: Directory to save to (default: MODEL_DIR)
             backend_name: Backend identifier for filename (e.g., "bge-m3", "sentence-transformers")
                          If None, uses generic name
         """
+        from datetime import datetime
+        import shutil
+
         path = Path(path) if path else MODEL_DIR
         path.mkdir(parents=True, exist_ok=True)
-
-        # Temporarily remove embedder (will reload on demand)
-        embedder = self.embedder
-        embedder_repr = str(embedder) if embedder else "unknown"
-        self.embedder = None
-
-        # Store backend info in the model for reference
-        self.backend_name = backend_name or "generic"
-        self.embedder_info = embedder_repr
 
         # Backend-specific filename
         if backend_name:
@@ -299,10 +296,30 @@ class EmbeddingClassifier:
             filename = "embedding_classifier.pkl"
 
         filepath = path / filename
-        with open(filepath, "wb") as f:
-            pickle.dump(self, f)
 
-        self.embedder = embedder
+        # Backup existing model if it exists
+        if filepath.exists():
+            backup_dir = path / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = backup_dir / f"{filename}.{timestamp}"
+            shutil.copy2(filepath, backup_path)
+            print(f"  Backed up existing model to: {backup_path}")
+
+        # Save as dict format (compatible with classifier-api)
+        data = {
+            "relevance_clf": self.relevance_clf,
+            "priority_clf": self.priority_clf,
+            "ak_clf": self.ak_clf,
+            "priority_encoder": self.priority_encoder,
+            "ak_encoder": self.ak_encoder,
+            "backend": backend_name or "generic",
+            "multilabel": False,  # Single-label for now
+        }
+
+        with open(filepath, "wb") as f:
+            pickle.dump(data, f)
+
         print(f"  Model saved to: {filepath}")
 
     @classmethod
@@ -507,7 +524,7 @@ def main():
     print("\n=== Saving Model ===")
     clf.save(backend_name=backend_name)
 
-    # Save metrics for comparison
+    # Save metrics for comparison (append to history)
     import json
     from datetime import datetime
 
@@ -517,14 +534,29 @@ def main():
         with open(metrics_file) as f:
             all_metrics = json.load(f)
 
-    all_metrics[backend_name] = {
+    # New entry for this training run
+    new_entry = {
         "relevance_accuracy": round(metrics["relevance_accuracy"], 4),
         "priority_accuracy": round(metrics["priority_accuracy"], 4),
         "priority_within_one": round(metrics["priority_within_one"], 4),
         "ak_accuracy": round(metrics["ak_accuracy"], 4),
         "speed_items_per_sec": round(speed, 1),
         "timestamp": datetime.now().isoformat(),
+        "train_size": len(train_texts),
+        "test_size": len(test_texts),
     }
+
+    # Migrate old format (single entry) to new format (list of entries)
+    if backend_name in all_metrics:
+        existing = all_metrics[backend_name]
+        if isinstance(existing, dict):
+            # Old format: convert to list
+            all_metrics[backend_name] = [existing, new_entry]
+        else:
+            # New format: append to list
+            all_metrics[backend_name].append(new_entry)
+    else:
+        all_metrics[backend_name] = [new_entry]
 
     with open(metrics_file, "w") as f:
         json.dump(all_metrics, f, indent=2)
@@ -541,13 +573,37 @@ def main():
     print(f"AK accuracy:            {metrics['ak_accuracy']:.1%}")
     print(f"Speed:                  {speed:.1f} items/sec")
 
-    # Show all backends comparison if we have multiple
+    # Show all backends comparison (using latest entry from each)
     if len(all_metrics) > 1:
-        print("\n=== ALL BACKENDS COMPARISON ===")
+        print("\n=== ALL BACKENDS COMPARISON (latest) ===")
         print(f"{'Backend':<25} {'Relevance':>10} {'AK':>10} {'Speed':>12}")
         print("-" * 60)
-        for name, m in sorted(all_metrics.items(), key=lambda x: -x[1]["relevance_accuracy"]):
+
+        def get_latest(entries):
+            """Get latest entry from list or single dict."""
+            if isinstance(entries, list):
+                return entries[-1]
+            return entries  # Old format fallback
+
+        sorted_backends = sorted(
+            all_metrics.items(),
+            key=lambda x: -get_latest(x[1])["relevance_accuracy"]
+        )
+        for name, entries in sorted_backends:
+            m = get_latest(entries)
             print(f"{name:<25} {m['relevance_accuracy']:>9.1%} {m['ak_accuracy']:>9.1%} {m['speed_items_per_sec']:>9.1f}/s")
+
+    # Show history for current backend
+    if backend_name in all_metrics:
+        entries = all_metrics[backend_name]
+        if isinstance(entries, list) and len(entries) > 1:
+            print(f"\n=== {backend_name.upper()} HISTORY ===")
+            print(f"{'Date':<20} {'Relevance':>10} {'Priority':>10} {'AK':>10} {'Train':>8}")
+            print("-" * 65)
+            for entry in entries:
+                date = entry["timestamp"][:10]
+                train = entry.get("train_size", "?")
+                print(f"{date:<20} {entry['relevance_accuracy']:>9.1%} {entry['priority_accuracy']:>9.1%} {entry['ak_accuracy']:>9.1%} {train:>8}")
 
     # Examples
     print("\n=== Example Predictions ===")

@@ -5,7 +5,8 @@ import {
   MagnifyingGlassIcon,
   ChevronUpDownIcon,
   XMarkIcon,
-  CheckIcon
+  CheckIcon,
+  EyeSlashIcon
 } from '@heroicons/vue/24/outline'
 import type { Priority } from '@/types'
 import { startOfDay, subDays, isMonday } from 'date-fns'
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   (e: 'search'): void
   (e: 'clear-selection'): void
   (e: 'bulk-mark-read'): void
+  (e: 'bulk-mark-unread'): void
   (e: 'select-all'): void
 }>()
 
@@ -178,6 +180,14 @@ onMounted(() => {
       >
         <CheckIcon class="mr-1 h-3.5 w-3.5" />
         Als gelesen
+      </button>
+      <button
+        type="button"
+        class="btn btn-secondary text-xs py-1"
+        @click="emit('bulk-mark-unread')"
+      >
+        <EyeSlashIcon class="mr-1 h-3.5 w-3.5" />
+        Als ungelesen
       </button>
       <button
         type="button"

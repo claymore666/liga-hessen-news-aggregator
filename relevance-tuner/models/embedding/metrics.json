@@ -1,0 +1,42 @@
+{
+  "sentence-transformers": [
+    {
+      "relevance_accuracy": 0.8591,
+      "priority_accuracy": 0.6316,
+      "priority_within_one": 0.9737,
+      "ak_accuracy": 0.6316,
+      "speed_items_per_sec": 675.2,
+      "timestamp": "2026-01-10T22:00:05.653186"
+    }
+  ],
+  "nomic-v2": [
+    {
+      "relevance_accuracy": 0.9065,
+      "priority_accuracy": 0.6117,
+      "priority_within_one": 0.9126,
+      "ak_accuracy": 0.7379,
+      "speed_items_per_sec": 119.7,
+      "timestamp": "2026-01-16T16:38:44.042885"
+    },
+    {
+      "relevance_accuracy": 0.896,
+      "priority_accuracy": 0.5714,
+      "priority_within_one": 0.9554,
+      "ak_accuracy": 0.6429,
+      "speed_items_per_sec": 130.7,
+      "timestamp": "2026-01-16T22:52:35.889237",
+      "train_size": 3259,
+      "test_size": 577
+    }
+  ],
+  "jina-v3": [
+    {
+      "relevance_accuracy": 0.8792,
+      "priority_accuracy": 0.6316,
+      "priority_within_one": 0.9737,
+      "ak_accuracy": 0.5789,
+      "speed_items_per_sec": 55.2,
+      "timestamp": "2026-01-10T22:02:03.026971"
+    }
+  ]
+}

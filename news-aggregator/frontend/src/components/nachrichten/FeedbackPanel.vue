@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { Item, Priority } from '@/types'
+import { computed, ref } from 'vue'
+import type { Item, Priority, ItemEvent } from '@/types'
 import {
   StarIcon,
   CheckIcon,
   EnvelopeOpenIcon,
-  ArchiveBoxIcon
+  ArchiveBoxIcon,
+  ClockIcon,
+  XMarkIcon
 } from '@heroicons/vue/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/vue/24/solid'
+import { itemsApi } from '@/api'
 
 const props = defineProps<{
   item: Item
@@ -62,6 +65,61 @@ const toggleRelevance = () => {
   } else {
     emit('update:priority', 'low')
   }
+}
+
+// History popup
+const showHistory = ref(false)
+const historyEvents = ref<ItemEvent[]>([])
+const historyLoading = ref(false)
+
+const loadHistory = async () => {
+  historyLoading.value = true
+  try {
+    const response = await itemsApi.getHistory(props.item.id)
+    historyEvents.value = response.data
+    showHistory.value = true
+  } catch (e) {
+    console.error('Failed to load history:', e)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const eventTypeLabels: Record<string, string> = {
+  pre_audit_trail: 'Vor Audit-Trail',
+  created: 'Erstellt',
+  classifier_processed: 'Klassifiziert',
+  llm_processed: 'LLM-Analyse',
+  user_modified: 'Benutzer geändert',
+  read: 'Gelesen',
+  archived: 'Archiviert'
+}
+
+const formatEventType = (type: string): string => {
+  return eventTypeLabels[type] || type
+}
+
+const formatTimestamp = (ts: string): string => {
+  return new Date(ts).toLocaleString('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+const formatEventData = (data: Record<string, unknown> | null): string => {
+  if (!data) return ''
+  const parts: string[] = []
+  if (data.priority) parts.push(`Priorität: ${data.priority}`)
+  if (data.assigned_aks && Array.isArray(data.assigned_aks) && data.assigned_aks.length > 0) {
+    parts.push(`AKs: ${data.assigned_aks.join(', ')}`)
+  }
+  if (data.relevance_score !== undefined) {
+    parts.push(`Relevanz: ${Math.round((data.relevance_score as number) * 100)}%`)
+  }
+  return parts.join(' | ')
 }
 </script>
 
@@ -166,6 +224,15 @@ const toggleRelevance = () => {
         </button>
         <button
           type="button"
+          class="p-1.5 rounded text-gray-500 hover:text-purple-600 hover:bg-purple-100 transition-colors"
+          title="Verlauf anzeigen"
+          :disabled="historyLoading"
+          @click="loadHistory"
+        >
+          <ClockIcon class="h-5 w-5" :class="{ 'animate-spin': historyLoading }" />
+        </button>
+        <button
+          type="button"
           class="p-1.5 rounded transition-colors"
           :class="item.is_archived ? 'text-orange-600 bg-orange-100 hover:bg-orange-200' : 'text-gray-500 hover:text-red-600 hover:bg-red-100'"
           :title="item.is_archived ? 'Wiederherstellen' : 'Archivieren'"
@@ -173,6 +240,53 @@ const toggleRelevance = () => {
         >
           <ArchiveBoxIcon class="h-5 w-5" />
         </button>
+      </div>
+    </div>
+
+    <!-- History Popup -->
+    <div
+      v-if="showHistory"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+      @click.self="showHistory = false"
+    >
+      <div class="w-full max-w-lg max-h-[80vh] rounded-lg bg-white shadow-xl overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between border-b border-gray-200 p-4">
+          <h3 class="font-medium text-gray-900">
+            <ClockIcon class="inline h-5 w-5 mr-2" />
+            Verlauf
+          </h3>
+          <button
+            type="button"
+            class="text-gray-400 hover:text-gray-600"
+            @click="showHistory = false"
+          >
+            <XMarkIcon class="h-5 w-5" />
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4">
+          <div v-if="historyEvents.length === 0" class="text-sm text-gray-500 text-center py-4">
+            Keine Ereignisse vorhanden
+          </div>
+          <div v-else class="space-y-3">
+            <div
+              v-for="event in historyEvents"
+              :key="event.id"
+              class="border-l-2 border-gray-200 pl-3 py-1"
+            >
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-gray-900">
+                  {{ formatEventType(event.event_type) }}
+                </span>
+                <span class="text-xs text-gray-500">
+                  {{ formatTimestamp(event.timestamp) }}
+                </span>
+              </div>
+              <div v-if="formatEventData(event.data)" class="text-xs text-gray-600 mt-0.5">
+                {{ formatEventData(event.data) }}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

@@ -26,7 +26,7 @@ def _get_database_url() -> str:
     test_url = os.environ.get("TEST_DATABASE_URL")
     if test_url:
         return test_url
-    return settings.database_url
+    return settings.get_database_url()
 
 
 def is_sqlite() -> bool:
@@ -120,15 +120,26 @@ if is_sqlite():
     }
 
 # Use NullPool for SQLite to avoid connection pool issues
-# PostgreSQL uses the default QueuePool for connection pooling
+# PostgreSQL uses QueuePool with configurable settings
 pool_class = NullPool if is_sqlite() else None
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
-    connect_args=connect_args,
-    poolclass=pool_class,
-)
+# Build engine kwargs based on database type
+engine_kwargs: dict[str, Any] = {
+    "echo": settings.debug,
+    "connect_args": connect_args,
+}
+
+if pool_class:
+    engine_kwargs["poolclass"] = pool_class
+else:
+    # PostgreSQL: use connection pool settings from config
+    engine_kwargs["pool_size"] = settings.database_pool_size
+    engine_kwargs["max_overflow"] = settings.database_pool_max_overflow
+    engine_kwargs["pool_timeout"] = settings.database_pool_timeout
+    engine_kwargs["pool_recycle"] = settings.database_pool_recycle
+    engine_kwargs["pool_pre_ping"] = True  # Verify connections before use
+
+engine = create_async_engine(_get_database_url(), **engine_kwargs)
 
 async_session_maker = async_sessionmaker(
     engine,

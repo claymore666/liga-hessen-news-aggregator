@@ -1,5 +1,5 @@
 import api from './client'
-import type { Source, SourceCreate, Channel, ChannelCreate, Item, Rule, Stats, SourceStats, ChannelStats, PaginatedResponse } from '@/types'
+import type { Source, SourceCreate, Channel, ChannelCreate, Item, Rule, Stats, SourceStats, ChannelStats, PaginatedResponse, ItemEvent } from '@/types'
 
 export const sourcesApi = {
   list: (params?: { enabled?: boolean; has_errors?: boolean }) =>
@@ -54,7 +54,9 @@ export const itemsApi = {
   markRead: (id: number) => api.post(`/items/${id}/read`),
   markUnread: (id: number) => api.patch(`/items/${id}`, { is_read: false }),
   bulkMarkRead: (ids: number[]) => api.post('/items/mark-all-read', { ids }),
-  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`)
+  bulkMarkUnread: (ids: number[]) => api.post('/items/bulk-update', { ids, is_read: false }),
+  archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`),
+  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`)
 }
 
 export const rulesApi = {
@@ -204,14 +206,20 @@ export interface CleanupResult {
 export interface StorageStats {
   postgresql_size_bytes: number
   postgresql_size_human: string
+  /** Total items in PostgreSQL database */
   postgresql_items: number
+  /** Items marked as duplicates (similar_to_id set) */
   postgresql_duplicates: number
-  vector_store_size_bytes: number
-  vector_store_size_human: string
-  vector_store_items: number
-  duplicate_store_size_bytes: number
-  duplicate_store_size_human: string
-  duplicate_store_items: number
+  /** Disk size of semantic search index (nomic embeddings) */
+  search_index_size_bytes: number
+  search_index_size_human: string
+  /** Items indexed for semantic search */
+  search_index_items: number
+  /** Disk size of duplicate detection index (paraphrase embeddings) */
+  duplicate_index_size_bytes: number
+  duplicate_index_size_human: string
+  /** Items indexed for duplicate detection */
+  duplicate_index_items: number
   total_size_bytes: number
   total_size_human: string
 }

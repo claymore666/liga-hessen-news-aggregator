@@ -168,6 +168,7 @@ class InstagramConnector(BaseConnector):
                     )
                 )
             except Exception:
+                # Individual post parsing may fail, continue to next
                 continue
 
         return items
@@ -232,6 +233,7 @@ class InstagramConnector(BaseConnector):
                     )
                 )
             except Exception:
+                # Individual post parsing may fail, continue to next
                 continue
 
         return items
@@ -299,6 +301,7 @@ class InstagramConnector(BaseConnector):
                     )
                 )
             except Exception:
+                # Individual post parsing may fail, continue to next
                 continue
 
         return items

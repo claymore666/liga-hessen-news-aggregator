@@ -64,6 +64,22 @@ class ArticleContent:
 class ArticleExtractor:
     """Extract article content from URLs found in social media posts."""
 
+    # Googlebot headers for bypassing soft paywalls
+    # Many news sites serve full content to search engine crawlers
+    GOOGLEBOT_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Referer": "https://www.google.com/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    }
+
+    # Standard browser headers (fallback)
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    }
+
     def __init__(self, timeout: float = 15.0):
         self.timeout = timeout
 
@@ -205,7 +221,8 @@ class ArticleExtractor:
                     },
                 )
                 return str(response.url)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not resolve redirects for {url}: {e}")
             return url
 
     async def fetch_article(self, url: str) -> ArticleContent | None:
@@ -237,19 +254,16 @@ class ArticleExtractor:
             parsed = urlparse(url)
             domain = parsed.netloc.lower().replace("www.", "")
 
+            # Check if this is a known news domain (for Wayback fallback)
+            is_news_domain = any(d in domain for d in NEWS_DOMAINS)
+
             async with httpx.AsyncClient(
                 timeout=self.timeout,
                 follow_redirects=True,
                 verify=True,
             ) as client:
-                response = await client.get(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-                    },
-                )
+                # Try Googlebot headers first for better paywall bypass
+                response = await client.get(url, headers=self.GOOGLEBOT_HEADERS)
                 response.raise_for_status()
 
             html = response.text
@@ -267,6 +281,14 @@ class ArticleExtractor:
 
             # Extract content
             content = self._extract_content(soup, html)
+
+            # If content is too short and it's a news domain, try Wayback Machine
+            if (not content or len(content) < 100) and is_news_domain:
+                logger.info(f"Insufficient content from {domain}, trying Wayback Machine...")
+                wayback_content = await self._try_wayback_machine(url)
+                if wayback_content and len(wayback_content.content) > len(content or ""):
+                    logger.info(f"Got better content from Wayback Machine: {len(wayback_content.content)} chars")
+                    return wayback_content
 
             if not content or len(content) < 100:
                 logger.debug(f"Insufficient content extracted from {url}: {len(content) if content else 0} chars")
@@ -319,14 +341,18 @@ class ArticleExtractor:
         """Extract main content from HTML.
 
         Uses trafilatura if available, falls back to BeautifulSoup heuristics.
+        Optimized for German news sites with paywall bypassing.
         """
         # Try trafilatura first (best results)
         try:
             import trafilatura
             content = trafilatura.extract(
                 html,
+                favor_precision=True,      # Prioritize article body over peripheral text
                 include_comments=False,
                 include_tables=False,
+                include_formatting=False,  # Strip all HTML/trackers for clean text
+                include_images=False,      # Prevent image-based tracking pixels
                 no_fallback=False,
             )
             if content and len(content) > 100:
@@ -393,3 +419,81 @@ class ArticleExtractor:
             return text[:5000] if len(text) > 5000 else text
 
         return ""
+
+    async def _try_wayback_machine(self, url: str) -> ArticleContent | None:
+        """Try to fetch article from Wayback Machine (archive.org).
+
+        Useful for hard paywalls where even Googlebot headers don't help.
+        The Wayback Machine often has cached versions from before paywalls
+        were implemented or from when the article was freely accessible.
+
+        Args:
+            url: Original article URL
+
+        Returns:
+            ArticleContent if successful, None otherwise
+        """
+        try:
+            # Query Wayback Machine availability API
+            api_url = f"https://archive.org/wayback/available?url={url}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(api_url)
+                response.raise_for_status()
+                data = response.json()
+
+            # Check if there's an archived snapshot
+            snapshots = data.get("archived_snapshots", {})
+            closest = snapshots.get("closest", {})
+
+            if not closest.get("available"):
+                logger.debug(f"No Wayback Machine snapshot available for {url}")
+                return None
+
+            archive_url = closest.get("url")
+            if not archive_url:
+                return None
+
+            logger.info(f"Found Wayback snapshot: {archive_url}")
+
+            # Fetch the archived page
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(archive_url, headers=self.BROWSER_HEADERS)
+                response.raise_for_status()
+
+            html = response.text
+            soup = BeautifulSoup(html, "lxml")
+
+            # Remove Wayback Machine toolbar/overlay elements
+            for selector in ["#wm-ipp-base", "#wm-ipp", ".wb-autocomplete-suggestions"]:
+                for el in soup.select(selector):
+                    el.decompose()
+
+            # Extract content
+            title = self._extract_title(soup)
+            content = self._extract_content(soup, html)
+
+            if not content or len(content) < 100:
+                logger.debug(f"Insufficient content from Wayback snapshot: {len(content) if content else 0} chars")
+                return None
+
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower().replace("www.", "")
+
+            return ArticleContent(
+                url=url,  # Return original URL, not archive URL
+                title=title,
+                content=content,
+                is_article=True,
+                source_domain=domain,
+            )
+
+        except httpx.TimeoutException:
+            logger.debug(f"Timeout fetching from Wayback Machine for {url}")
+            return None
+        except Exception as e:
+            logger.debug(f"Wayback Machine fallback failed for {url}: {e}")
+            return None

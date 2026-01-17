@@ -1,6 +1,7 @@
 """RSS/Atom feed connector."""
 
 import logging
+import ssl
 from datetime import datetime
 from time import mktime
 from urllib.parse import urljoin, urlparse
@@ -15,6 +16,21 @@ from .registry import ConnectorRegistry
 logger = logging.getLogger(__name__)
 
 
+def create_legacy_ssl_context():
+    """Create an SSL context that works with servers using older TLS configurations."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    # Set low security level to allow more cipher suites
+    ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    # Enable legacy renegotiation for older servers
+    try:
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+    except AttributeError:
+        pass  # Option not available in older Python versions
+    return ctx
+
+
 class RSSConfig(BaseModel):
     """Configuration for RSS connector."""
 
@@ -24,6 +40,9 @@ class RSSConfig(BaseModel):
     )
     follow_links: bool = Field(
         default=True, description="Follow links to fetch full article content"
+    )
+    verify_ssl: bool = Field(
+        default=True, description="Verify SSL certificates (disable for sites with certificate issues)"
     )
 
 
@@ -57,7 +76,9 @@ class RSSConnector(BaseConnector):
             except ImportError:
                 logger.warning("ArticleExtractor not available, disabling link following")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Use legacy SSL context for sites with certificate/TLS issues
+        ssl_context = create_legacy_ssl_context() if not config.verify_ssl else True
+        async with httpx.AsyncClient(timeout=30.0, verify=ssl_context) as client:
             response = await client.get(
                 str(config.url),
                 headers={"User-Agent": "NewsAggregator/1.0"},
@@ -156,7 +177,8 @@ class RSSConnector(BaseConnector):
             Tuple of (success, message)
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            ssl_context = create_legacy_ssl_context() if not config.verify_ssl else True
+            async with httpx.AsyncClient(timeout=10.0, verify=ssl_context) as client:
                 response = await client.get(
                     str(config.url),
                     headers={"User-Agent": "NewsAggregator/1.0"},

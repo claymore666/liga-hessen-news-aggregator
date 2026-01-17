@@ -1,6 +1,5 @@
 """API endpoints for LLM configuration."""
 
-import asyncio
 import logging
 from datetime import datetime
 
@@ -304,11 +303,9 @@ async def get_llm_enabled(db: AsyncSession) -> bool:
 
 
 async def get_unprocessed_count(db: AsyncSession) -> int:
-    """Count items without LLM analysis."""
+    """Count items queued for LLM processing."""
     count = await db.scalar(
-        select(func.count(Item.id)).where(
-            (Item.summary.is_(None)) | (Item.summary == "")
-        )
+        select(func.count(Item.id)).where(Item.needs_llm_processing == True)
     )
     return count or 0
 

@@ -53,6 +53,7 @@ async def record_event(
         session_id=session_id,
     )
     db.add(event)
-    await db.flush()
+    # Note: No flush here - caller manages transaction.
+    # Flushing inside a loop causes greenlet_spawn errors.
     logger.debug(f"Recorded event {event_type} for item {item_id}")
     return event

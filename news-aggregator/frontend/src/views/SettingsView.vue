@@ -722,12 +722,12 @@ onMounted(() => {
               <span class="font-mono">{{ storage.postgresql_size_human }} ({{ storage.postgresql_items.toLocaleString() }} Artikel, {{ storage.postgresql_duplicates }} Duplikate)</span>
             </div>
             <div class="flex justify-between">
-              <span>Vektorspeicher:</span>
-              <span class="font-mono">{{ storage.vector_store_size_human }} ({{ storage.vector_store_items.toLocaleString() }} indexiert)</span>
+              <span>Such-Index:</span>
+              <span class="font-mono">{{ storage.search_index_size_human }} ({{ storage.search_index_items.toLocaleString() }} indexiert)</span>
             </div>
             <div class="flex justify-between">
-              <span>Duplikat-Erkennung:</span>
-              <span class="font-mono">{{ storage.duplicate_store_size_human }} ({{ storage.duplicate_store_items.toLocaleString() }} indexiert)</span>
+              <span>Duplikat-Index:</span>
+              <span class="font-mono">{{ storage.duplicate_index_size_human }} ({{ storage.duplicate_index_items.toLocaleString() }} indexiert)</span>
             </div>
             <div class="flex justify-between border-t border-gray-200 pt-1 mt-1 font-medium">
               <span>Gesamt:</span>
