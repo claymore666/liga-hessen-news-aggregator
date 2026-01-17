@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from config import settings
 from database import async_session_maker, get_db
@@ -90,9 +91,10 @@ async def reanalyze_items(
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"LLM not available: {e}")
 
-    # Get items without summaries
+    # Get items without summaries (eager load channel/source for processor)
     result = await db.execute(
         select(Item)
+        .options(selectinload(Item.channel).selectinload(Channel.source))
         .where(Item.summary.is_(None))
         .limit(limit)
     )
@@ -433,7 +435,6 @@ async def classify_items_for_confidence(
 
     The classifier is fast (embedding-based) compared to LLM processing.
     """
-    from sqlalchemy.orm import selectinload
     from services.relevance_filter import create_relevance_filter
 
     # Create classifier
