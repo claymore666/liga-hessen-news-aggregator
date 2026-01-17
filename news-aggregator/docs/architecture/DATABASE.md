@@ -4,6 +4,49 @@
 
 PostgreSQL 17 with async SQLAlchemy ORM. All models in `backend/models.py`.
 
+## Configuration
+
+Database can be configured via environment variables:
+
+### Connection
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | Full connection string (takes precedence) | - |
+| `DATABASE_HOST` | Hostname | - |
+| `DATABASE_PORT` | Port | 5432 |
+| `DATABASE_NAME` | Database name | liga_news |
+| `DATABASE_USER` | Username | - |
+| `DATABASE_PASSWORD` | Password | - |
+| `DATABASE_DRIVER` | SQLAlchemy async driver | postgresql+asyncpg |
+
+**Priority**: `DATABASE_URL` > components > SQLite fallback
+
+### Connection Pool (PostgreSQL only)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_POOL_SIZE` | Persistent connections | 5 |
+| `DATABASE_POOL_MAX_OVERFLOW` | Extra connections allowed | 10 |
+| `DATABASE_POOL_TIMEOUT` | Wait time for connection (seconds) | 30 |
+| `DATABASE_POOL_RECYCLE` | Recycle connections after (seconds) | 1800 |
+
+### Examples
+
+```bash
+# Full URL
+DATABASE_URL=postgresql+asyncpg://user:pass@db.example.com:5432/liga_news
+
+# Components (builds URL automatically)
+DATABASE_HOST=db.example.com
+DATABASE_USER=app
+DATABASE_PASSWORD=secret
+DATABASE_NAME=liga_news
+
+# Development (default SQLite)
+# No variables needed - uses ./data/news_aggregator.db
+```
+
 ## Entity Relationship
 
 ```

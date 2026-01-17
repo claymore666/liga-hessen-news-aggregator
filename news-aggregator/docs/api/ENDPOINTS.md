@@ -81,6 +81,30 @@ Re-fetches content from source URL.
 POST /items/mark-all-read
 ```
 
+**Body**:
+```json
+{
+  "ids": [1, 2, 3]
+}
+```
+
+Marks specific items as read. Alternatively, use query params (`source_id`, `channel_id`, `before`) to filter.
+
+### Bulk Update
+```http
+POST /items/bulk-update
+```
+
+**Body**:
+```json
+{
+  "ids": [1, 2, 3],
+  "is_read": false
+}
+```
+
+Bulk update items (mark read/unread). Set `is_read: true` to mark as read, `is_read: false` for unread.
+
 ### Batch Reprocess
 ```http
 POST /items/reprocess
@@ -428,14 +452,25 @@ GET /admin/health
 **Response**:
 ```json
 {
-  "status": "ok",
-  "database": "connected",
-  "scheduler_running": true,
+  "status": "healthy",
+  "instance_type": "production",
   "llm_enabled": true,
+  "scheduler_running": true,
+  "scheduler_jobs": [...],
   "llm_available": true,
-  "classifier_available": true,
-  "item_count": 3152,
-  "unprocessed_count": 15
+  "llm_provider": "ollama",
+  "proxy_count": 5,
+  "proxy_working": 5,
+  "database_ok": true,
+  "database_info": {
+    "type": "postgresql",
+    "host": "db:5432",
+    "database": "liga_news",
+    "pool_size": 5,
+    "max_overflow": 10
+  },
+  "items_count": 3152,
+  "sources_count": 25
 }
 ```
 
