@@ -15,6 +15,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class DatabaseInfo(BaseModel):
+    """Database connection info (no credentials)."""
+
+    type: str
+    host: str | None = None
+    database: str | None = None
+    path: str | None = None
+    pool_size: int | None = None
+    max_overflow: int | None = None
+
+
 class HealthCheckResponse(BaseModel):
     """Full system health status."""
 
@@ -28,6 +39,7 @@ class HealthCheckResponse(BaseModel):
     proxy_count: int
     proxy_working: int
     database_ok: bool
+    database_info: DatabaseInfo
     items_count: int
     sources_count: int
 
@@ -86,6 +98,9 @@ async def get_system_health(
     if not database_ok:
         overall_status = "unhealthy"
 
+    # Get database connection info (no credentials)
+    db_info = settings.get_database_info()
+
     return HealthCheckResponse(
         status=overall_status,
         instance_type=settings.instance_type,
@@ -97,6 +112,7 @@ async def get_system_health(
         proxy_count=proxy_count,
         proxy_working=proxy_working,
         database_ok=database_ok,
+        database_info=DatabaseInfo(**db_info),
         items_count=items_count,
         sources_count=sources_count,
     )
