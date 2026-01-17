@@ -10,7 +10,14 @@ from sqlalchemy.orm import selectinload
 
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
+from pydantic import BaseModel
 from schemas import DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+
+
+class BulkUpdateRequest(BaseModel):
+    """Request body for bulk item updates."""
+    ids: list[int]
+    is_read: bool | None = None
 
 
 def _build_item_response(item: Item) -> ItemResponse:
@@ -822,14 +829,76 @@ async def refetch_item(
     }
 
 
+@router.post("/items/bulk-update")
+async def bulk_update_items(
+    request_body: BulkUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Bulk update items (mark read/unread).
+
+    Args:
+        request_body: Contains ids list and is_read flag.
+                     is_read=True marks as read, is_read=False marks as unread.
+    """
+    if not request_body.ids:
+        return {"updated": 0}
+
+    query = select(Item).where(Item.id.in_(request_body.ids))
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    updated = 0
+    for item in items:
+        if request_body.is_read is not None and item.is_read != request_body.is_read:
+            item.is_read = request_body.is_read
+            updated += 1
+
+    if updated > 0:
+        # Record events for all updated items
+        from services.item_events import record_event, EVENT_READ, EVENT_USER_MODIFIED
+        ip_address = get_client_ip(request)
+
+        for item in items:
+            if request_body.is_read is not None:
+                event_type = EVENT_READ if request_body.is_read else EVENT_USER_MODIFIED
+                await record_event(
+                    db,
+                    item.id,
+                    event_type,
+                    data={"is_read": request_body.is_read, "bulk_update": True},
+                    ip_address=ip_address,
+                )
+
+    return {"updated": updated}
+
+
 @router.post("/items/mark-all-read")
 async def mark_all_as_read(
+    request_body: BulkUpdateRequest | None = None,
     source_id: int | None = None,
     channel_id: int | None = None,
     before: datetime | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
-    """Mark multiple items as read."""
+    """Mark multiple items as read.
+
+    Supports two modes:
+    1. Request body with {ids: [...]} - marks specific items as read
+    2. Query params (source_id, channel_id, before) - marks filtered items as read
+    """
+    # Mode 1: Specific IDs from request body
+    if request_body and request_body.ids:
+        query = select(Item).where(Item.id.in_(request_body.ids))
+        result = await db.execute(query)
+        items = result.scalars().all()
+
+        for item in items:
+            item.is_read = True
+
+        return {"marked": len(items)}
+
+    # Mode 2: Filter-based bulk mark (legacy)
     query = select(Item).where(Item.is_read == False)  # noqa: E712
 
     if channel_id is not None:

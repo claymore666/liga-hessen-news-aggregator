@@ -197,6 +197,13 @@ const bulkMarkRead = async () => {
   }
 }
 
+const bulkMarkUnread = async () => {
+  if (selectedIds.value.length > 0) {
+    await itemsStore.bulkMarkAsUnread(selectedIds.value)
+    selectedIds.value = []
+  }
+}
+
 const handleSearch = () => {
   page.value = 1
   loadItems()
@@ -300,6 +307,7 @@ onMounted(async () => {
           @search="handleSearch"
           @clear-selection="clearSelection"
           @bulk-mark-read="bulkMarkRead"
+          @bulk-mark-unread="bulkMarkUnread"
           @select-all="toggleSelectAll"
         />
 
