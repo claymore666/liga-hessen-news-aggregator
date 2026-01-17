@@ -78,7 +78,7 @@ class TestRecordEvent:
         assert event.event_type == EVENT_CREATED
         assert event.data is None
         mock_db.add.assert_called_once_with(event)
-        mock_db.flush.assert_awaited_once()
+        # Note: flush is NOT called - caller manages transaction
 
     @pytest.mark.asyncio
     async def test_record_event_with_data(self, mock_db):
