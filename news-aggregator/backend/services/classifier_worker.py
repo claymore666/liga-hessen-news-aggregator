@@ -246,6 +246,7 @@ class ClassifierWorker:
                 # Collect update
                 updates.append({
                     "id": item_data["id"],
+                    "old_priority": old_priority,
                     "priority": new_priority.value,
                     "priority_score": new_score,
                     "metadata_": new_metadata,
@@ -295,6 +296,21 @@ class ClassifierWorker:
                                         "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
                                     },
                                 )
+
+                                # Log classifier processing for analytics
+                                try:
+                                    from services.processing_logger import ProcessingLogger
+
+                                    plogger = ProcessingLogger(db)
+                                    await plogger.log_classifier_worker(
+                                        item_id=upd["id"],
+                                        result=upd["metadata_"]["pre_filter"],
+                                        priority_input=upd.get("old_priority", "unknown"),
+                                        priority_output=upd["priority"],
+                                    )
+                                except Exception as log_err:
+                                    logger.warning(f"Failed to log classifier processing for item {upd['id']}: {log_err}")
+
                             await db.commit()
                     break  # Success, exit retry loop
                 except Exception as e:

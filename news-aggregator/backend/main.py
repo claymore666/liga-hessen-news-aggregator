@@ -260,6 +260,7 @@ app = FastAPI(
         {"name": "admin", "description": "Administrative operations"},
         {"name": "email", "description": "Email digest configuration"},
         {"name": "proxies", "description": "Proxy management for scraping"},
+        {"name": "analytics", "description": "Processing analytics and model performance"},
     ],
 )
 
@@ -280,7 +281,7 @@ async def health_check() -> dict[str, str]:
 
 
 # Import and include routers
-from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config  # noqa: E402
+from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config, analytics  # noqa: E402
 from api import scheduler as scheduler_api  # noqa: E402
 
 app.include_router(items.router, prefix=settings.api_prefix, tags=["items"])
@@ -294,3 +295,4 @@ app.include_router(llm.router, prefix=settings.api_prefix, tags=["llm"])
 app.include_router(admin.router, prefix=settings.api_prefix, tags=["admin"])
 app.include_router(config.router, prefix=settings.api_prefix, tags=["admin"])
 app.include_router(scheduler_api.router, prefix=settings.api_prefix, tags=["scheduler"])
+app.include_router(analytics.router, prefix=settings.api_prefix, tags=["analytics"])

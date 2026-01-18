@@ -410,6 +410,25 @@ class LLMWorker:
                         },
                     )
 
+                    # Log LLM analysis for analytics
+                    try:
+                        from services.processing_logger import ProcessingLogger
+
+                        plogger = ProcessingLogger(db)
+                        # Get priority before LLM (from pre_filter or previous value)
+                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
+                        priority_input = pre_filter.get("priority_suggestion") or "unknown"
+
+                        await plogger.log_llm_analysis(
+                            item_id=item.id,
+                            analysis=analysis,
+                            priority_input=priority_input,
+                            priority_output=llm_priority,
+                            duration_ms=int(elapsed * 1000),
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log LLM analysis for item {item_id}: {log_err}")
+
                     processed += 1
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 

@@ -4,8 +4,10 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+import uuid
 
 from database import Base
 
@@ -328,4 +330,95 @@ class Setting(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProcessingStepType(str, Enum):
+    """Processing step types for analytics logging."""
+
+    FETCH = "fetch"
+    PRE_FILTER = "pre_filter"
+    DUPLICATE_CHECK = "duplicate_check"
+    RULE_MATCH = "rule_match"
+    CLASSIFIER_OVERRIDE = "classifier_override"
+    LLM_ANALYSIS = "llm_analysis"
+    REPROCESS = "reprocess"
+
+
+class ItemProcessingLog(Base):
+    """Processing step log for analytics and debugging.
+
+    Records every processing step for items to enable:
+    - Reproducing how a message ended up with its current priority/classification
+    - Finding items where classifier and/or LLM were unsure (low confidence)
+    - Tracking reprocessing events
+    - Comparing classifier vs LLM decisions
+    - Training data collection for model improvement
+    """
+
+    __tablename__ = "item_processing_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("items.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # UUID for linking all steps in one processing run
+    processing_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    # Step identification
+    step_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Timestamps
+    started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Model information
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Queryable scores (denormalized for fast filtering)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    priority_input: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    priority_output: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    priority_changed: Mapped[bool] = mapped_column(Boolean, default=False)
+    ak_suggestions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    ak_primary: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    ak_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    relevant: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Processing outcome
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Full data (JSON for flexibility)
+    input_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    output_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Relationships
+    item: Mapped["Item | None"] = relationship(
+        "Item", foreign_keys=[item_id], backref="processing_logs"
+    )
+
+    __table_args__ = (
+        Index("ix_processing_logs_created_at", "created_at"),
+        Index(
+            "ix_processing_logs_low_confidence",
+            "step_type",
+            "confidence_score",
+            postgresql_where=(confidence_score < 0.5),
+        ),
+        Index(
+            "ix_processing_logs_priority_changed",
+            "step_type",
+            "priority_changed",
+            postgresql_where=(priority_changed == True),  # noqa: E712
+        ),
     )

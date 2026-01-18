@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Channel, Item, Priority, Rule, RuleType
+from models import Channel, Item, Priority, ProcessingStepType, Rule, RuleType
 from config import settings
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
+    from services.processing_logger import ProcessingLogger
     from services.relevance_filter import RelevanceFilter
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class Pipeline:
         relevance_filter: "RelevanceFilter | None" = None,
         training_mode: bool = False,
         pre_filter_results: dict[str, dict] | None = None,
+        processing_logger: "ProcessingLogger | None" = None,
     ):
         """Initialize pipeline.
 
@@ -67,12 +69,14 @@ class Pipeline:
             pre_filter_results: Pre-computed filter results keyed by external_id.
                               If provided, uses these instead of calling relevance_filter
                               to avoid async context conflicts with SQLAlchemy.
+            processing_logger: Optional logger for analytics tracking
         """
         self.db = db
         self.processor = processor
         self.relevance_filter = relevance_filter
         self.training_mode = training_mode
         self.pre_filter_results = pre_filter_results or {}
+        self.processing_logger = processing_logger
         # Use naive UTC datetime (consistent with DB storage)
         self.cutoff_date = datetime.utcnow() - timedelta(days=self.MAX_AGE_DAYS)
 
@@ -98,6 +102,8 @@ class Pipeline:
         new_items = []
 
         for raw in raw_items:
+            # Create item-specific logger for this processing run
+            item_logger = self.processing_logger.new_item_run() if self.processing_logger else None
             # 1. Skip old items (older than MAX_AGE_DAYS) - disabled in training_mode
             # Normalize published_at to naive UTC for comparison
             pub_dt = raw.published_at
@@ -123,6 +129,8 @@ class Pipeline:
             # 3a. Check for semantic duplicates (cross-channel)
             # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
             similar_to_id = None
+            duplicates = []
+            similarity_score = None
             if self.relevance_filter and not self.training_mode:
                 try:
                     duplicates = await self.relevance_filter.find_duplicates(
@@ -133,6 +141,7 @@ class Pipeline:
                     if duplicates:
                         best_match = duplicates[0]
                         similar_to_id = int(best_match["id"])
+                        similarity_score = best_match.get("score")
                         logger.info(
                             f"Semantic duplicate: '{normalized.title[:40]}...' "
                             f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
@@ -158,6 +167,18 @@ class Pipeline:
                             logger.warning(f"Failed to record duplicate event: {e}")
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
+
+            # Log duplicate check result
+            if item_logger:
+                try:
+                    await item_logger.log_duplicate_check(
+                        item_id=None,  # Item not created yet
+                        is_duplicate=False,  # Not a duplicate (we're continuing)
+                        similar_to_id=similar_to_id,
+                        similarity_score=similarity_score,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log duplicate check: {e}")
 
             # 4. Create item
             item = Item(
@@ -212,6 +233,15 @@ class Pipeline:
                         )
                     elif skip_llm:
                         logger.info(f"Pre-filtered (irrelevant): {normalized.title[:50]}...")
+
+                    # Log pre-filter step (item_id set later after flush)
+                    if item_logger:
+                        item_logger._pending_prefilter_log = {
+                            "result": pre_filter_result,
+                            "priority_input": keyword_priority,
+                            "priority_output": item.priority,
+                            "skip_llm": skip_llm,
+                        }
 
             # 6. LLM processing is now handled by the LLM worker (llm_worker.py)
             # The worker runs continuously and processes items with priority ordering.
@@ -276,6 +306,8 @@ class Pipeline:
 
             # 8. Add to database
             self.db.add(item)
+            # Store logger reference for post-flush logging
+            item._processing_logger = item_logger
             new_items.append(item)
 
         if new_items:
@@ -299,6 +331,23 @@ class Pipeline:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to record creation event for item {item.id}: {e}")
+
+                # Log processing steps now that we have item.id
+                item_logger = getattr(item, "_processing_logger", None)
+                if item_logger:
+                    try:
+                        # Log pending pre-filter result
+                        pending = getattr(item_logger, "_pending_prefilter_log", None)
+                        if pending:
+                            await item_logger.log_pre_filter(
+                                item_id=item.id,
+                                result=pending["result"],
+                                priority_input=pending["priority_input"],
+                                priority_output=pending["priority_output"],
+                                skip_llm=pending["skip_llm"],
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to log processing steps for item {item.id}: {e}")
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
@@ -544,6 +593,7 @@ async def process_items(
     relevance_filter: "RelevanceFilter | None" = None,
     training_mode: bool = False,
     pre_filter_results: dict[str, dict] | None = None,
+    processing_logger: "ProcessingLogger | None" = None,
 ) -> list[Item]:
     """Convenience function to process items through the pipeline.
 
@@ -555,6 +605,7 @@ async def process_items(
         relevance_filter: Optional pre-filter for relevance classification
         training_mode: If True, disables filtering for training data collection
         pre_filter_results: Pre-computed filter results keyed by external_id
+        processing_logger: Optional logger for analytics tracking
 
     Returns:
         List of newly created Item objects
@@ -565,5 +616,6 @@ async def process_items(
         relevance_filter=relevance_filter,
         training_mode=training_mode,
         pre_filter_results=pre_filter_results,
+        processing_logger=processing_logger,
     )
     return await pipeline.process(raw_items, channel)
