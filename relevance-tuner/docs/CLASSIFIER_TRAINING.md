@@ -201,33 +201,36 @@ cp models/embedding/embedding_classifier_nomic-v2.pkl \
 
 | Backend | Relevance Acc | AK Acc | Speed |
 |---------|---------------|--------|-------|
-| **nomic-v2** | 89.9% | 71.1% | 33/sec |
+| **nomic-v2** | 91.2% | 63.2% | 130/sec |
 | jina-v3 | 87.9% | 57.9% | 55/sec |
-| sentence-transformers | 85.9% | 63.2% | 675/sec |
+| sentence-transformers | 76.7% | 31.9% | 34/sec |
 | ollama (local) | 71.8% | 36.8% | 37/sec |
 
-**Recommendation**: Use `nomic-v2` for best accuracy.
+**Recommendation**: Use `nomic-v2` for best relevance accuracy.
 
 ## Current Dataset Statistics
 
-As of 2026-01-13:
+As of 2026-01-18:
 
 | Metric | Value |
 |--------|-------|
-| Total items | 1680 |
-| Relevant | 224 (13.3%) |
-| Irrelevant | 1456 (86.7%) |
-| Multi-AK items | 39 (17.4% of relevant) |
+| Total items | 3,878 |
+| Relevant | 779 (20.1%) |
+| Irrelevant | 3,099 (79.9%) |
+| Multi-AK items | 266 (34.1% of relevant) |
+| Filtered (< 200 chars) | 360 (8.5%) |
 
 **AK Distribution (relevant only):**
 | AK | Count |
 |----|-------|
-| AK1 | 78 |
-| AK2 | 70 |
-| AK5 | 37 |
-| AK3 | 18 |
-| QAG | 11 |
-| AK4 | 10 |
+| AK1 | 245 |
+| AK3 | 242 |
+| AK2 | 155 |
+| AK5 | 82 |
+| QAG | 30 |
+| AK4 | 25 |
+
+**Note**: On 2026-01-18, 66 articles were recovered by following Google Alert redirect URLs and re-extracting content. This increased relevant items from 713 to 779.
 
 ## Files Reference
 
