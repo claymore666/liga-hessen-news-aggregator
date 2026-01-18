@@ -21,10 +21,11 @@ async def migrate():
     """Add detailed_analysis column to items table."""
     async with engine.begin() as conn:
         # Check if column already exists
-        result = await conn.execute(text("PRAGMA table_info(items)"))
-        columns = [row[1] for row in result.fetchall()]
-
-        if "detailed_analysis" in columns:
+        result = await conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'items' AND column_name = 'detailed_analysis'
+        """))
+        if result.fetchone():
             print("Column 'detailed_analysis' already exists, skipping migration")
             return
 
@@ -36,9 +37,10 @@ async def migrate():
 
 
 async def rollback():
-    """Remove detailed_analysis column (SQLite doesn't support DROP COLUMN directly)."""
-    print("Note: SQLite doesn't support DROP COLUMN. To rollback, recreate the table.")
-    print("This is a non-destructive migration, rollback is typically not needed.")
+    """Remove detailed_analysis column."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE items DROP COLUMN IF EXISTS detailed_analysis"))
+        print("Successfully dropped 'detailed_analysis' column")
 
 
 if __name__ == "__main__":

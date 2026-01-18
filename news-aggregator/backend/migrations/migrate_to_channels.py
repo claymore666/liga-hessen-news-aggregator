@@ -20,7 +20,7 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from database import engine
 
 # Platform suffixes to strip from names (order matters - check longer patterns first)
@@ -140,8 +140,12 @@ async def migrate(dry_run: bool = False):
         # ============================================================
         # Step 1: Check if migration already ran
         # ============================================================
-        result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='channels'"))
-        if result.fetchone():
+        def check_table_exists(sync_conn):
+            inspector = inspect(sync_conn)
+            return "channels" in inspector.get_table_names()
+
+        exists = await conn.run_sync(check_table_exists)
+        if exists:
             print("Table 'channels' already exists. Migration may have already run.")
             print("If you want to re-run, drop the channels table first.")
             return False
@@ -224,18 +228,18 @@ async def migrate(dry_run: bool = False):
         print("\nCreating channels table...")
         await conn.execute(text("""
             CREATE TABLE channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 source_id INTEGER NOT NULL,
                 name VARCHAR(255),
                 connector_type VARCHAR(50) NOT NULL,
                 config JSON NOT NULL,
                 source_identifier VARCHAR(500),
-                enabled BOOLEAN DEFAULT 1,
+                enabled BOOLEAN DEFAULT TRUE,
                 fetch_interval_minutes INTEGER DEFAULT 30,
                 last_fetch_at TIMESTAMP,
                 last_error TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE
             )
         """))
@@ -278,7 +282,8 @@ async def migrate(dry_run: bool = False):
                                         enabled, is_stakeholder, fetch_interval_minutes,
                                         created_at, updated_at)
                     VALUES (:name, 'organization', '{}', NULL, :enabled, :is_stakeholder,
-                            60, :created_at, CURRENT_TIMESTAMP)
+                            60, :created_at, NOW())
+                    RETURNING id
                 """),
                 {
                     "name": org_name,
@@ -287,7 +292,7 @@ async def migrate(dry_run: bool = False):
                     "created_at": earliest_created,
                 }
             )
-            new_source_id = result.lastrowid
+            new_source_id = result.scalar()
 
             # Create channels for each old source in this org
             for ch in channels:
@@ -299,6 +304,7 @@ async def migrate(dry_run: bool = False):
                         VALUES (:source_id, :name, :connector_type, :config,
                                 :source_identifier, :enabled, :fetch_interval_minutes,
                                 :last_fetch_at, :last_error, :created_at, :updated_at)
+                        RETURNING id
                     """),
                     {
                         "source_id": new_source_id,
@@ -314,7 +320,7 @@ async def migrate(dry_run: bool = False):
                         "updated_at": ch["updated_at"],
                     }
                 )
-                channel_id = result.lastrowid
+                channel_id = result.scalar()
                 source_to_channel[ch["old_id"]] = channel_id
 
         print(f"Created {len(org_groups)} organizations with {len(source_to_channel)} channels")
@@ -353,34 +359,21 @@ async def migrate(dry_run: bool = False):
         # ============================================================
         print("\nUpdating sources table schema...")
 
-        # SQLite doesn't support DROP COLUMN easily, so we need to recreate the table
-        # First, create the new schema
-        await conn.execute(text("""
-            CREATE TABLE sources_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name VARCHAR(255) NOT NULL,
-                description TEXT,
-                is_stakeholder BOOLEAN DEFAULT 0,
-                enabled BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+        # Drop columns no longer needed for organization-only model
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS connector_type"))
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS config"))
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS source_identifier"))
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS fetch_interval_minutes"))
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS last_fetch_at"))
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS last_error"))
+
+        # Add description column if not exists
+        result = await conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'sources' AND column_name = 'description'
         """))
-
-        # Copy data to new table
-        await conn.execute(text("""
-            INSERT INTO sources_new (id, name, is_stakeholder, enabled, created_at, updated_at)
-            SELECT id, name, is_stakeholder, enabled, created_at, updated_at
-            FROM sources
-            WHERE connector_type = 'organization'
-        """))
-
-        # Update foreign key references in channels
-        # (channels already reference correct source_id, no change needed)
-
-        # Drop old table and rename new one
-        await conn.execute(text("DROP TABLE sources"))
-        await conn.execute(text("ALTER TABLE sources_new RENAME TO sources"))
+        if not result.fetchone():
+            await conn.execute(text("ALTER TABLE sources ADD COLUMN description TEXT"))
 
         print("Sources table schema updated")
 
@@ -422,10 +415,12 @@ async def rollback():
         print("Rolling back migration...")
 
         # Check if backup exists
-        result = await conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sources_backup'"
-        ))
-        if not result.fetchone():
+        def check_backup_exists(sync_conn):
+            inspector = inspect(sync_conn)
+            return "sources_backup" in inspector.get_table_names()
+
+        has_backup = await conn.run_sync(check_backup_exists)
+        if not has_backup:
             print("No backup table found. Cannot rollback.")
             return False
 
