@@ -7,6 +7,26 @@
       "ak_accuracy": 0.6316,
       "speed_items_per_sec": 675.2,
       "timestamp": "2026-01-10T22:00:05.653186"
+    },
+    {
+      "relevance_accuracy": 0.767,
+      "priority_accuracy": 0.4286,
+      "priority_within_one": 0.916,
+      "ak_accuracy": 0.3193,
+      "speed_items_per_sec": 34.6,
+      "timestamp": "2026-01-18T11:54:57.588149",
+      "train_size": 3491,
+      "test_size": 618
+    },
+    {
+      "relevance_accuracy": 0.767,
+      "priority_accuracy": 0.4286,
+      "priority_within_one": 0.916,
+      "ak_accuracy": 0.3193,
+      "speed_items_per_sec": 34.1,
+      "timestamp": "2026-01-18T11:57:59.665784",
+      "train_size": 3491,
+      "test_size": 618
     }
   ],
   "nomic-v2": [
@@ -27,6 +47,16 @@
       "timestamp": "2026-01-16T22:52:35.889237",
       "train_size": 3259,
       "test_size": 577
+    },
+    {
+      "relevance_accuracy": 0.9256,
+      "priority_accuracy": 0.479,
+      "priority_within_one": 0.9244,
+      "ak_accuracy": 0.605,
+      "speed_items_per_sec": 142.1,
+      "timestamp": "2026-01-18T01:44:15.885789",
+      "train_size": 3491,
+      "test_size": 618
     }
   ],
   "jina-v3": [

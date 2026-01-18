@@ -8,6 +8,13 @@ Usage:
     python scripts/export_training_data.py              # Export all items
     python scripts/export_training_data.py --dry-run   # Show stats only
     python scripts/export_training_data.py --output data/final  # Custom output dir
+
+Filtering options (recommended for better training data quality):
+    --min-content-length 200   # Skip items with less than 200 chars content
+    --min-confidence 0.6       # Skip items with LLM relevance score < 0.6
+
+Note: Eurostat dataset notifications often have minimal content (~139 chars) and
+contribute noise to training data. Using --min-content-length 200 filters these out.
 """
 
 import argparse
@@ -61,8 +68,35 @@ def fetch_all_items(relevant_only: bool = False) -> list[dict]:
     return items
 
 
-def convert_to_training_format(item: dict) -> dict:
-    """Convert API item to training data format."""
+def convert_to_training_format(
+    item: dict,
+    min_content_length: int = 0,
+    min_confidence: float = 0.0
+) -> dict | None:
+    """Convert API item to training data format.
+
+    Args:
+        item: API item dict
+        min_content_length: Minimum content length (chars). Items below are skipped.
+        min_confidence: Minimum LLM confidence score (0.0-1.0). Items below are skipped.
+
+    Returns:
+        Training data dict, or None if item should be filtered out.
+    """
+    content = item.get("content", "")
+
+    # Filter by content length
+    if min_content_length > 0 and len(content) < min_content_length:
+        return None
+
+    # Filter by LLM confidence score
+    if min_confidence > 0:
+        metadata = item.get("metadata", {})
+        llm_analysis = metadata.get("llm_analysis", {})
+        relevance_score = llm_analysis.get("relevance_score", 0.0)
+        if relevance_score < min_confidence:
+            return None
+
     # Determine relevance from priority
     priority = item.get("priority", "none")
     is_relevant = priority in PRIORITY_LEVELS
@@ -147,11 +181,27 @@ def main():
     parser = argparse.ArgumentParser(description="Export training data from news-aggregator")
     parser.add_argument("--dry-run", action="store_true", help="Show stats only, don't export")
     parser.add_argument("--output", type=str, default="data/final", help="Output directory")
+    parser.add_argument(
+        "--min-content-length", type=int, default=0,
+        help="Minimum content length in chars (recommended: 200 to filter Eurostat noise)"
+    )
+    parser.add_argument(
+        "--min-confidence", type=float, default=0.0,
+        help="Minimum LLM relevance score 0.0-1.0 (recommended: 0.6 for higher quality labels)"
+    )
     args = parser.parse_args()
 
     print("=" * 60)
     print("Export Training Data from News-Aggregator")
     print("=" * 60)
+
+    # Show filter settings
+    if args.min_content_length > 0 or args.min_confidence > 0:
+        print("\nFilters:")
+        if args.min_content_length > 0:
+            print(f"  Min content length: {args.min_content_length} chars")
+        if args.min_confidence > 0:
+            print(f"  Min LLM confidence: {args.min_confidence}")
 
     # Fetch all items (relevant + irrelevant)
     print("\nFetching items from API...")
@@ -161,9 +211,23 @@ def main():
         print("No items found!")
         sys.exit(1)
 
-    # Convert to training format
+    # Convert to training format (with optional filtering)
     print("\nConverting to training format...")
-    training_data = [convert_to_training_format(item) for item in all_items]
+    training_data = []
+    filtered_count = 0
+    for item in all_items:
+        converted = convert_to_training_format(
+            item,
+            min_content_length=args.min_content_length,
+            min_confidence=args.min_confidence
+        )
+        if converted is not None:
+            training_data.append(converted)
+        else:
+            filtered_count += 1
+
+    if filtered_count > 0:
+        print(f"  Filtered out: {filtered_count} items ({filtered_count/len(all_items)*100:.1f}%)")
 
     # Stats
     relevant = [i for i in training_data if i["labels"]["relevant"]]
@@ -218,6 +282,7 @@ def main():
     # Save stats
     stats = {
         "total": len(training_data),
+        "filtered_out": filtered_count,
         "relevant": len(relevant),
         "irrelevant": len(irrelevant),
         "train_size": len(train),
@@ -225,6 +290,10 @@ def main():
         "test_size": len(test),
         "by_ak": dict(ak_dist),
         "by_priority": dict(priority_dist),
+        "filters": {
+            "min_content_length": args.min_content_length,
+            "min_confidence": args.min_confidence
+        },
         "created_at": datetime.now().isoformat(),
         "source": "news-aggregator-export"
     }
@@ -237,6 +306,9 @@ def main():
     print("DONE! Ready for training:")
     print(f"  EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py")
     print(f"{'='*60}")
+    if args.min_content_length == 0 and args.min_confidence == 0.0:
+        print("\nTip: For higher quality training data, consider using filters:")
+        print("  --min-content-length 200 --min-confidence 0.6")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,23 @@
 
 Complete guide for training and retraining the embedding-based classifier used for fast pre-filtering of news items.
 
+## ⚠️ CRITICAL: Embedding Backend Selection
+
+**ALWAYS set `EMBEDDING_BACKEND=nomic-v2` when training!**
+
+```bash
+# ✅ CORRECT
+EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
+
+# ❌ WRONG - defaults to "ollama" which uses a DIFFERENT model!
+python train_embedding_classifier.py
+```
+
+The `ollama` backend (default) uses `nomic-embed-text:137m-v1.5-fp16` via Ollama API.
+The `nomic-v2` backend (production) uses `nomic-ai/nomic-embed-text-v2-moe` via HuggingFace.
+
+**These are completely different models with incompatible embeddings!**
+
 ## Overview
 
 The system uses a **two-stage classification pipeline**:
@@ -45,9 +62,16 @@ source venv/bin/activate
 # Preview what will be exported
 python scripts/export_training_data.py --dry-run
 
-# Export to data/final/
+# Export with recommended filters (higher quality training data)
+python scripts/export_training_data.py --min-content-length 200 --min-confidence 0.6
+
+# Export without filters (all items)
 python scripts/export_training_data.py
 ```
+
+**Filtering options** (recommended for better accuracy):
+- `--min-content-length 200`: Filters out Eurostat items with sparse content (~139 chars avg vs ~2,259 chars for normal articles)
+- `--min-confidence 0.6`: Uses only items where LLM had high confidence in relevance score
 
 **What gets exported:**
 - **Relevant items**: Have `priority` in [low, medium, high, critical] + `assigned_ak`

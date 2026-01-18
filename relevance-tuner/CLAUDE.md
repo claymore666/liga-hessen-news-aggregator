@@ -11,8 +11,40 @@
    - Model reverts to config default after Docker rebuild - ALWAYS re-check!
    - When in doubt, ASK THE USER which model to use
 
-2. **Output format changes require explicit user approval** - Never modify the LLM output JSON schema (fields, structure) without asking first
-3. **Output changes require parser updates** - Any approved format change must also update the backend parser in `news-aggregator/backend/services/processor.py`
+2. **EMBEDDING BACKEND MUST MATCH** - The classifier uses different embedding models. **ALWAYS set** `EMBEDDING_BACKEND=nomic-v2` when training or evaluating:
+   ```bash
+   # ✅ CORRECT - uses HuggingFace nomic-v2 (production embedder)
+   EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
+
+   # ❌ WRONG - defaults to Ollama embedder (DIFFERENT model, incompatible!)
+   python train_embedding_classifier.py
+   ```
+   The default is `ollama` which uses a completely different model and produces incompatible embeddings!
+
+3. **Output format changes require explicit user approval** - Never modify the LLM output JSON schema (fields, structure) without asking first
+4. **Output changes require parser updates** - Any approved format change must also update the backend parser in `news-aggregator/backend/services/processor.py`
+
+## Embedding Models Architecture
+
+The system uses THREE different embedding models for different purposes:
+
+| Component | Model | Purpose | Dimensions |
+|-----------|-------|---------|------------|
+| **Classifier** | `nomic-ai/nomic-embed-text-v2-moe` | Relevance/Priority/AK classification | 768 |
+| **Semantic Search** | `nomic-ai/nomic-embed-text-v2-moe` | Vector search in classifier-api | 768 |
+| **Duplicate Detection** | `paraphrase-multilingual-mpnet-base-v2` | Same-story detection | 768 |
+
+### Available Embedding Backends (utils/embeddings.py)
+
+| Backend Name | Type | Model | Use Case |
+|--------------|------|-------|----------|
+| `nomic-v2` | HuggingFace | `nomic-ai/nomic-embed-text-v2-moe` | **Production classifier** ✅ |
+| `sentence-transformers` | HuggingFace | `paraphrase-multilingual-MiniLM-L12-v2` | Fast baseline, 384d |
+| `bge-m3` | HuggingFace | `BAAI/bge-m3` | Long context, 1024d |
+| `jina-v3` | HuggingFace | `jinaai/jina-embeddings-v3` | Long context, 1024d |
+| `ollama` | Ollama API | `nomic-embed-text:137m-v1.5-fp16` | Local-only, lower accuracy |
+
+**IMPORTANT**: The `ollama` and `nomic-v2` backends use DIFFERENT models despite similar names. They produce incompatible embeddings!
 
 ## Project Overview
 
@@ -115,6 +147,23 @@ python scripts/label_with_ollama.py --all --model qwen3:70b
    ```bash
    nvidia-smi --query-gpu=memory.used --format=csv,noheader
    ```
+
+### Train Embedding Classifier
+
+```bash
+cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
+source venv/bin/activate
+
+# Export training data (with recommended filters for higher quality)
+python scripts/export_training_data.py --min-content-length 200 --min-confidence 0.6
+
+# Train classifier - MUST set EMBEDDING_BACKEND!
+EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
+```
+
+**Filtering options** (see `scripts/export_training_data.py --help`):
+- `--min-content-length 200`: Filters Eurostat items with sparse content (~139 chars)
+- `--min-confidence 0.6`: Uses only high-confidence LLM labels
 
 ## Current Dataset
 
