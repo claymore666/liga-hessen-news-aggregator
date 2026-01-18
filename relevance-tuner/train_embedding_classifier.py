@@ -526,7 +526,14 @@ def main():
 
     # Save metrics for comparison (append to history)
     import json
+    import hashlib
     from datetime import datetime
+
+    # Compute model fingerprint (MD5 hash of saved model file)
+    model_file = MODEL_DIR / f"embedding_classifier_{backend_name}.pkl"
+    with open(model_file, "rb") as f:
+        model_fingerprint = hashlib.md5(f.read()).hexdigest()[:12]
+    print(f"  Model fingerprint: {model_fingerprint}")
 
     metrics_file = MODEL_DIR / "metrics.json"
     all_metrics = {}
@@ -536,6 +543,7 @@ def main():
 
     # New entry for this training run
     new_entry = {
+        "model_fingerprint": model_fingerprint,
         "relevance_accuracy": round(metrics["relevance_accuracy"], 4),
         "priority_accuracy": round(metrics["priority_accuracy"], 4),
         "priority_within_one": round(metrics["priority_within_one"], 4),

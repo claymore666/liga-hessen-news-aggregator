@@ -3,13 +3,16 @@ venv/
 __pycache__/
 *.pyc
 
-# Models - only keep Modelfile
+# Models - only keep Modelfile and metrics
 models/*
 !models/qwen3-trained/
 models/qwen3-trained/*
 !models/qwen3-trained/gguf/
 models/qwen3-trained/gguf/*
 !models/qwen3-trained/gguf/Modelfile
+!models/embedding/
+models/embedding/*
+!models/embedding/metrics.json
 
 # Training data
 data/
@@ -25,4 +28,3 @@ data/reviewed/
 # Temporary
 *.log
 *.tmp
-\!models/embedding/metrics.json
