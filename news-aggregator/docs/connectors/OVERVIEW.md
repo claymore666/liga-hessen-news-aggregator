@@ -147,6 +147,25 @@ Standard RSS/Atom feed parser.
 - `follow_links` fetches full article from linked URLs
 - `verify_ssl=false` for sites with certificate issues
 
+**Special Handling**:
+- **Eurostat feeds**: Automatically enriched with SDMX metadata. When the feed URL contains "eurostat", the connector extracts the dataset ID from the title and fetches additional metadata from Eurostat's SDMX API:
+  - Full dataset name (in German)
+  - Time period coverage (oldest/latest)
+  - Number of data points
+  - Link to methodology documentation
+
+  Example transformation:
+  ```
+  Before: "Market production - quarterly data" (33 chars)
+  After:  "Dataset: Marktproduktion - vierteljährliche Daten
+          Beschreibung: Market production - quarterly data
+          Zeitraum: von 2010-Q1 bis 2025-Q3
+          Datenpunkte: 2986
+          Methodische Hinweise: https://..." (233 chars)
+  ```
+
+- **Google Alerts feeds**: Extracts actual source domain from article URLs (see `source_domain` in metadata)
+
 ### Mastodon (`mastodon`)
 
 Fediverse timeline fetching via API.

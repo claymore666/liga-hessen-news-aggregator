@@ -416,7 +416,7 @@ onMounted(async () => {
               </RouterLink>
               <span class="flex items-center gap-2 text-xs text-black flex-shrink-0 ml-4">
                 <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="sm" />
-                <span class="hidden sm:inline">{{ item.source?.name ?? 'Unbekannt' }}</span>
+                <span class="hidden sm:inline">{{ (item.metadata as Record<string, unknown>)?.source_domain ?? item.source?.name ?? 'Unbekannt' }}</span>
                 <span class="hidden md:inline">&middot;</span>
                 <span class="hidden md:inline">{{ formatTime(item.published_at) }}</span>
                 <span

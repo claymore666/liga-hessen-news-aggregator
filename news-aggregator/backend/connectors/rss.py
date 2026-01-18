@@ -1,6 +1,7 @@
 """RSS/Atom feed connector."""
 
 import logging
+import re
 import ssl
 from datetime import datetime
 from time import mktime
@@ -14,6 +15,9 @@ from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 
 logger = logging.getLogger(__name__)
+
+# Pattern to extract dataset ID from Eurostat RSS titles like "TPS00202 - Dataset: updated data"
+EUROSTAT_DATASET_PATTERN = re.compile(r"^([A-Z0-9_]+)\s*-")
 
 
 def create_legacy_ssl_context():
@@ -135,6 +139,7 @@ class RSSConnector(BaseConnector):
             # Try to fetch full article content if link following is enabled
             content = rss_content
             article_fetched = False
+            article_source_domain = None
             if article_extractor and link:
                 try:
                     article = await article_extractor.fetch_article(link)
@@ -143,9 +148,41 @@ class RSSConnector(BaseConnector):
                         feed_title = config.custom_title or feed.feed.get("title", "Unknown Feed")
                         content = f"RSS-Zusammenfassung: {rss_content}\n\n--- Vollständiger Artikel von {article.source_domain} ---\n\n{article.content}"
                         article_fetched = True
+                        article_source_domain = article.source_domain
                         logger.debug(f"Fetched full article from {link}: {len(article.content)} chars")
                 except Exception as e:
                     logger.warning(f"Failed to fetch article from {link}: {e}")
+
+            # Enrich Eurostat items with SDMX metadata
+            is_eurostat = "eurostat" in str(config.url).lower()
+            if is_eurostat and not article_fetched:
+                try:
+                    from services.eurostat_metadata import get_eurostat_service
+
+                    title = entry.get("title", "")
+                    match = EUROSTAT_DATASET_PATTERN.match(title)
+                    if match:
+                        dataset_id = match.group(1)
+                        eurostat_service = get_eurostat_service()
+                        enriched = await eurostat_service.enrich_content(
+                            dataset_id, rss_content, lang="de"
+                        )
+                        if enriched != rss_content:
+                            content = enriched
+                            logger.debug(f"Enriched Eurostat item {dataset_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to enrich Eurostat item: {e}")
+
+            # Build metadata
+            item_metadata = {
+                "feed_title": config.custom_title
+                or feed.feed.get("title", "Unknown Feed"),
+                "feed_url": str(config.url),
+                "tags": tags,
+                "article_extracted": article_fetched,
+            }
+            if article_source_domain:
+                item_metadata["source_domain"] = article_source_domain
 
             items.append(
                 RawItem(
@@ -155,13 +192,7 @@ class RSSConnector(BaseConnector):
                     url=link,
                     author=author,
                     published_at=published,
-                    metadata={
-                        "feed_title": config.custom_title
-                        or feed.feed.get("title", "Unknown Feed"),
-                        "feed_url": str(config.url),
-                        "tags": tags,
-                        "article_extracted": article_fetched,
-                    },
+                    metadata=item_metadata,
                 )
             )
 

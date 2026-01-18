@@ -107,7 +107,7 @@ const formatTime = (date: string | null) => {
           <!-- Metadata -->
           <span class="flex items-center gap-1.5 text-[10px] text-gray-600 flex-shrink-0 ml-2">
             <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="xs" />
-            <span class="hidden lg:inline max-w-20 truncate">{{ item.source?.name ?? '' }}</span>
+            <span class="hidden lg:inline max-w-20 truncate">{{ (item.metadata as Record<string, unknown> | undefined)?.source_domain ?? item.source?.name ?? '' }}</span>
             <span class="text-gray-400">{{ formatTime(item.published_at) }}</span>
             <span
               v-for="ak in (item.assigned_aks?.length ? item.assigned_aks : (item.metadata?.llm_analysis?.assigned_aks || (item.assigned_ak ? [item.assigned_ak] : [])))"

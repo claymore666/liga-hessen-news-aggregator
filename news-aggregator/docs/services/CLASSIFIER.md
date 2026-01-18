@@ -243,19 +243,35 @@ class RelevanceFilter:
 
 ### Classifier Worker
 
-Background worker for batch classification:
+Background worker for batch classification. **Must run before LLM worker** processes items.
 
 ```python
 class ClassifierWorker:
     async def run(self):
         while True:
+            # Get items without pre_filter metadata
             items = await get_unclassified_items()
             for item in items:
                 result = await classifier.classify(
                     item.title, item.content
                 )
+                # Sets pre_filter metadata and needs_llm_processing
                 await update_item(item, result)
 ```
+
+**Processing Order**:
+```
+Fetch → Classifier Worker → LLM Worker
+         (fast, ~3/sec)      (slow, ~5sec each)
+```
+
+The classifier worker:
+1. Processes items without `pre_filter` metadata
+2. Sets `pre_filter` with classification results
+3. Sets `needs_llm_processing=False` for items with confidence < 0.25
+4. LLM worker only picks up items with `pre_filter` present
+
+**Performance**: ~3 items/second (300ms per HTTP call). 700 items ≈ 4 minutes.
 
 ## Training
 

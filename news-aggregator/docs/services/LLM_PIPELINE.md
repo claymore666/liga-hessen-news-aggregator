@@ -48,14 +48,28 @@ The LLM pipeline provides detailed news analysis using a local Ollama model. It 
 
 ## Processing Flow
 
-### 1. Item Queuing
+### 1. Classification Dependency
+
+**Important**: LLM worker only processes items that have been classified first.
+
+Items must have `pre_filter` metadata (set by classifier) before LLM processes them.
+This ensures no compute is wasted on items the classifier would mark as irrelevant.
+
+```
+Fetch → Classifier Worker → LLM Worker
+         (fast, ~3/sec)      (slow, ~5sec each)
+```
+
+### 2. Item Queuing
 
 Items are queued for LLM when:
-- New item fetched with classifier confidence < 0.75
-- Manual reprocess requested
+- Item has been classified (has `pre_filter` metadata)
+- Classifier confidence >= 0.25 (not certainly irrelevant)
 - `needs_llm_processing = True`
 
-### 2. Worker Loop
+Items with classifier confidence < 0.25 are marked `needs_llm_processing=False` and skip LLM entirely.
+
+### 3. Worker Loop
 
 ```python
 class LLMWorker:

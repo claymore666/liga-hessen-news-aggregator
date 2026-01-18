@@ -30,7 +30,8 @@ const formatDate = (date: string | null) => {
       <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
         <span class="flex items-center gap-1.5">
           <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="sm" />
-          {{ item.source?.name ?? 'Unbekannt' }}
+          {{ (item.metadata as Record<string, unknown> | undefined)?.source_domain ?? item.source?.name ?? 'Unbekannt' }}
+          <span v-if="(item.metadata as Record<string, unknown> | undefined)?.source_domain && item.source?.name" class="text-gray-400">(via {{ item.source.name }})</span>
         </span>
         <span>&middot;</span>
         <span>{{ formatDate(item.published_at) }}</span>

@@ -6,7 +6,30 @@
       "priority_within_one": 0.9737,
       "ak_accuracy": 0.6316,
       "speed_items_per_sec": 675.2,
-      "timestamp": "2026-01-10T22:00:05.653186"
+      "timestamp": "2026-01-10T22:00:05.653186",
+      "model_fingerprint": "no-backup"
+    },
+    {
+      "relevance_accuracy": 0.767,
+      "priority_accuracy": 0.4286,
+      "priority_within_one": 0.916,
+      "ak_accuracy": 0.3193,
+      "speed_items_per_sec": 34.6,
+      "timestamp": "2026-01-18T11:54:57.588149",
+      "train_size": 3491,
+      "test_size": 618,
+      "model_fingerprint": "e74d72f26390"
+    },
+    {
+      "relevance_accuracy": 0.767,
+      "priority_accuracy": 0.4286,
+      "priority_within_one": 0.916,
+      "ak_accuracy": 0.3193,
+      "speed_items_per_sec": 34.1,
+      "timestamp": "2026-01-18T11:57:59.665784",
+      "train_size": 3491,
+      "test_size": 618,
+      "model_fingerprint": "e455ed6828e6"
     }
   ],
   "nomic-v2": [
@@ -16,7 +39,8 @@
       "priority_within_one": 0.9126,
       "ak_accuracy": 0.7379,
       "speed_items_per_sec": 119.7,
-      "timestamp": "2026-01-16T16:38:44.042885"
+      "timestamp": "2026-01-16T16:38:44.042885",
+      "model_fingerprint": "unknown"
     },
     {
       "relevance_accuracy": 0.896,
@@ -26,7 +50,52 @@
       "speed_items_per_sec": 130.7,
       "timestamp": "2026-01-16T22:52:35.889237",
       "train_size": 3259,
-      "test_size": 577
+      "test_size": 577,
+      "model_fingerprint": "f32d8381c3d5"
+    },
+    {
+      "relevance_accuracy": 0.9256,
+      "priority_accuracy": 0.479,
+      "priority_within_one": 0.9244,
+      "ak_accuracy": 0.605,
+      "speed_items_per_sec": 142.1,
+      "timestamp": "2026-01-18T01:44:15.885789",
+      "train_size": 3491,
+      "test_size": 618,
+      "model_fingerprint": "260652985c78"
+    },
+    {
+      "relevance_accuracy": 0.8934,
+      "priority_accuracy": 0.5607,
+      "priority_within_one": 0.9533,
+      "ak_accuracy": 0.7383,
+      "speed_items_per_sec": 127.9,
+      "timestamp": "2026-01-18T19:33:47.319801",
+      "train_size": 3237,
+      "test_size": 572,
+      "model_fingerprint": "260652985c78"
+    },
+    {
+      "relevance_accuracy": 0.9056,
+      "priority_accuracy": 0.4861,
+      "priority_within_one": 0.9583,
+      "ak_accuracy": 0.6806,
+      "speed_items_per_sec": 93.2,
+      "timestamp": "2026-01-18T19:35:55.353017",
+      "train_size": 2034,
+      "test_size": 360,
+      "model_fingerprint": "cbf999ef367b"
+    },
+    {
+      "relevance_accuracy": 0.9124,
+      "priority_accuracy": 0.5812,
+      "priority_within_one": 0.9316,
+      "ak_accuracy": 0.6325,
+      "speed_items_per_sec": 130.3,
+      "timestamp": "2026-01-18T19:56:10.226963",
+      "train_size": 3296,
+      "test_size": 582,
+      "model_fingerprint": "4309f2d4276c"
     }
   ],
   "jina-v3": [
