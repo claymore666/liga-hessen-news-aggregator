@@ -1,5 +1,6 @@
 """Bluesky connector using native RSS feeds."""
 
+import logging
 from datetime import datetime
 from time import mktime
 
@@ -10,12 +11,17 @@ from pydantic import BaseModel, Field, field_validator
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 
+logger = logging.getLogger(__name__)
+
 
 class BlueskyConfig(BaseModel):
     """Configuration for Bluesky connector."""
 
     handle: str = Field(
         ..., description="Bluesky handle (e.g., user.bsky.social or @user.bsky.social)"
+    )
+    follow_links: bool = Field(
+        default=True, description="Follow links to fetch full article content"
     )
 
     @field_validator("handle")
@@ -50,6 +56,15 @@ class BlueskyConnector(BaseConnector):
         Returns:
             List of RawItem objects from the account
         """
+        # Import article extractor if link following is enabled
+        article_extractor = None
+        if config.follow_links:
+            try:
+                from services.article_extractor import ArticleExtractor
+                article_extractor = ArticleExtractor()
+            except ImportError:
+                logger.warning("ArticleExtractor not available, disabling link following")
+
         rss_url = self._get_rss_url(config.handle)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -76,17 +91,41 @@ class BlueskyConnector(BaseConnector):
             content = entry.get("summary", entry.get("description", ""))
             title = content[:100] + "..." if len(content) > 100 else content
 
+            # Try to fetch full article content if link following is enabled
+            final_content = content
+            article_fetched = False
+            if article_extractor:
+                urls = article_extractor.extract_urls_from_text(content)
+                # Filter out internal Bluesky links
+                external_urls = [
+                    url for url in urls
+                    if not any(domain in url.lower() for domain in [
+                        "bsky.app", "bsky.social", "blueskyweb.xyz",
+                    ])
+                ]
+                for url in external_urls[:1]:  # Only follow first external link
+                    try:
+                        article = await article_extractor.fetch_article(url)
+                        if article and article.content:
+                            final_content = f"Post: {content}\n\n--- Verlinkter Artikel von {article.source_domain} ---\n\n{article.content}"
+                            article_fetched = True
+                            logger.debug(f"Fetched article from {url}: {len(article.content)} chars")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch article from {url}: {e}")
+
             items.append(
                 RawItem(
                     external_id=entry.get("id", entry.link),
                     title=title,
-                    content=content,
+                    content=final_content,
                     url=entry.link,
                     author=f"@{config.handle}",
                     published_at=published,
                     metadata={
                         "platform": "bluesky",
                         "handle": config.handle,
+                        "article_extracted": article_fetched,
                     },
                 )
             )
