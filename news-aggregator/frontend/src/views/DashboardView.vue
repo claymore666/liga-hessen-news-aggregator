@@ -466,7 +466,8 @@ watch(
                 </div>
                 <span class="flex items-center gap-1 text-xs text-black flex-shrink-0">
                   <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="sm" />
-                  {{ formatTime(item.published_at) }}
+                  <span class="max-w-20 truncate">{{ (item.metadata as Record<string, unknown> | undefined)?.source_domain ?? item.source?.name ?? '' }}</span>
+                  <span class="text-gray-500">{{ formatTime(item.published_at) }}</span>
                   <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
                     {{ item.metadata.llm_analysis.assigned_ak }}
                   </span>

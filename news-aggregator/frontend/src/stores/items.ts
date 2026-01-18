@@ -112,6 +112,18 @@ export const useItemsStore = defineStore('items', () => {
     }
   }
 
+  async function bulkMarkAsUnread(ids: number[]) {
+    try {
+      await itemsApi.bulkMarkUnread(ids)
+      items.value.forEach((item) => {
+        if (ids.includes(item.id)) item.is_read = false
+      })
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to mark items as unread'
+      throw e
+    }
+  }
+
   async function archiveItem(id: number) {
     try {
       const response = await itemsApi.archive(id)
@@ -208,6 +220,7 @@ export const useItemsStore = defineStore('items', () => {
     markAsRead,
     markAsUnread,
     bulkMarkAsRead,
+    bulkMarkAsUnread,
     archiveItem,
     updateItem,
     setFilter,

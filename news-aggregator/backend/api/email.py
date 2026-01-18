@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db
-from models import Item, Priority
+from models import Channel, Item, Priority
 from services.email import BriefingEmail, EmailConfig
 
 router = APIRouter(prefix="/email", tags=["email"])
@@ -58,7 +58,7 @@ async def send_briefing(
     # Query items
     query = (
         select(Item)
-        .options(selectinload(Item.source))
+        .options(selectinload(Item.channel).selectinload(Channel.source))
         .where(Item.fetched_at >= since)
     )
 
@@ -115,7 +115,7 @@ async def preview_briefing(
     # Query items
     query = (
         select(Item)
-        .options(selectinload(Item.source))
+        .options(selectinload(Item.channel).selectinload(Channel.source))
         .where(Item.fetched_at >= since)
     )
 

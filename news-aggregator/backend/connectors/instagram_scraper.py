@@ -211,6 +211,7 @@ class InstagramScraperConnector(BaseConnector):
                 if len(shortcodes_to_fetch) >= config.max_posts:
                     break
             except Exception:
+                # Some links may fail to extract, continue to next
                 continue
 
         # Second pass: visit each post to get full caption
@@ -320,6 +321,7 @@ class InstagramScraperConnector(BaseConnector):
                 if len(caption) > 50:  # Found substantial caption
                     break
             except Exception:
+                # Selector may not match current page structure, try next
                 continue
 
         return caption.strip()

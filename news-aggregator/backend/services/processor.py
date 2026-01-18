@@ -148,6 +148,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
             try:
                 source_name = item.source.name if item.source else "Unbekannt"
             except Exception:
+                # Relationship may not be loaded, use fallback
                 source_name = "Unbekannt"
         date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 
@@ -348,8 +349,8 @@ async def is_llm_enabled() -> bool:
             )
             if setting is not None:
                 return setting.value.lower() == "true"
-    except Exception:
-        pass  # Fall back to env if DB check fails
+    except Exception as e:
+        logger.debug(f"Could not check DB for llm_enabled setting, using env: {e}")
 
     # Fall back to environment variable
     return settings.llm_enabled

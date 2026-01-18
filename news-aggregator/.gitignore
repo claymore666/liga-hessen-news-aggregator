@@ -51,5 +51,5 @@ htmlcov/
 build/
 *.whl
 
-# Documentation (local only)
-docs/
+# Documentation (auto-generated API docs can be excluded if needed)
+# docs/

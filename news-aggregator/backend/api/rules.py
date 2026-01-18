@@ -139,8 +139,14 @@ async def reorder_rules(
 ) -> dict[str, str]:
     """Reorder rules."""
     for item in rule_orders:
-        rule_id = item["id"]
-        new_order = item["order"]
+        rule_id = item.get("id")
+        new_order = item.get("order")
+
+        if rule_id is None or new_order is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Each item must have 'id' and 'order' fields"
+            )
 
         query = select(Rule).where(Rule.id == rule_id)
         result = await db.execute(query)

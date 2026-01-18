@@ -19,8 +19,67 @@ class Settings(BaseSettings):
     # Instance identification
     instance_type: str = "production"  # production | training | development
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./data/news_aggregator.db"
+    # Database - Connection
+    # Can use either DATABASE_URL directly or build from components
+    database_url: str = ""  # Full connection string (takes precedence if set)
+    database_host: str = ""  # Hostname for building connection string
+    database_port: int = 5432  # Port for PostgreSQL
+    database_name: str = "liga_news"  # Database name
+    database_user: str = ""  # Username
+    database_password: str = ""  # Password
+    database_driver: str = "postgresql+asyncpg"  # SQLAlchemy async driver
+
+    # Database - Connection Pool (PostgreSQL only)
+    database_pool_size: int = 5  # Number of persistent connections
+    database_pool_max_overflow: int = 10  # Extra connections allowed
+    database_pool_timeout: int = 30  # Seconds to wait for connection
+    database_pool_recycle: int = 1800  # Recycle connections after 30 min
+
+    def get_database_url(self) -> str:
+        """Get database URL, building from components if not set directly.
+
+        Priority:
+        1. DATABASE_URL if set
+        2. Build from components (host, port, name, user, password)
+        3. Default SQLite fallback for development
+        """
+        if self.database_url:
+            return self.database_url
+
+        if self.database_host and self.database_user:
+            # Build PostgreSQL URL from components
+            password_part = f":{self.database_password}" if self.database_password else ""
+            return (
+                f"{self.database_driver}://{self.database_user}{password_part}"
+                f"@{self.database_host}:{self.database_port}/{self.database_name}"
+            )
+
+        # Default SQLite for development
+        return "sqlite+aiosqlite:///./data/news_aggregator.db"
+
+    def get_database_info(self) -> dict:
+        """Get database connection info for health checks (no credentials)."""
+        url = self.get_database_url()
+
+        if "sqlite" in url:
+            return {"type": "sqlite", "path": url.split("///")[-1]}
+
+        # Parse PostgreSQL URL
+        if "@" in url:
+            # Remove credentials: driver://user:pass@host:port/db -> host:port/db
+            after_at = url.split("@")[-1]
+            host_port_db = after_at.split("/")
+            host_port = host_port_db[0] if host_port_db else "unknown"
+            db_name = host_port_db[1] if len(host_port_db) > 1 else "unknown"
+            return {
+                "type": "postgresql",
+                "host": host_port,
+                "database": db_name,
+                "pool_size": self.database_pool_size,
+                "max_overflow": self.database_pool_max_overflow,
+            }
+
+        return {"type": "unknown"}
 
     # LLM - General
     llm_enabled: bool = True  # Set to False to disable all LLM processing

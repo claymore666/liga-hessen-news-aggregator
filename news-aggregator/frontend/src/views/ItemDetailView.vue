@@ -116,7 +116,10 @@ onMounted(async () => {
             <span class="font-medium text-gray-700">Quelle:</span>
             <SourceIcon v-if="itemsStore.currentItem.channel" :connector-type="itemsStore.currentItem.channel.connector_type" size="sm" />
             <span class="text-gray-600">
-              {{ itemsStore.currentItem.source?.name ?? 'Unbekannt' }}
+              {{ (itemsStore.currentItem.metadata as Record<string, unknown> | undefined)?.source_domain ?? itemsStore.currentItem.source?.name ?? 'Unbekannt' }}
+              <template v-if="(itemsStore.currentItem.metadata as Record<string, unknown> | undefined)?.source_domain && itemsStore.currentItem.source?.name">
+                <span class="text-gray-400">(via {{ itemsStore.currentItem.source.name }})</span>
+              </template>
             </span>
           </p>
           <p class="mt-1 text-sm">

@@ -27,13 +27,26 @@ const getUrlFromConfig = (config: Record<string, unknown>): string => {
   return (config?.url || config?.feed_url || config?.handle || config?.channel || '') as string
 }
 
+// Get follow_links setting from config (RSS only)
+// Default to true if not explicitly set (matches backend default)
+const getFollowLinksFromConfig = (config: Record<string, unknown>): boolean => {
+  return (config?.follow_links ?? true) as boolean
+}
+
 const form = ref({
   name: props.channel?.name ?? '',
   connector_type: (props.channel?.connector_type ?? 'rss') as ConnectorType,
   url: props.channel ? getUrlFromConfig(props.channel.config) : '',
   enabled: props.channel?.enabled ?? true,
-  fetch_interval_minutes: props.channel?.fetch_interval_minutes ?? 30
+  fetch_interval_minutes: props.channel?.fetch_interval_minutes ?? 30,
+  // Default to true to match backend default (RSS fetches full article content by default)
+  follow_links: props.channel ? getFollowLinksFromConfig(props.channel.config) : true
 })
+
+// Check if connector type supports follow_links
+const supportsFollowLinks = computed(() =>
+  ['rss', 'google_alerts'].includes(form.value.connector_type)
+)
 
 const isEditing = computed(() => !!props.channel)
 
@@ -106,7 +119,14 @@ const getUrlLabel = computed(() => {
 // Build config object from form
 const buildConfig = (): Record<string, unknown> => {
   const fieldName = getConfigFieldName(form.value.connector_type)
-  return { [fieldName]: form.value.url }
+  const config: Record<string, unknown> = { [fieldName]: form.value.url }
+
+  // Add follow_links for RSS/Google Alerts connectors
+  if (supportsFollowLinks.value) {
+    config.follow_links = form.value.follow_links
+  }
+
+  return config
 }
 
 const validateConfig = async () => {
@@ -259,6 +279,18 @@ onMounted(async () => {
               class="rounded border-gray-300"
             />
             <label for="channel_enabled" class="text-sm text-gray-700">Kanal aktivieren</label>
+          </div>
+
+          <!-- Follow Links (RSS only) -->
+          <div v-if="supportsFollowLinks" class="flex items-center gap-2">
+            <input
+              id="channel_follow_links"
+              v-model="form.follow_links"
+              type="checkbox"
+              class="rounded border-gray-300"
+            />
+            <label for="channel_follow_links" class="text-sm text-gray-700">Links folgen</label>
+            <span class="text-xs text-gray-500">(Verlinkte Artikel automatisch abrufen)</span>
           </div>
 
           <!-- Validation -->

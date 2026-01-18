@@ -54,6 +54,7 @@ export const itemsApi = {
   markRead: (id: number) => api.post(`/items/${id}/read`),
   markUnread: (id: number) => api.patch(`/items/${id}`, { is_read: false }),
   bulkMarkRead: (ids: number[]) => api.post('/items/mark-all-read', { ids }),
+  bulkMarkUnread: (ids: number[]) => api.post('/items/bulk-update', { ids, is_read: false }),
   archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`),
   getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`)
 }
