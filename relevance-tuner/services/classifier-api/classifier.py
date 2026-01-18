@@ -97,6 +97,11 @@ class EmbeddingClassifier:
     Supports both single-label and multi-label AK predictions.
     """
 
+    # Classifier version info (updated when model is retrained)
+    VERSION = "2.1.0-multilabel"
+    TRAINED_AT = "2026-01-13"
+    TRAINING_ITEMS = 1680
+
     # Label mappings (integer class index to string label)
     PRIORITY_LABELS = ["high", "medium", "low"]
     AK_LABELS = ["AK1", "AK2", "AK3", "AK4", "AK5", "QAG"]
@@ -236,6 +241,10 @@ class EmbeddingClassifier:
             "embedding_dim": self.embedder.embedding_dim,
             "gpu_available": self.is_gpu_available(),
             "gpu_name": torch.cuda.get_device_name(0) if self.is_gpu_available() else None,
+            "version": self.VERSION,
+            "trained_at": self.TRAINED_AT,
+            "training_items": self.TRAINING_ITEMS,
+            "multilabel": self.multilabel,
         }
 
 

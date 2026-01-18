@@ -227,9 +227,12 @@ class ClassifierWorker:
                 # Prepare updated metadata
                 new_metadata = dict(item_data["old_metadata"])
                 new_metadata["pre_filter"] = {
+                    "classifier_version": result.get("classifier_version"),
                     "relevance_confidence": confidence,
                     "ak_suggestion": result.get("ak"),
                     "ak_confidence": result.get("ak_confidence"),
+                    "aks": result.get("aks", []),
+                    "ak_confidences": result.get("ak_confidences", {}),
                     "priority_suggestion": result.get("priority"),
                     "priority_confidence": result.get("priority_confidence"),
                     "classified_at": datetime.utcnow().isoformat(),
@@ -285,15 +288,22 @@ class ClassifierWorker:
                                         needs_llm_processing=upd["needs_llm_processing"],
                                     )
                                 )
-                                # Record classifier event
+                                # Record classifier event with expanded data for agreement tracking
+                                pre_filter = upd["metadata_"]["pre_filter"]
                                 await record_event(
                                     db,
                                     upd["id"],
                                     EVENT_CLASSIFIER_PROCESSED,
                                     data={
-                                        "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
+                                        "version": pre_filter.get("classifier_version"),
+                                        "relevance_confidence": pre_filter["relevance_confidence"],
                                         "priority": upd["priority"],
-                                        "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
+                                        "priority_confidence": pre_filter.get("priority_confidence"),
+                                        "aks": pre_filter.get("aks", []),
+                                        "ak_confidences": pre_filter.get("ak_confidences", {}),
+                                        # Legacy fields for backward compatibility
+                                        "confidence": pre_filter["relevance_confidence"],
+                                        "ak_suggestion": pre_filter.get("ak_suggestion"),
                                     },
                                 )
 

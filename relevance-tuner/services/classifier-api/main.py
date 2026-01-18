@@ -87,6 +87,7 @@ class ClassifyResponse(BaseModel):
     ak_confidence: float | None = None
     aks: list[str] = []  # Multi-label: all predicted AKs
     ak_confidences: dict[str, float] = {}  # Confidence per AK
+    classifier_version: str | None = None  # Version for tracking
 
 
 class SearchRequest(BaseModel):
@@ -158,6 +159,10 @@ class HealthResponse(BaseModel):
     model: str
     gpu: bool
     gpu_name: str | None = None
+    classifier_version: str | None = None
+    trained_at: str | None = None
+    training_items: int | None = None
+    multilabel: bool = False
     search_index_items: int = Field(
         default=0,
         description="Number of items indexed for semantic search (nomic embeddings)"
@@ -211,6 +216,10 @@ async def health():
         model=info["backend"],
         gpu=info["gpu_available"],
         gpu_name=info["gpu_name"],
+        classifier_version=info.get("version"),
+        trained_at=info.get("trained_at"),
+        training_items=info.get("training_items"),
+        multilabel=info.get("multilabel", False),
         search_index_items=vs_items,
         duplicate_index_items=ds_stats.get("total_items", 0),
         duplicate_model=ds_stats.get("model"),
@@ -233,6 +242,8 @@ async def classify(request: ClassifyRequest):
             content=request.content,
             source=request.source,
         )
+        # Add classifier version to response
+        result["classifier_version"] = classifier.VERSION
         return ClassifyResponse(**result)
     except Exception as e:
         logger.error(f"Classification failed: {e}")
