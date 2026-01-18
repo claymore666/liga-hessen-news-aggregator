@@ -25,6 +25,7 @@ class TelegramConfig(BaseModel):
     channel: str = Field(..., description="Telegram channel username (without @)")
     max_posts: int = Field(default=20, description="Maximum posts to fetch", ge=1, le=50)
     include_forwards: bool = Field(default=True, description="Include forwarded messages")
+    follow_links: bool = Field(default=True, description="Follow links to fetch full article content")
 
     @field_validator("channel")
     @classmethod
@@ -73,6 +74,15 @@ class TelegramConnector(BaseConnector):
         Returns:
             List of RawItem objects from the channel
         """
+        # Import article extractor if link following is enabled
+        article_extractor = None
+        if config.follow_links:
+            try:
+                from services.article_extractor import ArticleExtractor
+                article_extractor = ArticleExtractor()
+            except ImportError:
+                logger.warning("ArticleExtractor not available, disabling link following")
+
         url = f"https://t.me/s/{config.channel}"
         headers = {
             "User-Agent": self.USER_AGENT,
@@ -99,6 +109,33 @@ class TelegramConnector(BaseConnector):
                 try:
                     item = self._parse_message(msg, config)
                     if item:
+                        # Try to fetch full article content if link following is enabled
+                        if article_extractor and item.content:
+                            urls = article_extractor.extract_urls_from_text(item.content)
+                            # Filter out internal Telegram links
+                            external_urls = [
+                                u for u in urls
+                                if not any(domain in u.lower() for domain in [
+                                    "t.me", "telegram.org", "telegram.me",
+                                ])
+                            ]
+                            for ext_url in external_urls[:1]:  # Only follow first external link
+                                try:
+                                    article = await article_extractor.fetch_article(ext_url)
+                                    if article and article.content:
+                                        item = RawItem(
+                                            external_id=item.external_id,
+                                            title=item.title,
+                                            content=f"Nachricht: {item.content}\n\n--- Verlinkter Artikel von {article.source_domain} ---\n\n{article.content}",
+                                            url=item.url,
+                                            author=item.author,
+                                            published_at=item.published_at,
+                                            metadata={**item.metadata, "article_extracted": True},
+                                        )
+                                        logger.debug(f"Fetched article from {ext_url}: {len(article.content)} chars")
+                                        break
+                                except Exception as e:
+                                    logger.warning(f"Failed to fetch article from {ext_url}: {e}")
                         items.append(item)
                 except Exception as e:
                     logger.warning(f"Error parsing Telegram message: {e}")
