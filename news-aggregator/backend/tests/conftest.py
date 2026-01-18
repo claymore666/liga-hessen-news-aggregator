@@ -15,12 +15,14 @@ from database import Base, get_db
 from main import app
 from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Setting, Source
 
-# Allow PostgreSQL testing via environment variable
-# Default to in-memory SQLite for fast local tests
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "sqlite+aiosqlite:///:memory:"
-)
+# PostgreSQL required for tests - set via environment variable
+# Example: TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/liga_test
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if not TEST_DATABASE_URL:
+    raise ValueError(
+        "TEST_DATABASE_URL environment variable required. "
+        "Example: postgresql+asyncpg://postgres:postgres@localhost:5432/liga_test"
+    )
 
 
 @pytest.fixture(scope="session")

@@ -41,7 +41,8 @@ class Settings(BaseSettings):
         Priority:
         1. DATABASE_URL if set
         2. Build from components (host, port, name, user, password)
-        3. Default SQLite fallback for development
+
+        Raises ValueError if no database configuration is provided.
         """
         if self.database_url:
             return self.database_url
@@ -54,15 +55,13 @@ class Settings(BaseSettings):
                 f"@{self.database_host}:{self.database_port}/{self.database_name}"
             )
 
-        # Default SQLite for development
-        return "sqlite+aiosqlite:///./data/news_aggregator.db"
+        raise ValueError(
+            "Database not configured. Set DATABASE_URL or DATABASE_HOST + DATABASE_USER"
+        )
 
     def get_database_info(self) -> dict:
         """Get database connection info for health checks (no credentials)."""
         url = self.get_database_url()
-
-        if "sqlite" in url:
-            return {"type": "sqlite", "path": url.split("///")[-1]}
 
         # Parse PostgreSQL URL
         if "@" in url:

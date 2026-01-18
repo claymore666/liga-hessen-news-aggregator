@@ -265,7 +265,7 @@ class ClassifierWorker:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
                 self._stats["errors"] += 1
 
-        # Phase 3: Apply updates to database (with lock and retry for SQLite locks)
+        # Phase 3: Apply updates to database (with lock to serialize writes)
         if updates:
             from services.item_events import record_event, EVENT_CLASSIFIER_PROCESSED
 

@@ -50,8 +50,7 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Create data directory
-mkdir -p data
+# Ensure PostgreSQL is running and configured in .env
 
 # Start development server
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
@@ -133,7 +132,7 @@ npm run dev
 |-----------|-----------|------|-------|
 | Backend | liga-news-backend | 8000 | Python/FastAPI |
 | Frontend | liga-news-frontend | 3001 | Vue 3 via nginx |
-| Database | SQLite | - | Volume: `liga-news-data` at `/app/data/liga_news.db` |
+| Database | PostgreSQL | 5432 | Volume: `liga-news-db` |
 | LLM | External | - | Ollama on gpu1 |
 
 ### Deployment Commands
@@ -168,15 +167,14 @@ sudo docker ps -a | grep liga-news
 
 ### Data Persistence
 
-- **Volume**: `liga-news-data` mounted at `/app/data` in backend container
-- **Database**: SQLite at `/var/lib/docker/volumes/liga-news-data/_data/liga_news.db`
+- **Volume**: `liga-news-db` for PostgreSQL data
 - Data survives container rebuilds
 
 ### Security Checklist
 
 - [ ] Change `SECRET_KEY` in `.env`
 - [ ] Configure proper CORS origins
-- [ ] Configure backup for SQLite database
+- [ ] Configure backup for PostgreSQL database
 - [ ] Set appropriate log levels
 
 ## Troubleshooting

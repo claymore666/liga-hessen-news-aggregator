@@ -392,7 +392,7 @@ async def fetch_due_channels() -> dict:
             result = await db.execute(query)
             all_channels = result.scalars().all()
 
-            # Filter in Python since SQLite doesn't support interval arithmetic well
+            # Filter in Python for clearer logic
             due_channels = []
             for channel in all_channels:
                 if channel.last_fetch_at is None:

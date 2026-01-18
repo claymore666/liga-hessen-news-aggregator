@@ -21,16 +21,18 @@ async def migrate():
     """Add needs_llm_processing column to items table."""
     async with engine.begin() as conn:
         # Check if column already exists
-        result = await conn.execute(text("PRAGMA table_info(items)"))
-        columns = [row[1] for row in result.fetchall()]
+        result = await conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'items' AND column_name = 'needs_llm_processing'
+        """))
 
-        if "needs_llm_processing" in columns:
+        if result.fetchone():
             print("Column 'needs_llm_processing' already exists, skipping migration")
             return
 
         # Add the new column with default False
         await conn.execute(text(
-            "ALTER TABLE items ADD COLUMN needs_llm_processing BOOLEAN DEFAULT 0"
+            "ALTER TABLE items ADD COLUMN needs_llm_processing BOOLEAN DEFAULT FALSE"
         ))
         print("Successfully added 'needs_llm_processing' column to items table")
 
@@ -42,9 +44,10 @@ async def migrate():
 
 
 async def rollback():
-    """Remove needs_llm_processing column (SQLite doesn't support DROP COLUMN directly)."""
-    print("Note: SQLite doesn't support DROP COLUMN. To rollback, recreate the table.")
-    print("This is a non-destructive migration, rollback is typically not needed.")
+    """Remove needs_llm_processing column."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE items DROP COLUMN IF EXISTS needs_llm_processing"))
+        print("Successfully dropped 'needs_llm_processing' column")
 
 
 if __name__ == "__main__":
