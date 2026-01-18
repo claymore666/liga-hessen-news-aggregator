@@ -190,6 +190,25 @@ curl -s -X POST http://localhost:8082/find-duplicates \
 curl -s -X POST http://localhost:8082/sync-duplicate-store | jq '.'
 ```
 
+### Index Management
+
+When deleting items from the database, also remove them from the vector store to prevent orphaned embeddings causing duplicate detection errors.
+
+```bash
+# List all indexed item IDs
+curl -s http://localhost:8082/ids | jq '.count'
+
+# Delete specific items from both search and duplicate indexes
+curl -s -X POST http://localhost:8082/delete \
+  -H "Content-Type: application/json" \
+  -d '{"ids": ["123", "456", "789"]}'
+
+# Response shows how many were deleted from each index
+# {"deleted_from_search": 3, "deleted_from_duplicate": 3}
+```
+
+See `news-aggregator/docs/operations/TROUBLESHOOTING.md` for full procedure on resetting and reloading items.
+
 ### Rebuilding Classifier
 
 ```bash

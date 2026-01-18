@@ -507,6 +507,81 @@ async def sync_duplicate_store():
     )
 
 
+class ListIdsResponse(BaseModel):
+    """Response model for listing all IDs."""
+    ids: list[str]
+    count: int
+
+
+@app.get("/ids", response_model=ListIdsResponse)
+async def list_all_ids():
+    """List all item IDs in the search index.
+
+    Use this to find orphaned items that exist in vector store
+    but not in the main database.
+    """
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="Search index not initialized")
+
+    # Get all IDs from the collection
+    all_data = vector_store.collection.get(include=[])
+    ids = all_data["ids"]
+
+    return ListIdsResponse(ids=ids, count=len(ids))
+
+
+class DeleteRequest(BaseModel):
+    """Request model for deleting items."""
+    ids: list[str] = Field(..., description="List of item IDs to delete")
+
+
+class DeleteResponse(BaseModel):
+    """Response model for delete operation."""
+    deleted_from_search: int
+    deleted_from_duplicate: int
+
+
+@app.post("/delete", response_model=DeleteResponse)
+async def delete_items(request: DeleteRequest):
+    """Delete items from both vector store and duplicate store.
+
+    Use this when items are deleted from the main database to keep
+    the vector indexes in sync.
+    """
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="Search index not initialized")
+    if duplicate_store is None:
+        raise HTTPException(status_code=503, detail="Duplicate index not initialized")
+
+    deleted_search = 0
+    deleted_dup = 0
+
+    # Delete from search index
+    try:
+        existing = vector_store.collection.get(ids=request.ids)
+        if existing["ids"]:
+            vector_store.collection.delete(ids=existing["ids"])
+            deleted_search = len(existing["ids"])
+            logger.info(f"Deleted {deleted_search} items from search index")
+    except Exception as e:
+        logger.warning(f"Error deleting from search index: {e}")
+
+    # Delete from duplicate index
+    try:
+        existing = duplicate_store.collection.get(ids=request.ids)
+        if existing["ids"]:
+            duplicate_store.collection.delete(ids=existing["ids"])
+            deleted_dup = len(existing["ids"])
+            logger.info(f"Deleted {deleted_dup} items from duplicate index")
+    except Exception as e:
+        logger.warning(f"Error deleting from duplicate index: {e}")
+
+    return DeleteResponse(
+        deleted_from_search=deleted_search,
+        deleted_from_duplicate=deleted_dup,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8082)

@@ -135,6 +135,7 @@ class RSSConnector(BaseConnector):
             # Try to fetch full article content if link following is enabled
             content = rss_content
             article_fetched = False
+            article_source_domain = None
             if article_extractor and link:
                 try:
                     article = await article_extractor.fetch_article(link)
@@ -143,9 +144,21 @@ class RSSConnector(BaseConnector):
                         feed_title = config.custom_title or feed.feed.get("title", "Unknown Feed")
                         content = f"RSS-Zusammenfassung: {rss_content}\n\n--- Vollständiger Artikel von {article.source_domain} ---\n\n{article.content}"
                         article_fetched = True
+                        article_source_domain = article.source_domain
                         logger.debug(f"Fetched full article from {link}: {len(article.content)} chars")
                 except Exception as e:
                     logger.warning(f"Failed to fetch article from {link}: {e}")
+
+            # Build metadata
+            item_metadata = {
+                "feed_title": config.custom_title
+                or feed.feed.get("title", "Unknown Feed"),
+                "feed_url": str(config.url),
+                "tags": tags,
+                "article_extracted": article_fetched,
+            }
+            if article_source_domain:
+                item_metadata["source_domain"] = article_source_domain
 
             items.append(
                 RawItem(
@@ -155,13 +168,7 @@ class RSSConnector(BaseConnector):
                     url=link,
                     author=author,
                     published_at=published,
-                    metadata={
-                        "feed_title": config.custom_title
-                        or feed.feed.get("title", "Unknown Feed"),
-                        "feed_url": str(config.url),
-                        "tags": tags,
-                        "article_extracted": article_fetched,
-                    },
+                    metadata=item_metadata,
                 )
             )
 

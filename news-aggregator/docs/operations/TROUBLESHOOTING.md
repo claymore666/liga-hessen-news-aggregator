@@ -305,6 +305,152 @@ docker compose exec db psql -U postgres -d news_aggregator -c "SELECT count(*) F
 
 ## Recovery Procedures
 
+### Reset and Reload Items (with Vector Store Cleanup)
+
+When you need to delete items and have them re-fetched (e.g., to apply new metadata extraction):
+
+**Problem**: Simply deleting items from the database leaves orphaned embeddings in ChromaDB. When items are re-fetched, duplicate detection finds matches to non-existent items, causing foreign key violations.
+
+**Solution**: Delete from both database AND vector store.
+
+#### Step 1: Identify Items to Delete
+
+```bash
+# Example: Find Google Alerts items from last 24 hours
+docker compose exec -T backend python -c "
+import asyncio
+from sqlalchemy import select, and_
+from datetime import datetime, timedelta
+from database import async_session_maker
+from models import Item, Channel, ConnectorType
+
+async def find_items():
+    async with async_session_maker() as session:
+        cutoff = datetime.now() - timedelta(hours=24)
+        # Adjust query as needed
+        result = await session.execute(
+            select(Item.id)
+            .join(Channel)
+            .where(
+                and_(
+                    Channel.connector_type == ConnectorType.RSS,
+                    Item.fetched_at >= cutoff
+                )
+            )
+        )
+        for row in result.all():
+            print(row[0])
+
+asyncio.run(find_items())
+" > /tmp/items_to_delete.txt
+
+echo \"Items to delete: \$(wc -l < /tmp/items_to_delete.txt)\"
+```
+
+#### Step 2: Delete from Database
+
+```bash
+docker compose exec -T backend python -c "
+import asyncio
+from sqlalchemy import delete
+from database import async_session_maker
+from models import Item
+
+async def delete_items():
+    ids = [int(x.strip()) for x in open('/tmp/items_to_delete.txt') if x.strip()]
+    async with async_session_maker() as session:
+        await session.execute(delete(Item).where(Item.id.in_(ids)))
+        await session.commit()
+        print(f'Deleted {len(ids)} items from database')
+
+asyncio.run(delete_items())
+"
+```
+
+#### Step 3: Delete from Vector Store
+
+```bash
+# Get all vector store IDs
+curl -s http://localhost:8082/ids | jq -r '.ids[]' | sort > /tmp/vector_ids.txt
+
+# Get all database IDs
+docker compose exec -T backend python -c "
+import asyncio
+from sqlalchemy import select
+from database import async_session_maker
+from models import Item
+
+async def get_ids():
+    async with async_session_maker() as session:
+        result = await session.execute(select(Item.id))
+        for row in result.all():
+            print(row[0])
+
+asyncio.run(get_ids())
+" | sort > /tmp/db_ids.txt
+
+# Find orphans (in vector store but not in database)
+comm -23 /tmp/vector_ids.txt /tmp/db_ids.txt > /tmp/orphan_ids.txt
+echo "Orphaned vectors: $(wc -l < /tmp/orphan_ids.txt)"
+
+# Delete orphans from vector store
+ORPHAN_IDS=$(cat /tmp/orphan_ids.txt | grep -v '^$' | jq -R . | jq -s .)
+curl -s -X POST http://localhost:8082/delete \
+  -H "Content-Type: application/json" \
+  -d "{\"ids\": $ORPHAN_IDS}" | jq .
+```
+
+#### Step 4: Re-fetch Items
+
+```bash
+# Trigger fetch for specific channels
+curl -X POST http://localhost:8000/api/channels/{channel_id}/fetch
+
+# Or fetch all sources
+curl -X POST http://localhost:8000/api/sources/fetch-all
+```
+
+#### Quick One-Liner (for specific channel)
+
+```bash
+# Delete last 24h items from channel, clean vectors, refetch
+CHANNEL_ID=123
+docker compose exec -T backend python -c "
+import asyncio
+from sqlalchemy import select, delete, and_
+from datetime import datetime, timedelta
+from database import async_session_maker
+from models import Item
+
+async def reset():
+    async with async_session_maker() as session:
+        cutoff = datetime.now() - timedelta(hours=24)
+        result = await session.execute(
+            select(Item.id).where(and_(
+                Item.channel_id == $CHANNEL_ID,
+                Item.fetched_at >= cutoff
+            ))
+        )
+        ids = [str(row[0]) for row in result.all()]
+        if ids:
+            await session.execute(delete(Item).where(Item.id.in_([int(i) for i in ids])))
+            await session.commit()
+            print(f'Deleted {len(ids)} items')
+            # Print IDs for vector cleanup
+            for i in ids: print(f'ID:{i}')
+
+asyncio.run(reset())
+" | tee /tmp/deleted.txt
+
+# Extract IDs and delete from vector store
+grep '^ID:' /tmp/deleted.txt | cut -d: -f2 | jq -R . | jq -s . | \
+  xargs -I {} curl -s -X POST http://localhost:8082/delete \
+    -H "Content-Type: application/json" -d '{"ids": {}}'
+
+# Refetch
+curl -X POST http://localhost:8000/api/channels/$CHANNEL_ID/fetch
+```
+
 ### Full Reset
 
 **Warning**: Deletes all data
