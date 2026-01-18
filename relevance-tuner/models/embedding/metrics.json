@@ -6,7 +6,8 @@
       "priority_within_one": 0.9737,
       "ak_accuracy": 0.6316,
       "speed_items_per_sec": 675.2,
-      "timestamp": "2026-01-10T22:00:05.653186"
+      "timestamp": "2026-01-10T22:00:05.653186",
+      "model_fingerprint": "no-backup"
     },
     {
       "relevance_accuracy": 0.767,
@@ -16,7 +17,8 @@
       "speed_items_per_sec": 34.6,
       "timestamp": "2026-01-18T11:54:57.588149",
       "train_size": 3491,
-      "test_size": 618
+      "test_size": 618,
+      "model_fingerprint": "e74d72f26390"
     },
     {
       "relevance_accuracy": 0.767,
@@ -26,7 +28,8 @@
       "speed_items_per_sec": 34.1,
       "timestamp": "2026-01-18T11:57:59.665784",
       "train_size": 3491,
-      "test_size": 618
+      "test_size": 618,
+      "model_fingerprint": "e455ed6828e6"
     }
   ],
   "nomic-v2": [
@@ -48,7 +51,7 @@
       "timestamp": "2026-01-16T22:52:35.889237",
       "train_size": 3259,
       "test_size": 577,
-      "model_fingerprint": "unknown"
+      "model_fingerprint": "f32d8381c3d5"
     },
     {
       "relevance_accuracy": 0.9256,
@@ -59,7 +62,7 @@
       "timestamp": "2026-01-18T01:44:15.885789",
       "train_size": 3491,
       "test_size": 618,
-      "model_fingerprint": "unknown"
+      "model_fingerprint": "260652985c78"
     },
     {
       "relevance_accuracy": 0.8934,
@@ -70,7 +73,7 @@
       "timestamp": "2026-01-18T19:33:47.319801",
       "train_size": 3237,
       "test_size": 572,
-      "model_fingerprint": "unknown"
+      "model_fingerprint": "260652985c78"
     },
     {
       "relevance_accuracy": 0.9056,
@@ -81,7 +84,7 @@
       "timestamp": "2026-01-18T19:35:55.353017",
       "train_size": 2034,
       "test_size": 360,
-      "model_fingerprint": "unknown"
+      "model_fingerprint": "cbf999ef367b"
     },
     {
       "relevance_accuracy": 0.9124,
@@ -92,7 +95,7 @@
       "timestamp": "2026-01-18T19:56:10.226963",
       "train_size": 3296,
       "test_size": 582,
-      "model_fingerprint": "unknown"
+      "model_fingerprint": "4309f2d4276c"
     }
   ],
   "jina-v3": [
