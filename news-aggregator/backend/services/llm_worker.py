@@ -225,21 +225,25 @@ class LLMWorker:
             return 0
 
         # Query backlog items ordered by priority
+        # Only process items that have been classified (have pre_filter metadata)
+        # This ensures classifier runs before LLM, avoiding wasted compute on irrelevant items
         async with async_session_maker() as db:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+            pre_filter = json_extract_path(Item.metadata_, "pre_filter")
             assigned_aks = json_extract_path(Item.metadata_, "llm_analysis", "assigned_aks")
             priority_order = case(
                 (retry_priority == "high", 1),
-                (retry_priority == "unknown", 2),
-                (retry_priority == "edge_case", 3),
-                (retry_priority == "low", 4),
-                else_=5,
+                (retry_priority == "edge_case", 2),
+                (retry_priority == "low", 3),
+                else_=4,
             )
 
             query = (
                 select(Item.id)
                 .where(
+                    # Must be classified first (pre_filter exists)
+                    pre_filter.is_not(None),
                     or_(
                         # Standard backlog: needs processing and not certainly irrelevant
                         and_(
