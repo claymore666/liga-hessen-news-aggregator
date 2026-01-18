@@ -577,6 +577,7 @@ Verlinkter Artikel von {article.source_domain}:
 
 {article.content[:4000]}"""
 
+                        item.metadata_["article_extracted"] = True
                         item.metadata_["extracted_links"] = links
                         item.metadata_["linked_articles"] = [{
                             "url": article.url,

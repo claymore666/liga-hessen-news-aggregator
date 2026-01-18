@@ -38,7 +38,7 @@ Connectors fetch items from external sources (RSS feeds, social media, etc.) and
 | `instagram` | Instagram | Via proxy services | API key |
 | `instagram_scraper` | Instagram Scraper | Browser-based scraping | Cookies |
 | `linkedin` | LinkedIn | Scraping | Cookies |
-| `telegram` | Telegram | Public channels | Bot token |
+| `telegram` | Telegram | Public channels | None (public) |
 | `html` | HTML Scraper | Generic web scraping | None |
 | `pdf` | PDF | PDF document parsing | None |
 | `google_alerts` | Google Alerts | RSS from Google Alerts | None |
@@ -125,7 +125,9 @@ config = {"url": "...", "follow_links": True}
 
 The `ArticleExtractor` service uses trafilatura to extract clean text from URLs.
 
-**Supported by**: RSS, HTML
+For social media connectors (Mastodon, Bluesky, Telegram), external links in posts are automatically extracted and followed. Internal platform links (e.g., t.me, bsky.app) are filtered out.
+
+**Supported by**: RSS, HTML, Mastodon, Bluesky, Telegram
 
 ## Connector Details
 
@@ -175,24 +177,33 @@ Fediverse timeline fetching via API.
 {
   "instance_url": "https://mastodon.social",
   "access_token": "...",
-  "timeline": "home"
+  "timeline": "home",
+  "follow_links": true
 }
 ```
 
 **Timelines**: `home`, `public`, `hashtag`
 
+**Notes**:
+- `follow_links` extracts and fetches articles from external URLs in posts
+- Internal Mastodon links are filtered out
+
 ### Bluesky (`bluesky`)
 
-Bluesky profile feeds (public, no auth needed).
+Bluesky profile feeds via native RSS (public, no auth needed).
 
 **Config**:
 ```json
 {
   "handle": "user.bsky.social",
-  "include_replies": false,
-  "include_reposts": false
+  "follow_links": true
 }
 ```
+
+**Notes**:
+- Uses Bluesky's native RSS feed at `bsky.app/profile/{handle}/rss`
+- `follow_links` extracts and fetches articles from external URLs in posts
+- Internal Bluesky links (bsky.app, bsky.social) are filtered out
 
 ### X/Twitter Scraper (`x_scraper`)
 
@@ -274,15 +285,24 @@ Web scraping of public profiles/pages.
 
 ### Telegram (`telegram`)
 
-Public channel messages via Bot API.
+Public channel messages via web scraping (no auth needed).
 
 **Config**:
 ```json
 {
-  "channel_username": "example",
-  "bot_token": "..."
+  "channel": "channelname",
+  "max_posts": 20,
+  "include_forwards": true,
+  "follow_links": true
 }
 ```
+
+**Notes**:
+- Scrapes public channels via `t.me/s/{channel}` web preview
+- No authentication required for public channels
+- Only works for PUBLIC channels (not private groups)
+- `follow_links` extracts and fetches articles from external URLs
+- Internal Telegram links (t.me, telegram.org) are filtered out
 
 ### HTML Scraper (`html`)
 
