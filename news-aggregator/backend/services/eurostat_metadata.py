@@ -3,6 +3,9 @@ Eurostat SDMX metadata service.
 
 Fetches and caches dataset metadata from Eurostat's SDMX API to enrich
 RSS feed items with more descriptive information.
+
+Also fetches methodology page content using ArticleExtractor for detailed
+descriptions that help the classifier understand the data.
 """
 
 import logging
@@ -25,6 +28,12 @@ SDMX_NS = {
 _metadata_cache: dict[str, dict] = {}
 _cache_timestamp: Optional[datetime] = None
 CACHE_TTL = timedelta(hours=24)
+
+# Cache for methodology page content (by URL)
+_methodology_cache: dict[str, str] = {}
+
+# Maximum length of methodology excerpt to include
+MAX_METHODOLOGY_LENGTH = 2000
 
 
 class EurostatMetadata:
@@ -116,11 +125,67 @@ class EurostatMetadata:
 
         return _metadata_cache.get(dataset_id.upper())
 
+    async def _fetch_methodology_content(self, url: str) -> Optional[str]:
+        """
+        Fetch and extract content from a methodology page using trafilatura.
+
+        Uses trafilatura directly (not ArticleExtractor) since methodology pages
+        are not news articles and would be filtered out by article detection.
+
+        Args:
+            url: The methodology URL (e.g., https://ec.europa.eu/eurostat/cache/metadata/en/sts_esms.htm)
+
+        Returns:
+            Extracted text content, truncated to MAX_METHODOLOGY_LENGTH, or None on failure
+        """
+        global _methodology_cache
+
+        # Return cached content if available
+        if url in _methodology_cache:
+            return _methodology_cache[url]
+
+        try:
+            import trafilatura
+
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+            # Extract content using trafilatura
+            content = trafilatura.extract(response.text)
+
+            if content:
+                content = content.strip()
+
+                # Try to start from "Data description" section if present
+                # This skips contact info and metadata headers
+                data_desc_idx = content.lower().find("data description")
+                if data_desc_idx > 0:
+                    content = content[data_desc_idx:]
+
+                # Truncate if too long
+                if len(content) > MAX_METHODOLOGY_LENGTH:
+                    # Try to cut at sentence boundary
+                    truncated = content[:MAX_METHODOLOGY_LENGTH]
+                    last_period = truncated.rfind(". ")
+                    if last_period > MAX_METHODOLOGY_LENGTH // 2:
+                        truncated = truncated[: last_period + 1]
+                    content = truncated + "..."
+
+                _methodology_cache[url] = content
+                logger.debug(f"Fetched methodology from {url}: {len(content)} chars")
+                return content
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch methodology from {url}: {e}")
+
+        return None
+
     async def enrich_content(
         self, dataset_id: str, original_content: str, lang: str = "en"
     ) -> str:
         """
-        Enrich RSS content with SDMX metadata.
+        Enrich RSS content with SDMX metadata and methodology description.
 
         Args:
             dataset_id: The Eurostat dataset code
@@ -128,7 +193,7 @@ class EurostatMetadata:
             lang: Language for the name (en, de, fr)
 
         Returns:
-            Enriched content string
+            Enriched content string with dataset info and methodology description
         """
         metadata = await self.get_metadata(dataset_id)
         if not metadata:
@@ -145,7 +210,7 @@ class EurostatMetadata:
 
         # Add original description if different from name
         if original_content and original_content.lower() != (name or "").lower():
-            parts.append(f"Beschreibung: {original_content}")
+            parts.append(f"Kurzbeschreibung: {original_content}")
 
         # Add data coverage info
         period_info = []
@@ -159,8 +224,15 @@ class EurostatMetadata:
         if metadata.get("obs_count"):
             parts.append(f"Datenpunkte: {metadata['obs_count']}")
 
-        if metadata.get("metadata_url"):
-            parts.append(f"Methodische Hinweise: {metadata['metadata_url']}")
+        # Fetch and include methodology content
+        metadata_url = metadata.get("metadata_url")
+        if metadata_url:
+            methodology_content = await self._fetch_methodology_content(metadata_url)
+            if methodology_content:
+                parts.append(f"\nMethodische Beschreibung:\n{methodology_content}")
+            else:
+                # Fallback to just the URL if content fetch fails
+                parts.append(f"Methodische Hinweise: {metadata_url}")
 
         return "\n".join(parts) if parts else original_content
 
