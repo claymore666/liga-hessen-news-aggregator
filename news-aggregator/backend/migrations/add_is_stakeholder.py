@@ -21,17 +21,19 @@ async def migrate():
     """Add is_stakeholder column to sources table."""
     async with engine.begin() as conn:
         # Check if column already exists
-        result = await conn.execute(text("PRAGMA table_info(sources)"))
-        columns = [row[1] for row in result.fetchall()]
+        result = await conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'sources' AND column_name = 'is_stakeholder'
+        """))
 
-        if "is_stakeholder" in columns:
+        if result.fetchone():
             print("Column 'is_stakeholder' already exists, skipping.")
             return True
 
         # Add the new column with default value
         print("Adding 'is_stakeholder' column...")
         await conn.execute(
-            text("ALTER TABLE sources ADD COLUMN is_stakeholder BOOLEAN DEFAULT 0")
+            text("ALTER TABLE sources ADD COLUMN is_stakeholder BOOLEAN DEFAULT FALSE")
         )
         print("Column added.")
 
@@ -43,6 +45,16 @@ async def migrate():
         return True
 
 
+async def rollback():
+    """Remove is_stakeholder column."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE sources DROP COLUMN IF EXISTS is_stakeholder"))
+        print("Successfully dropped 'is_stakeholder' column")
+
+
 if __name__ == "__main__":
-    success = asyncio.run(migrate())
-    sys.exit(0 if success else 1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--rollback":
+        asyncio.run(rollback())
+    else:
+        success = asyncio.run(migrate())
+        sys.exit(0 if success else 1)

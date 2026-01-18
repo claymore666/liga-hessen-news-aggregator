@@ -1,18 +1,16 @@
 #!/bin/bash
-# Liga News Database Backup Script
+# Liga News Database Backup Script (PostgreSQL)
 # Creates timestamped backups with compression and rotation
-# Supports both SQLite and PostgreSQL databases
 #
 # Usage:
-#   ./backup_db.sh                     # Backup local database (auto-detect type)
+#   ./backup_db.sh                     # Backup database
 #   ./backup_db.sh --docker            # Backup from Docker container
 #   ./backup_db.sh --remote user@host:/path  # Copy backup to remote
 #   ./backup_db.sh --keep 14           # Keep 14 backups instead of default 7
 #
 # Environment variables:
-#   DATABASE_URL     - Database connection URL (for PostgreSQL)
+#   DATABASE_URL     - PostgreSQL connection URL
 #   BACKUP_DIR       - Backup directory (default: ./backups)
-#   DB_PATH          - Local SQLite database path (default: ./backend/data/liga_news.db)
 #   DOCKER_CONTAINER - Container name (default: liga-news-backend)
 
 set -euo pipefail
@@ -22,9 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 BACKUP_DIR="${BACKUP_DIR:-${PROJECT_ROOT}/backups}"
-DB_PATH="${DB_PATH:-${PROJECT_ROOT}/backend/data/liga_news.db}"
 DOCKER_CONTAINER="${DOCKER_CONTAINER:-liga-news-backend}"
-DOCKER_DB_PATH="/app/data/liga_news.db"
 KEEP_BACKUPS=7
 REMOTE_TARGET=""
 USE_DOCKER=false
@@ -39,17 +35,6 @@ NC='\033[0m' # No Color
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-# Detect database type from DATABASE_URL
-detect_db_type() {
-    if [[ -n "$DATABASE_URL" && "$DATABASE_URL" == postgresql* ]]; then
-        echo "postgresql"
-    elif [[ -n "$DATABASE_URL" && "$DATABASE_URL" == postgres* ]]; then
-        echo "postgresql"
-    else
-        echo "sqlite"
-    fi
-}
 
 # Parse PostgreSQL URL into components
 # postgresql+asyncpg://user:pass@host:port/dbname -> components
@@ -102,8 +87,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help         Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  DATABASE_URL       PostgreSQL connection URL (auto-uses pg_dump)"
-            echo "  DB_PATH            SQLite database file path"
+            echo "  DATABASE_URL       PostgreSQL connection URL"
             echo "  BACKUP_DIR         Directory for backup files"
             exit 0
             ;;
@@ -119,134 +103,75 @@ mkdir -p "$BACKUP_DIR"
 
 # Generate filename with timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-DB_TYPE=$(detect_db_type)
+BACKUP_FILE="liga_news_${TIMESTAMP}.dump"
+BACKUP_PATH="${BACKUP_DIR}/${BACKUP_FILE}"
 
 echo "============================================"
-echo "  Liga News Database Backup"
+echo "  Liga News Database Backup (PostgreSQL)"
 echo "============================================"
 echo ""
 log_info "Timestamp: $TIMESTAMP"
-log_info "Database type: $DB_TYPE"
 log_info "Backup directory: $BACKUP_DIR"
 
-# Create backup based on database type
-if [[ "$DB_TYPE" == "postgresql" ]]; then
-    BACKUP_FILE="liga_news_${TIMESTAMP}.dump"
-    BACKUP_PATH="${BACKUP_DIR}/${BACKUP_FILE}"
+if $USE_DOCKER; then
+    # Get DATABASE_URL from container
+    CONTAINER_DB_URL=$(docker exec "$DOCKER_CONTAINER" printenv DATABASE_URL 2>/dev/null || echo "")
+    if [[ -z "$CONTAINER_DB_URL" ]]; then
+        log_error "Could not get DATABASE_URL from container $DOCKER_CONTAINER"
+        exit 1
+    fi
+    parse_pg_url "$CONTAINER_DB_URL"
 
-    log_info "Backing up PostgreSQL database"
+    # Use pg_dump from container
+    log_info "Using pg_dump from container: $DOCKER_CONTAINER"
+    docker exec -e PGPASSWORD="$PG_PASS" "$DOCKER_CONTAINER" \
+        pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
+        -F custom -f "/tmp/backup.dump"
+    docker cp "${DOCKER_CONTAINER}:/tmp/backup.dump" "$BACKUP_PATH"
+    docker exec "$DOCKER_CONTAINER" rm /tmp/backup.dump
+else
+    if [[ -z "$DATABASE_URL" ]]; then
+        log_error "DATABASE_URL environment variable required"
+        exit 1
+    fi
 
-    # Parse the URL
     parse_pg_url "$DATABASE_URL"
 
-    if $USE_DOCKER; then
-        # Get DATABASE_URL from container
-        CONTAINER_DB_URL=$(docker exec "$DOCKER_CONTAINER" printenv DATABASE_URL 2>/dev/null || echo "")
-        if [[ -n "$CONTAINER_DB_URL" ]]; then
-            parse_pg_url "$CONTAINER_DB_URL"
-        fi
-
-        # Use pg_dump from container
-        log_info "Using pg_dump from container: $DOCKER_CONTAINER"
-        docker exec -e PGPASSWORD="$PG_PASS" "$DOCKER_CONTAINER" \
-            pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-            -F custom -f "/tmp/backup.dump"
-        docker cp "${DOCKER_CONTAINER}:/tmp/backup.dump" "$BACKUP_PATH"
-        docker exec "$DOCKER_CONTAINER" rm /tmp/backup.dump
-    else
-        # Check if pg_dump is available
-        if ! command -v pg_dump &> /dev/null; then
-            log_error "pg_dump command not found. Please install postgresql-client."
-            exit 1
-        fi
-
-        # Use pg_dump with custom format
-        PGPASSWORD="$PG_PASS" pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-            -F custom -f "$BACKUP_PATH"
-    fi
-
-    # Verify backup was created
-    if [[ ! -f "$BACKUP_PATH" ]]; then
-        log_error "Backup file was not created"
+    # Check if pg_dump is available
+    if ! command -v pg_dump &> /dev/null; then
+        log_error "pg_dump command not found. Please install postgresql-client."
         exit 1
     fi
 
-    # Verify backup integrity using pg_restore --list
-    log_info "Verifying backup integrity..."
-    if pg_restore --list "$BACKUP_PATH" > /dev/null 2>&1; then
-        log_info "Integrity check: PASSED"
-    else
-        log_error "Integrity check: FAILED"
-        rm -f "$BACKUP_PATH"
-        exit 1
-    fi
+    log_info "Backing up: $PG_HOST:$PG_PORT/$PG_DB"
 
-    # Get row counts for verification
-    ITEM_COUNT=$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-        -t -c "SELECT COUNT(*) FROM items;" 2>/dev/null | tr -d ' ' || echo "0")
-    SOURCE_COUNT=$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-        -t -c "SELECT COUNT(*) FROM sources;" 2>/dev/null | tr -d ' ' || echo "0")
-    log_info "Backup contains: $ITEM_COUNT items, $SOURCE_COUNT sources"
-
-else
-    # SQLite backup
-    BACKUP_FILE="liga_news_${TIMESTAMP}.db"
-    BACKUP_PATH="${BACKUP_DIR}/${BACKUP_FILE}"
-
-    if $USE_DOCKER; then
-        log_info "Backing up from Docker container: $DOCKER_CONTAINER"
-
-        # Check if container is running
-        if ! docker ps --format '{{.Names}}' | grep -q "^${DOCKER_CONTAINER}$"; then
-            log_error "Container '$DOCKER_CONTAINER' is not running"
-            exit 1
-        fi
-
-        # Use sqlite3 backup command for consistent snapshot
-        docker exec "$DOCKER_CONTAINER" sqlite3 "$DOCKER_DB_PATH" ".backup '/tmp/backup.db'"
-        docker cp "${DOCKER_CONTAINER}:/tmp/backup.db" "$BACKUP_PATH"
-        docker exec "$DOCKER_CONTAINER" rm /tmp/backup.db
-    else
-        log_info "Backing up local file: $DB_PATH"
-
-        # Check if database exists
-        if [[ ! -f "$DB_PATH" ]]; then
-            log_error "Database file not found: $DB_PATH"
-            exit 1
-        fi
-
-        # Check if sqlite3 is available
-        if ! command -v sqlite3 &> /dev/null; then
-            log_error "sqlite3 command not found. Please install sqlite3."
-            exit 1
-        fi
-
-        sqlite3 "$DB_PATH" ".backup '${BACKUP_PATH}'"
-    fi
-
-    # Verify backup was created
-    if [[ ! -f "$BACKUP_PATH" ]]; then
-        log_error "Backup file was not created"
-        exit 1
-    fi
-
-    # Verify backup integrity
-    log_info "Verifying backup integrity..."
-    INTEGRITY_CHECK=$(sqlite3 "$BACKUP_PATH" "PRAGMA integrity_check;" 2>&1)
-    if [[ "$INTEGRITY_CHECK" == "ok" ]]; then
-        log_info "Integrity check: PASSED"
-    else
-        log_error "Integrity check: FAILED"
-        log_error "$INTEGRITY_CHECK"
-        rm -f "$BACKUP_PATH"
-        exit 1
-    fi
-
-    # Get item count for verification
-    ITEM_COUNT=$(sqlite3 "$BACKUP_PATH" "SELECT COUNT(*) FROM items;" 2>/dev/null || echo "0")
-    SOURCE_COUNT=$(sqlite3 "$BACKUP_PATH" "SELECT COUNT(*) FROM sources;" 2>/dev/null || echo "0")
-    log_info "Backup contains: $ITEM_COUNT items, $SOURCE_COUNT sources"
+    # Use pg_dump with custom format
+    PGPASSWORD="$PG_PASS" pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
+        -F custom -f "$BACKUP_PATH"
 fi
+
+# Verify backup was created
+if [[ ! -f "$BACKUP_PATH" ]]; then
+    log_error "Backup file was not created"
+    exit 1
+fi
+
+# Verify backup integrity using pg_restore --list
+log_info "Verifying backup integrity..."
+if pg_restore --list "$BACKUP_PATH" > /dev/null 2>&1; then
+    log_info "Integrity check: PASSED"
+else
+    log_error "Integrity check: FAILED"
+    rm -f "$BACKUP_PATH"
+    exit 1
+fi
+
+# Get row counts for verification
+ITEM_COUNT=$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
+    -t -c "SELECT COUNT(*) FROM items;" 2>/dev/null | tr -d ' ' || echo "0")
+SOURCE_COUNT=$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
+    -t -c "SELECT COUNT(*) FROM sources;" 2>/dev/null | tr -d ' ' || echo "0")
+log_info "Backup contains: $ITEM_COUNT items, $SOURCE_COUNT sources"
 
 # Compress backup
 log_info "Compressing backup..."
@@ -271,14 +196,12 @@ if [[ -n "$REMOTE_TARGET" ]]; then
     fi
 fi
 
-# Rotate old backups (match both .db.gz and .dump.gz)
+# Rotate old backups
 log_info "Rotating old backups (keeping $KEEP_BACKUPS)..."
 DELETED=0
-for pattern in "liga_news_*.db.gz" "liga_news_*.dump.gz"; do
-    while IFS= read -r OLD_BACKUP; do
-        rm -v "$OLD_BACKUP" 2>/dev/null && ((DELETED++)) || true
-    done < <(ls -t "${BACKUP_DIR}"/$pattern 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)))
-done
+while IFS= read -r OLD_BACKUP; do
+    rm -v "$OLD_BACKUP" 2>/dev/null && ((DELETED++)) || true
+done < <(ls -t "${BACKUP_DIR}"/liga_news_*.dump.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)))
 
 if [[ $DELETED -gt 0 ]]; then
     log_info "Deleted $DELETED old backup(s)"

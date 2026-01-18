@@ -1,13 +1,15 @@
 """API endpoints for dashboard statistics."""
 
 from datetime import datetime, timedelta
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db
-from models import Channel, Item, Priority, Rule, Source
+from database import get_db, json_extract_path
+from models import Channel, Item, ItemEvent, Priority, Rule, Source
 from schemas import ChannelStats, SourceStats, StatsResponse
 
 router = APIRouter()
@@ -276,3 +278,150 @@ async def get_stats_by_priority(
         result[priority.value] = count
 
     return result
+
+
+class ClassifierAgreementStats(BaseModel):
+    """Response model for classifier agreement statistics."""
+    period_days: int
+    total_items: int
+    items_with_agreement: int
+    relevance: dict[str, Any]
+    priority: dict[str, Any]
+    ak: dict[str, Any]
+    by_classifier_version: dict[str, dict[str, Any]] | None = None
+
+
+@router.get("/stats/classifier-agreement", response_model=ClassifierAgreementStats)
+async def get_classifier_agreement(
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(7, ge=1, le=90, description="Number of days to analyze"),
+) -> ClassifierAgreementStats:
+    """Get classifier vs LLM agreement statistics.
+
+    Analyzes items processed by both classifier and LLM to track:
+    - Relevance agreement (both say relevant or both say irrelevant)
+    - Priority agreement (exact match and within-one-level)
+    - AK agreement (exact match and partial overlap)
+
+    Used to monitor classifier quality and detect drift over time.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # Query LLM events with agreement data
+    query = (
+        select(ItemEvent)
+        .where(ItemEvent.event_type == "llm_processed")
+        .where(ItemEvent.timestamp >= since)
+    )
+
+    result = await db.execute(query)
+    events = result.scalars().all()
+
+    # Filter events that have agreement data
+    events_with_agreement = [
+        e for e in events
+        if e.data and e.data.get("agreement")
+    ]
+
+    if not events_with_agreement:
+        return ClassifierAgreementStats(
+            period_days=days,
+            total_items=len(events),
+            items_with_agreement=0,
+            relevance={"agreement_rate": None, "matches": 0, "mismatches": 0},
+            priority={"exact_match": None, "within_one": None},
+            ak={"exact_match": None, "partial_match": None},
+        )
+
+    # Aggregate metrics
+    relevance_matches = 0
+    relevance_mismatches = 0
+    priority_exact = 0
+    priority_within_one = 0
+    ak_exact = 0
+    ak_partial = 0
+
+    # Track by classifier version
+    by_version: dict[str, dict[str, int]] = {}
+
+    for event in events_with_agreement:
+        agreement = event.data["agreement"]
+
+        # Relevance
+        if agreement.get("relevance_match"):
+            relevance_matches += 1
+        else:
+            relevance_mismatches += 1
+
+        # Priority
+        if agreement.get("priority_match"):
+            priority_exact += 1
+        if agreement.get("priority_within_one"):
+            priority_within_one += 1
+
+        # AK
+        if agreement.get("ak_exact_match"):
+            ak_exact += 1
+        if agreement.get("ak_partial_match"):
+            ak_partial += 1
+
+        # Track by version
+        version = agreement.get("classifier_version") or "unknown"
+        if version not in by_version:
+            by_version[version] = {
+                "total": 0,
+                "relevance_matches": 0,
+                "priority_exact": 0,
+                "ak_exact": 0,
+            }
+        by_version[version]["total"] += 1
+        if agreement.get("relevance_match"):
+            by_version[version]["relevance_matches"] += 1
+        if agreement.get("priority_match"):
+            by_version[version]["priority_exact"] += 1
+        if agreement.get("ak_exact_match"):
+            by_version[version]["ak_exact"] += 1
+
+    total = len(events_with_agreement)
+
+    # Compute rates
+    relevance_rate = relevance_matches / total if total > 0 else None
+    priority_exact_rate = priority_exact / total if total > 0 else None
+    priority_within_one_rate = priority_within_one / total if total > 0 else None
+    ak_exact_rate = ak_exact / total if total > 0 else None
+    ak_partial_rate = ak_partial / total if total > 0 else None
+
+    # Compute rates by version
+    by_version_stats = {}
+    for version, counts in by_version.items():
+        v_total = counts["total"]
+        by_version_stats[version] = {
+            "total": v_total,
+            "relevance_rate": counts["relevance_matches"] / v_total if v_total > 0 else None,
+            "priority_exact_rate": counts["priority_exact"] / v_total if v_total > 0 else None,
+            "ak_exact_rate": counts["ak_exact"] / v_total if v_total > 0 else None,
+        }
+
+    return ClassifierAgreementStats(
+        period_days=days,
+        total_items=len(events),
+        items_with_agreement=total,
+        relevance={
+            "agreement_rate": round(relevance_rate, 3) if relevance_rate else None,
+            "matches": relevance_matches,
+            "mismatches": relevance_mismatches,
+        },
+        priority={
+            "exact_match": round(priority_exact_rate, 3) if priority_exact_rate else None,
+            "within_one": round(priority_within_one_rate, 3) if priority_within_one_rate else None,
+            "exact_count": priority_exact,
+            "within_one_count": priority_within_one,
+        },
+        ak={
+            "exact_match": round(ak_exact_rate, 3) if ak_exact_rate else None,
+            "partial_match": round(ak_partial_rate, 3) if ak_partial_rate else None,
+            "exact_count": ak_exact,
+            "partial_count": ak_partial,
+        },
+        by_classifier_version=by_version_stats if len(by_version_stats) > 1 else None,
+    )

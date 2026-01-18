@@ -26,11 +26,11 @@ from services.classifier_worker import (
 
 async def run_migrations() -> None:
     """Run database migrations for existing databases."""
-    from database import engine, is_sqlite
+    from database import engine
     from sqlalchemy import inspect, text
 
     async with engine.begin() as conn:
-        # Database-agnostic table existence check
+        # Check if items table exists
         def check_table_exists(sync_conn):
             inspector = inspect(sync_conn)
             return "items" in inspector.get_table_names()
@@ -39,14 +39,14 @@ async def run_migrations() -> None:
         if not has_items:
             return  # No items table yet, init_db will create it
 
-        # Database-agnostic column check
+        # Get existing columns
         def get_columns(sync_conn):
             inspector = inspect(sync_conn)
             return [col["name"] for col in inspector.get_columns("items")]
 
         columns = await conn.run_sync(get_columns)
 
-        # Add missing columns (SQL syntax works on both SQLite and PostgreSQL)
+        # Add missing columns
         migrations = [
             ("is_archived", "ALTER TABLE items ADD COLUMN is_archived BOOLEAN DEFAULT FALSE"),
             ("assigned_ak", "ALTER TABLE items ADD COLUMN assigned_ak VARCHAR(10)"),
@@ -62,38 +62,22 @@ async def run_migrations() -> None:
 
         # Migrate assigned_ak from metadata to column for existing items
         if "assigned_ak" not in columns:
-            if is_sqlite():
-                await conn.execute(text("""
-                    UPDATE items
-                    SET assigned_ak = json_extract(metadata, '$.llm_analysis.assigned_ak')
-                    WHERE json_extract(metadata, '$.llm_analysis.assigned_ak') IS NOT NULL
-                      AND assigned_ak IS NULL
-                """))
-            else:
-                await conn.execute(text("""
-                    UPDATE items
-                    SET assigned_ak = metadata #>> '{llm_analysis,assigned_ak}'
-                    WHERE metadata #>> '{llm_analysis,assigned_ak}' IS NOT NULL
-                      AND assigned_ak IS NULL
-                """))
+            await conn.execute(text("""
+                UPDATE items
+                SET assigned_ak = metadata #>> '{llm_analysis,assigned_ak}'
+                WHERE metadata #>> '{llm_analysis,assigned_ak}' IS NOT NULL
+                  AND assigned_ak IS NULL
+            """))
 
         # Migrate assigned_ak (single) to assigned_aks (array) for existing items
         if "assigned_aks" not in columns:
             logging.info("Migration: Converting assigned_ak to assigned_aks array")
-            if is_sqlite():
-                await conn.execute(text("""
-                    UPDATE items
-                    SET assigned_aks = json_array(assigned_ak)
-                    WHERE assigned_ak IS NOT NULL
-                      AND (assigned_aks IS NULL OR assigned_aks = '[]')
-                """))
-            else:
-                await conn.execute(text("""
-                    UPDATE items
-                    SET assigned_aks = jsonb_build_array(assigned_ak)
-                    WHERE assigned_ak IS NOT NULL
-                      AND (assigned_aks IS NULL OR assigned_aks::text = '[]')
-                """))
+            await conn.execute(text("""
+                UPDATE items
+                SET assigned_aks = jsonb_build_array(assigned_ak)
+                WHERE assigned_ak IS NOT NULL
+                  AND (assigned_aks IS NULL OR assigned_aks::text = '[]')
+            """))
             logging.info("Migration: assigned_ak values converted to assigned_aks arrays")
 
         # Migrate priority values: critical→high, high→medium, medium→low, low→none
@@ -118,7 +102,6 @@ async def run_migrations() -> None:
 
         # One-time migration: Clear pre_filter for items that were never LLM processed
         # This allows the classifier worker to reclassify them with the new priority logic
-        # (classifier takes precedence over keywords)
         result = await conn.execute(text(
             "SELECT value FROM settings WHERE key = 'classifier_reclassify_migration_done'"
         ))
@@ -134,36 +117,21 @@ async def run_migrations() -> None:
             if items_to_reclassify > 0:
                 logging.info(f"Migration: Marking {items_to_reclassify} non-LLM-processed items for reclassification")
                 # Clear pre_filter metadata so classifier worker will reprocess them
-                if is_sqlite():
-                    await conn.execute(text("""
-                        UPDATE items
-                        SET metadata = json_remove(metadata, '$.pre_filter')
-                        WHERE (summary IS NULL OR summary = '')
-                          AND json_extract(metadata, '$.pre_filter') IS NOT NULL
-                    """))
-                else:
-                    await conn.execute(text("""
-                        UPDATE items
-                        SET metadata = metadata #- '{pre_filter}'
-                        WHERE (summary IS NULL OR summary = '')
-                          AND metadata #>> '{pre_filter}' IS NOT NULL
-                    """))
+                await conn.execute(text("""
+                    UPDATE items
+                    SET metadata = metadata #- '{pre_filter}'
+                    WHERE (summary IS NULL OR summary = '')
+                      AND metadata #>> '{pre_filter}' IS NOT NULL
+                """))
                 logging.info("Migration: Items marked for reclassification")
 
-            # Mark migration as complete (use upsert syntax that works on both)
-            if is_sqlite():
-                await conn.execute(text("""
-                    INSERT OR REPLACE INTO settings (key, value, description)
-                    VALUES ('classifier_reclassify_migration_done', '"true"',
-                            'One-time migration to reclassify non-LLM-processed items with new priority logic')
-                """))
-            else:
-                await conn.execute(text("""
-                    INSERT INTO settings (key, value, description)
-                    VALUES ('classifier_reclassify_migration_done', '"true"',
-                            'One-time migration to reclassify non-LLM-processed items with new priority logic')
-                    ON CONFLICT (key) DO UPDATE SET value = '"true"'
-                """))
+            # Mark migration as complete
+            await conn.execute(text("""
+                INSERT INTO settings (key, value, description)
+                VALUES ('classifier_reclassify_migration_done', '"true"',
+                        'One-time migration to reclassify non-LLM-processed items with new priority logic')
+                ON CONFLICT (key) DO UPDATE SET value = '"true"'
+            """))
             logging.info("Migration: Classifier reclassify migration marked complete")
 
 

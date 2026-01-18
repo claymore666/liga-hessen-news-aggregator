@@ -19,10 +19,12 @@ async def migrate():
     """Add source_identifier column and populate existing data."""
     async with engine.begin() as conn:
         # Check if column already exists
-        result = await conn.execute(text("PRAGMA table_info(sources)"))
-        columns = [row[1] for row in result.fetchall()]
+        result = await conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'sources' AND column_name = 'source_identifier'
+        """))
 
-        if "source_identifier" in columns:
+        if result.fetchone():
             print("Column 'source_identifier' already exists, skipping creation.")
         else:
             # Add the new column
@@ -70,7 +72,7 @@ async def migrate():
                 FROM sources
                 WHERE source_identifier IS NOT NULL
                 GROUP BY connector_type, source_identifier
-                HAVING cnt > 1
+                HAVING COUNT(*) > 1
             """)
         )
         duplicates = result.fetchall()

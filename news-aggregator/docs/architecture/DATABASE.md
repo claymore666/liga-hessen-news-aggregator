@@ -20,9 +20,9 @@ Database can be configured via environment variables:
 | `DATABASE_PASSWORD` | Password | - |
 | `DATABASE_DRIVER` | SQLAlchemy async driver | postgresql+asyncpg |
 
-**Priority**: `DATABASE_URL` > components > SQLite fallback
+**Note**: PostgreSQL is required. No SQLite fallback.
 
-### Connection Pool (PostgreSQL only)
+### Connection Pool
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -43,8 +43,11 @@ DATABASE_USER=app
 DATABASE_PASSWORD=secret
 DATABASE_NAME=liga_news
 
-# Development (default SQLite)
-# No variables needed - uses ./data/news_aggregator.db
+# Local Docker (common development setup)
+DATABASE_HOST=localhost
+DATABASE_USER=postgres
+DATABASE_PASSWORD=postgres
+DATABASE_NAME=liga_news
 ```
 
 ## Entity Relationship

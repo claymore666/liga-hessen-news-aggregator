@@ -395,8 +395,13 @@ class LLMWorker:
                     # Commit after each item so count updates in real-time
                     await db.commit()
 
-                    # Record LLM processing event
+                    # Record LLM processing event with classifier agreement
                     from services.item_events import record_event, EVENT_LLM_PROCESSED
+
+                    # Compute agreement with classifier
+                    agreement = await self._compute_classifier_agreement(
+                        db, item.id, llm_priority, llm_aks
+                    )
 
                     await record_event(
                         db,
@@ -407,6 +412,7 @@ class LLMWorker:
                             "assigned_aks": llm_aks,
                             "relevance_score": analysis.get("relevance_score"),
                             "source": item_type,
+                            "agreement": agreement,
                         },
                     )
 
@@ -439,6 +445,100 @@ class LLMWorker:
                     self._stats["errors"] += 1
 
         return processed
+
+    async def _compute_classifier_agreement(
+        self,
+        db,
+        item_id: int,
+        llm_priority: str | None,
+        llm_aks: list[str],
+    ) -> dict | None:
+        """
+        Compute agreement between classifier and LLM predictions.
+
+        Args:
+            db: Database session
+            item_id: Item ID to look up classifier event
+            llm_priority: LLM's priority prediction
+            llm_aks: LLM's AK predictions
+
+        Returns:
+            Agreement dict or None if no classifier event found
+        """
+        from models import ItemEvent
+
+        try:
+            # Fetch most recent classifier event for this item
+            result = await db.execute(
+                select(ItemEvent)
+                .where(ItemEvent.item_id == item_id)
+                .where(ItemEvent.event_type == "classifier_processed")
+                .order_by(ItemEvent.timestamp.desc())
+                .limit(1)
+            )
+            classifier_event = result.scalar_one_or_none()
+
+            if not classifier_event or not classifier_event.data:
+                return None
+
+            clf_data = classifier_event.data
+
+            # Get classifier predictions
+            clf_priority = clf_data.get("priority")
+            clf_aks = clf_data.get("aks", [])
+            # Fallback to single AK for older events
+            if not clf_aks and clf_data.get("ak_suggestion"):
+                clf_aks = [clf_data["ak_suggestion"]]
+
+            # Compute relevance agreement (relevant = priority != none)
+            clf_relevant = clf_priority not in (None, "none")
+            llm_relevant = llm_priority not in (None, "none")
+            relevance_match = clf_relevant == llm_relevant
+
+            # Compute priority agreement
+            priority_match = clf_priority == llm_priority
+
+            # Compute priority within one level
+            priority_order = {"high": 3, "medium": 2, "low": 1, "none": 0, None: 0}
+            clf_level = priority_order.get(clf_priority, 0)
+            llm_level = priority_order.get(llm_priority, 0)
+            priority_within_one = abs(clf_level - llm_level) <= 1
+
+            # Compute AK agreement
+            clf_ak_set = set(clf_aks) if clf_aks else set()
+            llm_ak_set = set(llm_aks) if llm_aks else set()
+            ak_exact_match = clf_ak_set == llm_ak_set
+            ak_partial_match = bool(clf_ak_set & llm_ak_set) if clf_ak_set and llm_ak_set else False
+
+            # Track what LLM changed
+            llm_superseded = []
+            if not priority_match:
+                llm_superseded.append("priority")
+            if not ak_exact_match:
+                llm_superseded.append("aks")
+
+            return {
+                "classifier_version": clf_data.get("version"),
+                "relevance_match": relevance_match,
+                "priority_match": priority_match,
+                "priority_within_one": priority_within_one,
+                "ak_exact_match": ak_exact_match,
+                "ak_partial_match": ak_partial_match,
+                "llm_superseded": llm_superseded,
+                "classifier": {
+                    "priority": clf_priority,
+                    "aks": clf_aks,
+                    "relevance_confidence": clf_data.get("relevance_confidence"),
+                },
+                "llm": {
+                    "priority": llm_priority,
+                    "aks": llm_aks,
+                },
+            }
+
+        except Exception as e:
+            logger.warning(f"Error computing classifier agreement for item {item_id}: {e}")
+            return None
 
 
 # Global worker instance
