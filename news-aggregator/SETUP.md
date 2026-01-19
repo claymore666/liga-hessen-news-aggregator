@@ -116,7 +116,14 @@ npm run dev
 
 ## Production Deployment
 
-### Production Server
+### Infrastructure Overview
+
+| Server | IP | Role |
+|--------|-----|------|
+| docker-ai | 192.168.0.124 | Production host (backend, frontend, PostgreSQL) |
+| gpu1 | 192.168.0.141 | LLM processing (Ollama) + ML classifier |
+
+### Production Server (docker-ai)
 
 | Property | Value |
 |----------|-------|
@@ -124,16 +131,34 @@ npm run dev
 | SSH | `ssh kamienc@192.168.0.124` |
 | Project Path | `/home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator/` |
 | Compose File | `docker-compose.prod.yml` |
-| LLM Server | gpu1 (192.168.0.141:11434) with model `liga-relevance` |
+| LAN Interface | `ens18` (for macvlan network) |
+
+### GPU Server (gpu1)
+
+| Property | Value |
+|----------|-------|
+| Host | gpu1 at 192.168.0.141 |
+| MAC Address | `58:47:ca:7c:18:cc` (for Wake-on-LAN) |
+| Ollama | Port 11434, model `qwen3:14b-q8_0` |
+| Classifier | Port 8082 |
+| WoL User | `ligahessen` (passwordless shutdown) |
 
 ### Production Architecture
 
 | Component | Container | Port | Notes |
 |-----------|-----------|------|-------|
-| Backend | liga-news-backend | 8000 | Python/FastAPI |
+| Backend | liga-news-backend | 8000 | Python/FastAPI + WoL support |
 | Frontend | liga-news-frontend | 3001 | Vue 3 via nginx |
-| Database | PostgreSQL | 5432 | Volume: `liga-news-db` |
-| LLM | External | - | Ollama on gpu1 |
+| Database | liga-news-db | 5432 | PostgreSQL 17 |
+| LLM | External (gpu1) | 11434 | Ollama (woken via WoL if sleeping) |
+| Classifier | External (gpu1) | 8082 | ML embedding classifier |
+
+### Network Configuration
+
+The backend container uses a macvlan network to send Wake-on-LAN packets:
+- Container IP: `192.168.0.200` on the LAN
+- Can reach gpu1 directly and send broadcast packets
+- Uses default bridge network for database connectivity
 
 ### Deployment Commands
 
@@ -145,37 +170,63 @@ ssh kamienc@192.168.0.124
 cd /home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator
 
 # Pull latest changes
-git pull origin main
+git pull origin dev
 
 # Rebuild and restart (after code changes)
-sudo docker compose -f docker-compose.prod.yml build --no-cache
-sudo docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d --build
 
 # Quick restart (no rebuild)
-sudo docker compose -f docker-compose.prod.yml up -d
-
-# Stop containers
-sudo docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml restart
 
 # View logs
-sudo docker logs -f liga-news-backend
-sudo docker logs -f liga-news-frontend
+docker logs -f liga-news-backend
+docker logs -f liga-news-frontend
 
 # Check status
-sudo docker ps -a | grep liga-news
+docker ps | grep liga-news
 ```
+
+### Database Operations
+
+```bash
+# Export database from gpu1 (source)
+docker exec liga-news-db pg_dump -U liga -d liga_news --clean --if-exists > /tmp/liga_news_dump.sql
+
+# Import on docker-ai (target)
+docker exec -i liga-news-db psql -U liga -d liga_news < /tmp/liga_news_dump.sql
+
+# Check database stats
+docker exec liga-news-db psql -U liga -d liga_news -c "SELECT COUNT(*) FROM items;"
+```
+
+### Wake-on-LAN Configuration
+
+The system automatically wakes gpu1 when LLM processing is needed:
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| `GPU1_WOL_ENABLED` | `true` | Enable WoL feature |
+| `GPU1_AUTO_SHUTDOWN` | `true` | Shutdown gpu1 after idle |
+| `GPU1_IDLE_TIMEOUT` | `300` | 5 minutes before auto-shutdown |
+
+SSH key for shutdown is stored in `./ssh/id_ed25519` (mounted read-only).
+
+See [docs/operations/GPU1_POWER_MANAGEMENT.md](docs/operations/GPU1_POWER_MANAGEMENT.md) for details.
 
 ### Data Persistence
 
-- **Volume**: `liga-news-db` for PostgreSQL data
-- Data survives container rebuilds
+| Volume | Container | Purpose |
+|--------|-----------|---------|
+| `liga-news-postgres` | liga-news-db | PostgreSQL data |
+| `liga-news-data` | liga-news-backend | Backend data files |
 
 ### Security Checklist
 
-- [ ] Change `SECRET_KEY` in `.env`
-- [ ] Configure proper CORS origins
+- [x] PostgreSQL password set in `.env`
+- [x] SSH key for gpu1 shutdown (read-only mount)
 - [ ] Configure backup for PostgreSQL database
-- [ ] Set appropriate log levels
+- [ ] Set appropriate log levels for production
 
 ## Troubleshooting
 
