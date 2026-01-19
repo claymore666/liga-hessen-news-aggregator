@@ -44,6 +44,8 @@ class GPU1PowerManager:
         auto_shutdown: bool = True,
         idle_timeout: int = 300,
         wake_timeout: int = 120,
+        active_hours_start: int = 8,
+        active_hours_end: int = 16,
     ):
         """
         Initialize GPU1 power manager.
@@ -58,6 +60,8 @@ class GPU1PowerManager:
             auto_shutdown: Whether to shutdown after idle if we woke it
             idle_timeout: Seconds idle before auto-shutdown
             wake_timeout: Max seconds to wait after WoL
+            active_hours_start: Hour (0-23) when gpu1 usage is allowed
+            active_hours_end: Hour (0-23) when gpu1 usage stops
         """
         self.mac_address = mac_address
         self.ollama_url = ollama_url.rstrip("/")
@@ -68,6 +72,8 @@ class GPU1PowerManager:
         self.auto_shutdown = auto_shutdown
         self.idle_timeout = idle_timeout
         self.wake_timeout = wake_timeout
+        self.active_hours_start = active_hours_start
+        self.active_hours_end = active_hours_end
 
         # State tracking
         self._was_sleeping = False
@@ -78,6 +84,22 @@ class GPU1PowerManager:
     def was_sleeping(self) -> bool:
         """Whether gpu1 was sleeping when we last checked."""
         return self._was_sleeping
+
+    def is_within_active_hours(self) -> bool:
+        """
+        Check if current time is within the allowed active hours.
+
+        Returns:
+            True if gpu1 usage is allowed now, False otherwise
+        """
+        current_hour = datetime.now().hour
+
+        # Handle same-day range (e.g., 8-16)
+        if self.active_hours_start < self.active_hours_end:
+            return self.active_hours_start <= current_hour < self.active_hours_end
+
+        # Handle overnight range (e.g., 22-6)
+        return current_hour >= self.active_hours_start or current_hour < self.active_hours_end
 
     async def is_available(self) -> bool:
         """
@@ -158,14 +180,25 @@ class GPU1PowerManager:
 
         This is the main entry point for LLM worker integration.
         Checks availability, sends WoL if needed, waits for ready.
+        Respects active hours - won't wake gpu1 outside configured window.
 
         Returns:
-            True if Ollama is available, False if wake/wait failed
+            True if Ollama is available, False if wake/wait failed or outside active hours
         """
         # First check if already available
         if await self.is_available():
             logger.debug("gpu1 already available")
             return True
+
+        # Check if we're within active hours before trying to wake
+        if not self.is_within_active_hours():
+            current_hour = datetime.now().hour
+            logger.info(
+                f"gpu1 not available, but outside active hours "
+                f"(current: {current_hour}:00, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00). "
+                f"Skipping WoL."
+            )
+            return False
 
         # Not available, try to wake
         logger.info("gpu1 not available, sending Wake-on-LAN...")
@@ -339,11 +372,14 @@ def get_power_manager() -> Optional[GPU1PowerManager]:
         auto_shutdown=settings.gpu1_auto_shutdown,
         idle_timeout=settings.gpu1_idle_timeout,
         wake_timeout=settings.gpu1_wake_timeout,
+        active_hours_start=settings.gpu1_active_hours_start,
+        active_hours_end=settings.gpu1_active_hours_end,
     )
 
     logger.info(
         f"GPU1 power manager initialized: "
         f"MAC={settings.gpu1_mac_address}, "
+        f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00, "
         f"broadcast={settings.gpu1_broadcast}, "
         f"auto_shutdown={settings.gpu1_auto_shutdown}"
     )
