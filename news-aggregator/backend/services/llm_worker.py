@@ -126,21 +126,24 @@ class LLMWorker:
 
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""
+        from services.gpu1_power import get_power_manager
+        from services.processor import create_processor_from_settings
+
+        # Always check if gpu1 is available (even if processor is cached)
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            if not await power_mgr.is_available():
+                logger.info("gpu1 not available, attempting Wake-on-LAN...")
+                if await power_mgr.ensure_available():
+                    logger.info("gpu1 woken and ready for LLM processing")
+                    # Clear cached processor since gpu1 was asleep
+                    self._processor = None
+                else:
+                    logger.warning("Failed to wake gpu1, LLM processing unavailable")
+                    self._processor = None
+                    return None
+
         if self._processor is None:
-            from services.gpu1_power import get_power_manager
-            from services.processor import create_processor_from_settings
-
-            # Check if gpu1 needs waking
-            power_mgr = get_power_manager()
-            if power_mgr is not None:
-                if not await power_mgr.is_available():
-                    logger.info("gpu1 not available, attempting Wake-on-LAN...")
-                    if await power_mgr.ensure_available():
-                        logger.info("gpu1 woken and ready for LLM processing")
-                    else:
-                        logger.warning("Failed to wake gpu1, LLM processing unavailable")
-                        return None
-
             self._processor = await create_processor_from_settings()
         return self._processor
 
