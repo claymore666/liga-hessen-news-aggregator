@@ -192,7 +192,12 @@ class GPU1PowerManager:
             logger.debug("gpu1 already available")
             return True
 
-        # gpu1 is not available - check if we're allowed to wake it
+        # gpu1 is not available - if we previously woke it, it was shut down externally
+        if self._was_sleeping:
+            logger.info("gpu1 went down (external shutdown), resetting wake state")
+            self.reset_state()
+
+        # Check if we're allowed to wake it
         if not self.is_within_active_hours():
             current_hour = datetime.now().hour
             logger.info(
