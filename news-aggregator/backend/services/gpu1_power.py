@@ -270,6 +270,64 @@ class GPU1PowerManager:
             logger.error(f"Failed to shutdown gpu1: {e}")
             return False
 
+    async def has_other_users(self) -> bool:
+        """
+        Check if users other than ligahessen are logged into gpu1.
+
+        Returns:
+            True if other users are logged in, False if only ligahessen or no users
+        """
+        try:
+            cmd = [
+                "ssh",
+                "-i", self.ssh_key_path,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=10",
+                "-o", "BatchMode=yes",
+                f"{self.ssh_user}@{self.ssh_host}",
+                "who",
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+
+            if proc.returncode != 0:
+                logger.warning(f"Failed to check users on gpu1: {stderr.decode()}")
+                return True  # Assume users present on error (safe default)
+
+            # Parse who output - each line is a logged in user
+            # Format: username tty date time (ip)
+            lines = stdout.decode().strip().split('\n')
+            other_users = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                username = line.split()[0]
+                if username != self.ssh_user:  # Not ligahessen
+                    other_users.append(username)
+
+            if other_users:
+                unique_users = list(set(other_users))
+                logger.info(
+                    f"Users logged into gpu1: {', '.join(unique_users)} - skipping shutdown"
+                )
+                return True
+
+            return False
+
+        except asyncio.TimeoutError:
+            logger.warning("Timeout checking gpu1 users, assuming users present")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Error checking gpu1 users: {e}")
+            return True  # Assume users present on error (safe default)
+
     def record_activity(self):
         """Record that LLM processing activity occurred."""
         self._last_activity = time.time()
@@ -293,6 +351,7 @@ class GPU1PowerManager:
         - auto_shutdown is enabled
         - We woke gpu1 (was_sleeping is True)
         - Idle time exceeds idle_timeout
+        - No other users are logged in (only ligahessen or no users)
 
         Returns:
             True if shutdown was triggered, False otherwise
@@ -311,9 +370,14 @@ class GPU1PowerManager:
             )
             return False
 
+        # Check if other users are logged in before shutdown
+        if await self.has_other_users():
+            logger.debug("Skipping shutdown due to other users on gpu1")
+            return False
+
         logger.info(
             f"gpu1 idle for {idle_time:.0f}s (>{self.idle_timeout}s), "
-            "shutting down..."
+            "no other users logged in, shutting down..."
         )
 
         if await self.shutdown():
