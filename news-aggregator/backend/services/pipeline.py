@@ -149,20 +149,31 @@ class Pipeline:
                         )
 
                         # Record duplicate detection in audit trail of EXISTING item
+                        # First verify the item still exists (vector index may be out of sync)
+                        from sqlalchemy import select
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
                         try:
-                            await record_event(
-                                self.db,
-                                similar_to_id,  # Existing item ID
-                                EVENT_DUPLICATE_DETECTED,
-                                data={
-                                    "duplicate_title": normalized.title,
-                                    "duplicate_source": channel.source.name if channel.source else None,
-                                    "duplicate_channel_id": channel.id,
-                                    "duplicate_url": normalized.url,
-                                    "similarity_score": best_match.get("score"),
-                                },
+                            existing = await self.db.scalar(
+                                select(Item.id).where(Item.id == similar_to_id)
                             )
+                            if existing:
+                                await record_event(
+                                    self.db,
+                                    similar_to_id,  # Existing item ID
+                                    EVENT_DUPLICATE_DETECTED,
+                                    data={
+                                        "duplicate_title": normalized.title,
+                                        "duplicate_source": channel.source.name if channel.source else None,
+                                        "duplicate_channel_id": channel.id,
+                                        "duplicate_url": normalized.url,
+                                        "similarity_score": best_match.get("score"),
+                                    },
+                                )
+                            else:
+                                logger.warning(
+                                    f"Skipping duplicate event: item {similar_to_id} no longer exists "
+                                    "(vector index out of sync)"
+                                )
                         except Exception as e:
                             logger.warning(f"Failed to record duplicate event: {e}")
                 except Exception as e:
