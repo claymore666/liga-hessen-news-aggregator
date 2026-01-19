@@ -180,27 +180,29 @@ class GPU1PowerManager:
 
         This is the main entry point for LLM worker integration.
         Checks availability, sends WoL if needed, waits for ready.
-        Respects active hours - won't wake gpu1 outside configured window.
+
+        Active hours only restrict WAKING gpu1 - if gpu1 is already awake,
+        it will be used regardless of the time.
 
         Returns:
             True if Ollama is available, False if wake/wait failed or outside active hours
         """
-        # First check if already available
+        # First check if already available - use it regardless of active hours
         if await self.is_available():
             logger.debug("gpu1 already available")
             return True
 
-        # Check if we're within active hours before trying to wake
+        # gpu1 is not available - check if we're allowed to wake it
         if not self.is_within_active_hours():
             current_hour = datetime.now().hour
             logger.info(
-                f"gpu1 not available, but outside active hours "
+                f"gpu1 not available and outside active hours "
                 f"(current: {current_hour}:00, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00). "
-                f"Skipping WoL."
+                f"Skipping WoL, items will be queued."
             )
             return False
 
-        # Not available, try to wake
+        # Within active hours, try to wake
         logger.info("gpu1 not available, sending Wake-on-LAN...")
 
         if not await self.wake():
