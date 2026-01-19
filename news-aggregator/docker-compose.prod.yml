@@ -43,12 +43,12 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://192.168.0.141:11434
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=qwen3:14b-q8_0
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
       # Embedding classifier pre-filter (runs on gpu1)
-      - CLASSIFIER_URL=http://192.168.0.141:8082
+      - CLASSIFIER_URL=http://host.docker.internal:8082
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
       - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}
@@ -80,6 +80,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       default:  # For db connectivity
       lan:

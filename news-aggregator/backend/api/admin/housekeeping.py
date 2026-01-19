@@ -116,7 +116,7 @@ async def get_items_to_delete(
     db: AsyncSession,
     config: dict,
     execute: bool = False,
-) -> tuple[int, dict[str, int], str | None]:
+) -> tuple[int, dict[str, int], str | None, list[int]]:
     """Get or delete items based on retention config.
 
     Args:
@@ -125,12 +125,14 @@ async def get_items_to_delete(
         execute: If True, delete the items; if False, just count them
 
     Returns:
-        Tuple of (total_count, by_priority_counts, oldest_date)
+        Tuple of (total_count, by_priority_counts, oldest_date, deleted_ids)
+        deleted_ids is only populated when execute=True
     """
     now = datetime.utcnow()
     by_priority: dict[str, int] = {}
     total = 0
     oldest_date: datetime | None = None
+    all_deleted_ids: list[int] = []
 
     exclude_starred = config.get("exclude_starred", True)
 
@@ -153,10 +155,19 @@ async def get_items_to_delete(
             conditions.append(Item.is_starred == False)  # noqa: E712
 
         if execute:
-            # Delete items
-            stmt = delete(Item).where(and_(*conditions))
-            result = await db.execute(stmt)
-            count = result.rowcount
+            # First, collect the IDs to delete (needed for vector index cleanup)
+            id_stmt = select(Item.id).where(and_(*conditions))
+            result = await db.execute(id_stmt)
+            ids_to_delete = [row[0] for row in result.fetchall()]
+
+            if ids_to_delete:
+                # Delete items
+                stmt = delete(Item).where(Item.id.in_(ids_to_delete))
+                await db.execute(stmt)
+                count = len(ids_to_delete)
+                all_deleted_ids.extend(ids_to_delete)
+            else:
+                count = 0
         else:
             # Count items
             count_stmt = select(func.count(Item.id)).where(and_(*conditions))
@@ -176,7 +187,7 @@ async def get_items_to_delete(
             by_priority[priority.value] = count
             total += count
 
-    return total, by_priority, oldest_date.isoformat() if oldest_date else None
+    return total, by_priority, oldest_date.isoformat() if oldest_date else None, all_deleted_ids
 
 
 @router.get("/admin/housekeeping", response_model=HousekeepingConfig)
@@ -205,7 +216,7 @@ async def preview_cleanup(
 ) -> CleanupPreview:
     """Preview items that would be deleted based on current retention settings."""
     config = await get_housekeeping_config(db)
-    total, by_priority, oldest_date = await get_items_to_delete(db, config, execute=False)
+    total, by_priority, oldest_date, _ = await get_items_to_delete(db, config, execute=False)
 
     return CleanupPreview(
         total=total,
@@ -218,9 +229,30 @@ async def preview_cleanup(
 async def execute_cleanup(
     db: AsyncSession = Depends(get_db),
 ) -> CleanupResult:
-    """Execute cleanup based on current retention settings."""
+    """Execute cleanup based on current retention settings.
+
+    Deletes items from both PostgreSQL and vector indexes (search + duplicate).
+    """
+    from services.relevance_filter import create_relevance_filter
+
     config = await get_housekeeping_config(db)
-    total, by_priority, _ = await get_items_to_delete(db, config, execute=True)
+    total, by_priority, _, deleted_ids = await get_items_to_delete(db, config, execute=True)
+
+    # Clean up vector indexes
+    if deleted_ids:
+        try:
+            relevance_filter = await create_relevance_filter()
+            if relevance_filter:
+                # Convert int IDs to strings for the classifier API
+                str_ids = [str(id) for id in deleted_ids]
+                deleted_search, deleted_dup = await relevance_filter.delete_items(str_ids)
+                logger.info(
+                    f"Vector index cleanup: {deleted_search} from search, "
+                    f"{deleted_dup} from duplicate index"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to clean up vector indexes: {e}")
+
     await db.commit()
 
     logger.info(f"Housekeeping cleanup completed: deleted {total} items ({by_priority})")

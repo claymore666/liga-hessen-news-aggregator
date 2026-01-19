@@ -625,6 +625,9 @@ async def cleanup_old_items() -> dict:
         total_deleted = 0
         by_priority: dict[str, int] = {}
 
+        # Collect all item IDs to delete across priorities
+        all_ids_to_delete: list[int] = []
+
         # Delete per-priority with different retention periods
         for priority, days_key in [
             (Priority.HIGH, "retention_days_high"),
@@ -643,17 +646,36 @@ async def cleanup_old_items() -> dict:
             if exclude_starred:
                 conditions.append(Item.is_starred == False)  # noqa: E712
 
-            stmt = delete(Item).where(and_(*conditions))
-            result = await db.execute(stmt)
-            count = result.rowcount
+            # First collect the IDs
+            id_result = await db.execute(select(Item.id).where(and_(*conditions)))
+            ids_to_delete = [row[0] for row in id_result.fetchall()]
 
-            if count > 0:
+            if ids_to_delete:
+                all_ids_to_delete.extend(ids_to_delete)
+                stmt = delete(Item).where(Item.id.in_(ids_to_delete))
+                await db.execute(stmt)
+                count = len(ids_to_delete)
                 by_priority[priority.value] = count
                 total_deleted += count
                 logger.info(
                     f"Deleted {count} {priority.value} priority items "
                     f"older than {retention_days} days"
                 )
+
+        # Clean up vector indexes
+        if all_ids_to_delete:
+            try:
+                from services.relevance_filter import create_relevance_filter
+                relevance_filter = await create_relevance_filter()
+                if relevance_filter:
+                    str_ids = [str(id) for id in all_ids_to_delete]
+                    deleted_search, deleted_dup = await relevance_filter.delete_items(str_ids)
+                    logger.info(
+                        f"Vector index cleanup: {deleted_search} from search, "
+                        f"{deleted_dup} from duplicate index"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to clean up vector indexes: {e}")
 
         await db.commit()
 

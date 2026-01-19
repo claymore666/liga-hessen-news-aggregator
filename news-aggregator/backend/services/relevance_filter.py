@@ -289,6 +289,40 @@ class RelevanceFilter:
             logger.warning(f"Duplicate search failed: {e}")
             return []
 
+    async def delete_items(self, item_ids: list[str]) -> tuple[int, int]:
+        """
+        Delete items from both vector indexes (search and duplicate).
+
+        Call this when deleting items from PostgreSQL to keep indexes in sync.
+
+        Args:
+            item_ids: List of item IDs to delete (as strings)
+
+        Returns:
+            Tuple of (deleted_from_search, deleted_from_duplicate)
+        """
+        if not item_ids:
+            return 0, 0
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    f"{self.base_url}/delete",
+                    json={"ids": item_ids},
+                )
+                response.raise_for_status()
+                result = response.json()
+                deleted_search = result.get("deleted_from_search", 0)
+                deleted_dup = result.get("deleted_from_duplicate", 0)
+                logger.info(
+                    f"Deleted {deleted_search} from search index, "
+                    f"{deleted_dup} from duplicate index"
+                )
+                return deleted_search, deleted_dup
+        except Exception as e:
+            logger.warning(f"Failed to delete items from vector indexes: {e}")
+            return 0, 0
+
 
 async def create_relevance_filter() -> Optional[RelevanceFilter]:
     """

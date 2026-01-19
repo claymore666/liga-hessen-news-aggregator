@@ -33,6 +33,7 @@ class ProxyManager:
 
     # Multiple proxy sources for better coverage
     PROXY_SOURCES = [
+        # Original sources
         "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
@@ -40,18 +41,26 @@ class ProxyManager:
         "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
         "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+        # Additional sources - validated more frequently
+        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
+        "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/xResults/RAW.txt",
+        "https://vakhov.github.io/fresh-proxy-list/http.txt",
+        "https://vakhov.github.io/fresh-proxy-list/https.txt",
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt",
     ]
 
     # Validation settings
-    VALIDATION_TIMEOUT = 2.0  # seconds - strict timeout for fast proxies
-    # Use HTTPS URLs to ensure proxies support CONNECT tunneling
+    VALIDATION_TIMEOUT = 3.0  # seconds - allow slightly slower proxies
+    # Use HTTP URLs for validation - faster and more proxies will pass
+    # Note: Some validated proxies may still fail on HTTPS sites
     VALIDATION_URLS = [
-        "https://icanhazip.com",
-        "https://api.ipify.org",
-        "https://checkip.amazonaws.com",
-        "https://ipinfo.io/ip",
+        "http://icanhazip.com",
+        "http://api.ipify.org",
+        "http://checkip.amazonaws.com",
+        "http://ipinfo.io/ip",
     ]
-    MAX_LATENCY_MS = 1500  # Accept proxies under 1.5 seconds for HTTPS
+    MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds for HTTPS
     BATCH_SIZE = 100  # Test this many proxies per batch
     REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
