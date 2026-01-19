@@ -302,13 +302,15 @@ class GPU1PowerManager:
 
             # Parse who output - each line is a logged in user
             # Format: username tty date time (ip)
+            # Ignore: ligahessen (our service user), sddm (display manager, always running)
+            ignore_users = {self.ssh_user, "sddm"}
             lines = stdout.decode().strip().split('\n')
             other_users = []
             for line in lines:
                 if not line.strip():
                     continue
                 username = line.split()[0]
-                if username != self.ssh_user:  # Not ligahessen
+                if username not in ignore_users:
                     other_users.append(username)
 
             if other_users:
