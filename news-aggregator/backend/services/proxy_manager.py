@@ -310,14 +310,21 @@ class ProxyManager:
             if success:
                 proxy_info["latency"] = round(latency, 2)
                 proxy_info["last_checked"] = datetime.utcnow().isoformat()
+                proxy_info["failures"] = 0  # Reset failure counter on success
                 still_working.append(proxy_info)
                 # Update known proxies with success
                 self._record_proxy_success(proxy, latency)
             else:
-                logger.info(f"✗ Removing dead proxy: {proxy}")
-                # Track failure in known proxies (may remove after MAX_FAILURES)
-                self._record_proxy_failure(proxy)
-                removed += 1
+                # Track consecutive failures - only remove after MAX_FAILURES
+                failures = proxy_info.get("failures", 0) + 1
+                proxy_info["failures"] = failures
+                if failures >= self.MAX_FAILURES:
+                    logger.info(f"✗ Removing dead proxy after {failures} failures: {proxy}")
+                    self._record_proxy_failure(proxy)
+                    removed += 1
+                else:
+                    logger.debug(f"Proxy {proxy} failed ({failures}/{self.MAX_FAILURES}), keeping")
+                    still_working.append(proxy_info)
 
         self.working_proxies = still_working
         self.working_proxies.sort(key=lambda x: x["latency"])
