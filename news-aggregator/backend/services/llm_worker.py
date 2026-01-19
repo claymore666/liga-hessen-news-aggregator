@@ -256,9 +256,22 @@ class LLMWorker:
         """
         Process items from the backlog (needs_llm_processing=True).
 
+        Backlog processing is opportunistic - it only runs when gpu1 is
+        already awake. We don't wake gpu1 for backlog items, only for
+        fresh items from fetch.
+
         Returns:
             Number of items processed
         """
+        from services.gpu1_power import get_power_manager
+
+        # Check if gpu1 is available WITHOUT waking it
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            if not await power_mgr.is_available():
+                logger.debug("gpu1 not available, skipping backlog (won't wake for backlog)")
+                return 0
+
         try:
             processor = await self._get_processor()
             if not processor:

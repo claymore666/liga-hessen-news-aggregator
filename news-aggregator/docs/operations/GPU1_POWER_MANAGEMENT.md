@@ -89,7 +89,7 @@ Environment variables (set in `.env` or docker-compose.yml):
 |----------|---------|-------------|
 | `GPU1_WOL_ENABLED` | `true` | Enable/disable WoL feature |
 | `GPU1_MAC_ADDRESS` | `58:47:ca:7c:18:cc` | gpu1 MAC address |
-| `GPU1_BROADCAST` | `192.168.0.255` | LAN broadcast address |
+| `GPU1_BROADCAST` | `255.255.255.255` | LAN broadcast address |
 | `GPU1_SSH_HOST` | `192.168.0.141` | gpu1 IP for SSH |
 | `GPU1_SSH_USER` | `kamienc` | SSH user for shutdown |
 | `GPU1_SSH_KEY_PATH` | `/app/ssh/id_ed25519` | SSH key path in container |
@@ -141,7 +141,7 @@ docker exec liga-news-backend ip addr show
 # Should show 192.168.0.200 on eth0 or similar
 
 # Test broadcast from container
-docker exec liga-news-backend ping -c1 192.168.0.255
+docker exec liga-news-backend ping -c1 255.255.255.255
 ```
 
 ## Troubleshooting
@@ -223,7 +223,7 @@ Key log messages to watch for:
 
 ```
 INFO  - gpu1 not available, attempting Wake-on-LAN...
-INFO  - Sent WoL packet to 58:47:ca:7c:18:cc via 192.168.0.255:9
+INFO  - Sent WoL packet to 58:47:ca:7c:18:cc via 255.255.255.255:9
 INFO  - Waiting up to 120s for Ollama to become available...
 INFO  - Ollama available after 45.3s
 INFO  - gpu1 woken and ready for LLM processing
@@ -235,10 +235,12 @@ INFO  - gpu1 shutdown due to idle timeout, processor cleared
 ## Energy Savings
 
 With default settings (5 min idle timeout, 30 min fetch interval), gpu1 will:
-- Wake when items need LLM processing
-- Stay awake while processing backlog
+- Wake **only for fresh items** from new fetches (not for backlog)
+- Stay awake while processing fresh items AND opportunistically process backlog
 - Shutdown after 5 minutes of no new items
 - Remain off until the next fetch cycle produces items needing LLM
+
+**Important**: Backlog processing is opportunistic - it only runs when gpu1 is already awake for fresh items. This prevents the system from immediately re-waking gpu1 after shutdown just because there are old items in the backlog
 
 Typical daily pattern:
 - Fetch every 30 minutes

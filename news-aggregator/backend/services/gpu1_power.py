@@ -10,7 +10,7 @@ Manages gpu1 power state for LLM processing:
 Configuration via environment:
 - GPU1_WOL_ENABLED: Enable/disable WoL feature (default: true)
 - GPU1_MAC_ADDRESS: MAC address for WoL packets
-- GPU1_BROADCAST: Broadcast address for WoL (default: 192.168.0.255)
+- GPU1_BROADCAST: Broadcast address for WoL (default: 255.255.255.255)
 - GPU1_SSH_HOST: SSH host for shutdown command
 - GPU1_SSH_USER: SSH user for shutdown command
 - GPU1_SSH_KEY_PATH: Path to SSH private key
@@ -37,7 +37,7 @@ class GPU1PowerManager:
         self,
         mac_address: str,
         ollama_url: str,
-        broadcast: str = "192.168.0.255",
+        broadcast: str = "255.255.255.255",
         ssh_host: str = "192.168.0.141",
         ssh_user: str = "ligahessen",
         ssh_key_path: str = "/app/ssh/id_ed25519",
