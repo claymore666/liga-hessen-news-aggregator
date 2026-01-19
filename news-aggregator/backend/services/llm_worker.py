@@ -125,9 +125,22 @@ class LLMWorker:
         }
 
     async def _get_processor(self):
-        """Get or create the LLM processor."""
+        """Get or create the LLM processor, waking gpu1 if needed."""
         if self._processor is None:
+            from services.gpu1_power import get_power_manager
             from services.processor import create_processor_from_settings
+
+            # Check if gpu1 needs waking
+            power_mgr = get_power_manager()
+            if power_mgr is not None:
+                if not await power_mgr.is_available():
+                    logger.info("gpu1 not available, attempting Wake-on-LAN...")
+                    if await power_mgr.ensure_available():
+                        logger.info("gpu1 woken and ready for LLM processing")
+                    else:
+                        logger.warning("Failed to wake gpu1, LLM processing unavailable")
+                        return None
+
             self._processor = await create_processor_from_settings()
         return self._processor
 
@@ -145,15 +158,20 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
+                    self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
+                    self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
                     continue
 
-                # No work available, sleep
+                # No work available - check if we should shutdown gpu1
+                await self._check_gpu1_idle_shutdown()
+
+                # Sleep before next check
                 logger.debug(f"No items to process, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
@@ -166,6 +184,27 @@ class LLMWorker:
                 await asyncio.sleep(5.0)  # Back off on error
 
         logger.info("LLM worker loop ended")
+
+    def _record_gpu1_activity(self):
+        """Record LLM processing activity for gpu1 idle tracking."""
+        from services.gpu1_power import get_power_manager
+
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            power_mgr.record_activity()
+
+    async def _check_gpu1_idle_shutdown(self):
+        """Check if gpu1 should be shutdown due to idle timeout."""
+        from services.gpu1_power import get_power_manager
+
+        power_mgr = get_power_manager()
+        if power_mgr is None:
+            return
+
+        if await power_mgr.shutdown_if_idle():
+            # Clear processor so we wake gpu1 again next time
+            self._processor = None
+            logger.info("gpu1 shutdown due to idle timeout, processor cleared")
 
     async def _process_fresh_items(self) -> int:
         """

@@ -53,3 +53,8 @@ build/
 
 # Documentation (auto-generated API docs can be excluded if needed)
 # docs/
+
+# SSH keys (for gpu1 power management)
+ssh/id_*
+ssh/*.pem
+!ssh/.gitkeep

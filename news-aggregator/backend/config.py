@@ -100,6 +100,17 @@ class Settings(BaseSettings):
     classifier_use_priority: bool = False  # Use classifier priority instead of LLM
     classifier_use_ak: bool = False  # Use classifier AK instead of LLM
 
+    # GPU1 Power Management (Wake-on-LAN)
+    gpu1_wol_enabled: bool = True  # Enable WoL feature
+    gpu1_mac_address: str = "58:47:ca:7c:18:cc"  # gpu1 MAC address
+    gpu1_broadcast: str = "192.168.0.255"  # LAN broadcast address
+    gpu1_ssh_host: str = "192.168.0.141"  # gpu1 IP for SSH
+    gpu1_ssh_user: str = "ligahessen"  # SSH user for shutdown (dedicated user)
+    gpu1_ssh_key_path: str = "/app/ssh/id_ed25519"  # SSH key path in container
+    gpu1_auto_shutdown: bool = True  # Shutdown after idle if we woke it
+    gpu1_idle_timeout: int = 300  # Seconds idle before auto-shutdown (5 min)
+    gpu1_wake_timeout: int = 120  # Max seconds to wait for Ollama after WoL
+
     # Scheduler
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
