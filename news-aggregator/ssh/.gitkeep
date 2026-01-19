@@ -1,0 +1,3 @@
+# This directory contains SSH keys for gpu1 power management
+# Keys are NOT committed to git - generate them during deployment
+# See docs/operations/GPU1_POWER_MANAGEMENT.md for setup instructions

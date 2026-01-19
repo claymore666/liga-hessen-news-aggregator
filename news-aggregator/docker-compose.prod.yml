@@ -1,0 +1,110 @@
+# Production deployment for docker-ai
+# PostgreSQL database, WoL support for gpu1, frontend on port 3001
+
+# Network for LAN access (Wake-on-LAN)
+networks:
+  default:
+    # Default bridge for inter-container communication (db access)
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: ens18  # docker-ai's LAN interface
+    ipam:
+      config:
+        - subnet: 192.168.0.0/24
+          gateway: 192.168.0.1
+          ip_range: 192.168.0.200/30  # Reserve 200-203 for containers
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: liga-news-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: liga_news
+      POSTGRES_USER: liga
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liga -d liga_news"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: liga-news-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
+      - LLM_ENABLED=${LLM_ENABLED:-true}
+      - OLLAMA_BASE_URL=http://192.168.0.141:11434
+      - OLLAMA_MODEL=qwen3:14b-q8_0
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
+      # Embedding classifier pre-filter (runs on gpu1)
+      - CLASSIFIER_URL=http://192.168.0.141:8082
+      - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
+      - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
+      - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}
+      - CLASSIFIER_USE_AK=${CLASSIFIER_USE_AK:-false}
+      # GPU1 Power Management (Wake-on-LAN)
+      - GPU1_WOL_ENABLED=${GPU1_WOL_ENABLED:-true}
+      - GPU1_MAC_ADDRESS=${GPU1_MAC_ADDRESS:-58:47:ca:7c:18:cc}
+      - GPU1_BROADCAST=${GPU1_BROADCAST:-192.168.0.255}
+      - GPU1_SSH_HOST=${GPU1_SSH_HOST:-192.168.0.141}
+      - GPU1_SSH_USER=${GPU1_SSH_USER:-ligahessen}
+      - GPU1_SSH_KEY_PATH=/app/ssh/id_ed25519
+      - GPU1_AUTO_SHUTDOWN=${GPU1_AUTO_SHUTDOWN:-true}
+      - GPU1_IDLE_TIMEOUT=${GPU1_IDLE_TIMEOUT:-300}
+      - GPU1_WAKE_TIMEOUT=${GPU1_WAKE_TIMEOUT:-120}
+      - GPU1_ACTIVE_HOURS_START=${GPU1_ACTIVE_HOURS_START:-8}
+      - GPU1_ACTIVE_HOURS_END=${GPU1_ACTIVE_HOURS_END:-16}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - backend-data:/app/data
+      - ./ssh:/app/ssh:ro  # SSH key for gpu1 shutdown
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      default:  # For db connectivity
+      lan:
+        ipv4_address: 192.168.0.200  # Static IP on LAN for WoL
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: liga-news-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  postgres-data:
+    name: liga-news-postgres
+  backend-data:
+    name: liga-news-data

@@ -31,3 +31,6 @@ apscheduler>=3.10.0
 
 # Utilities
 python-dateutil>=2.9.0
+
+# Wake-on-LAN for gpu1 power management
+wakeonlan>=3.0.0
