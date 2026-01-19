@@ -132,7 +132,9 @@ class LLMWorker:
         # Always check if gpu1 is available (even if processor is cached)
         power_mgr = get_power_manager()
         if power_mgr is not None:
-            if not await power_mgr.is_available():
+            if await power_mgr.is_available():
+                logger.debug("gpu1 available, proceeding with LLM processing")
+            else:
                 logger.info("gpu1 not available, attempting Wake-on-LAN...")
                 if await power_mgr.ensure_available():
                     logger.info("gpu1 woken and ready for LLM processing")
