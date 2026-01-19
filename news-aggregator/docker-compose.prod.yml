@@ -43,12 +43,12 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_BASE_URL=http://gpu1.fritz.box:11434
       - OLLAMA_MODEL=qwen3:14b-q8_0
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
       # Embedding classifier pre-filter (runs on gpu1)
-      - CLASSIFIER_URL=http://host.docker.internal:8082
+      - CLASSIFIER_URL=http://gpu1.fritz.box:8082
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
       - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}
@@ -56,8 +56,8 @@ services:
       # GPU1 Power Management (Wake-on-LAN)
       - GPU1_WOL_ENABLED=${GPU1_WOL_ENABLED:-true}
       - GPU1_MAC_ADDRESS=${GPU1_MAC_ADDRESS:-58:47:ca:7c:18:cc}
-      - GPU1_BROADCAST=${GPU1_BROADCAST:-255.255.255.255}
-      - GPU1_SSH_HOST=${GPU1_SSH_HOST:-192.168.0.141}
+      - GPU1_BROADCAST=${GPU1_BROADCAST:-192.168.0.255}
+      - GPU1_SSH_HOST=${GPU1_SSH_HOST:-gpu1.fritz.box}
       - GPU1_SSH_USER=${GPU1_SSH_USER:-ligahessen}
       - GPU1_SSH_KEY_PATH=/app/ssh/id_ed25519
       - GPU1_AUTO_SHUTDOWN=${GPU1_AUTO_SHUTDOWN:-true}
@@ -80,8 +80,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       default:  # For db connectivity
       lan:
