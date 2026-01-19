@@ -52,13 +52,12 @@ class ProxyManager:
 
     # Validation settings
     VALIDATION_TIMEOUT = 3.0  # seconds - allow slightly slower proxies
-    # Use HTTP URLs for validation - faster and more proxies will pass
-    # Note: Some validated proxies may still fail on HTTPS sites
+    # Use HTTP URLs that don't block proxy requests
     VALIDATION_URLS = [
+        "http://httpbin.org/ip",
+        "http://ifconfig.me/ip",
         "http://icanhazip.com",
-        "http://api.ipify.org",
-        "http://checkip.amazonaws.com",
-        "http://ipinfo.io/ip",
+        "http://ident.me",
     ]
     MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds for HTTPS
     BATCH_SIZE = 100  # Test this many proxies per batch
