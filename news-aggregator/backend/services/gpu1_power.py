@@ -167,8 +167,8 @@ class GPU1PowerManager:
                 return True
 
             await asyncio.sleep(poll_interval)
-            logger.debug(
-                f"Still waiting for Ollama... ({time.time() - start:.0f}s elapsed)"
+            logger.info(
+                f"Still waiting for gpu1 Ollama... ({time.time() - start:.0f}s elapsed)"
             )
 
         logger.warning(f"Timeout after {timeout}s waiting for Ollama")
