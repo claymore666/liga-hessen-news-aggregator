@@ -224,9 +224,85 @@ export interface StorageStats {
   total_size_human: string
 }
 
+// GPU1 Status Types
+export interface GPU1Status {
+  enabled: boolean
+  available: boolean
+  was_sleeping: boolean
+  wake_time: string | null
+  last_activity: number | null
+  idle_time: number | null
+  auto_shutdown: boolean
+  idle_timeout: number
+  pending_shutdown: boolean
+  active_hours_start: number
+  active_hours_end: number
+  within_active_hours: boolean
+  logged_in_users: string[]
+  mac_address: string
+  ssh_host: string
+}
+
+// Log Types
+export interface LogEntry {
+  timestamp: string
+  level: string
+  logger: string
+  message: string
+}
+
+export interface LogsResponse {
+  entries: LogEntry[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  source: string
+}
+
+export interface LogStats {
+  total: number
+  max_entries: number
+  by_level: Record<string, number>
+  by_logger: Record<string, number>
+}
+
+// Health Check Types
+export interface HealthCheckResponse {
+  status: string
+  instance_type: string
+  llm_enabled: boolean
+  scheduler_running: boolean
+  scheduler_jobs: Array<Record<string, unknown>>
+  llm_available: boolean
+  llm_provider: string | null
+  proxy_count: number
+  proxy_working: number
+  database_ok: boolean
+  database_info: {
+    type: string
+    host?: string
+    database?: string
+    path?: string
+  }
+  items_count: number
+  sources_count: number
+}
+
 export const adminApi = {
   // Stats
   getStats: () => api.get<SystemStatsResponse>('/admin/stats'),
+
+  // Health
+  getHealth: () => api.get<HealthCheckResponse>('/admin/health'),
+
+  // GPU1 Status
+  getGpu1Status: () => api.get<GPU1Status>('/admin/gpu1/status'),
+
+  // Logs
+  getLogs: (params?: { page?: number; page_size?: number; level?: string; logger?: string; search?: string }) =>
+    api.get<LogsResponse>('/admin/logs', { params }),
+  getLogStats: () => api.get<LogStats>('/admin/logs/stats'),
 
   // Scheduler controls
   startScheduler: () => api.post<WorkerControlResponse>('/admin/scheduler/start'),

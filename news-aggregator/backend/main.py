@@ -138,6 +138,10 @@ async def run_migrations() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler for startup/shutdown."""
+    # Set up in-memory log buffer for web UI
+    from api.admin.logs import setup_memory_logging
+    setup_memory_logging()
+
     # Startup
     await init_db()
     await run_migrations()
