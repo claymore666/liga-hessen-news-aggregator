@@ -17,7 +17,7 @@ from typing import Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker, db_write_lock
+from database import async_session_maker
 from models import Channel, Item, Priority
 
 logger = logging.getLogger(__name__)
@@ -265,61 +265,54 @@ class ClassifierWorker:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
                 self._stats["errors"] += 1
 
-        # Phase 3: Apply updates to database (with lock to serialize writes)
+        # Phase 3: Apply updates to database
+        # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
         if updates:
-            from services.item_events import record_event, EVENT_CLASSIFIER_PROCESSED
+            from services.item_events import record_events_batch, EVENT_CLASSIFIER_PROCESSED
 
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    async with db_write_lock:
-                        async with async_session_maker() as db:
-                            for upd in updates:
-                                await db.execute(
-                                    update(Item)
-                                    .where(Item.id == upd["id"])
-                                    .values(
-                                        priority=upd["priority"],
-                                        priority_score=upd["priority_score"],
-                                        metadata_=upd["metadata_"],
-                                        needs_llm_processing=upd["needs_llm_processing"],
-                                    )
-                                )
-                                # Record classifier event
-                                await record_event(
-                                    db,
-                                    upd["id"],
-                                    EVENT_CLASSIFIER_PROCESSED,
-                                    data={
-                                        "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
-                                        "priority": upd["priority"],
-                                        "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
-                                    },
-                                )
+            try:
+                async with async_session_maker() as db:
+                    # Batch update items (individual updates required due to different metadata per item)
+                    for upd in updates:
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == upd["id"])
+                            .values(
+                                priority=upd["priority"],
+                                priority_score=upd["priority_score"],
+                                metadata_=upd["metadata_"],
+                                needs_llm_processing=upd["needs_llm_processing"],
+                            )
+                        )
 
-                                # Log classifier processing for analytics
-                                try:
-                                    from services.processing_logger import ProcessingLogger
+                    # Batch record classifier events (more efficient than individual calls)
+                    events_data = [
+                        {
+                            "item_id": upd["id"],
+                            "event_type": EVENT_CLASSIFIER_PROCESSED,
+                            "data": {
+                                "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
+                                "priority": upd["priority"],
+                                "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
+                            },
+                        }
+                        for upd in updates
+                    ]
+                    record_events_batch(db, events_data)
 
-                                    plogger = ProcessingLogger(db)
-                                    await plogger.log_classifier_worker(
-                                        item_id=upd["id"],
-                                        result=upd["metadata_"]["pre_filter"],
-                                        priority_input=upd.get("old_priority", "unknown"),
-                                        priority_output=upd["priority"],
-                                    )
-                                except Exception as log_err:
-                                    logger.warning(f"Failed to log classifier processing for item {upd['id']}: {log_err}")
+                    # Batch log classifier processing for analytics
+                    try:
+                        from services.processing_logger import ProcessingLogger
 
-                            await db.commit()
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if "database is locked" in str(e) and attempt < max_retries - 1:
-                        logger.warning(f"Database locked, retrying ({attempt + 1}/{max_retries})...")
-                        await asyncio.sleep(1.0 * (attempt + 1))  # Exponential backoff
-                    else:
-                        logger.error(f"Failed to commit classifier updates: {e}")
-                        raise
+                        plogger = ProcessingLogger(db)
+                        await plogger.log_classifier_worker_batch(updates)
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log classifier processing batch: {log_err}")
+
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to commit classifier updates: {e}")
+                raise
 
         self._stats["processed"] += processed
         self._stats["priority_changed"] += priority_changed

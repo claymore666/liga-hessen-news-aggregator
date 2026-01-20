@@ -171,6 +171,42 @@ Datum: {date_str}"""
             logger.error(f"Analysis failed: {e}")
             return self._default_analysis()
 
+    async def analyze_from_data(self, item_data: dict[str, Any]) -> dict[str, Any]:
+        """Analyze item for relevance, priority, and working group assignment.
+
+        Like analyze(), but takes a dict instead of an Item ORM object.
+        This is used by the LLM worker to avoid holding DB connections during LLM calls.
+
+        Args:
+            item_data: Dict with keys: title, content, source_name, and optionally published_at
+
+        Returns:
+            Analysis result dict (same as analyze())
+        """
+        title = item_data.get("title", "")
+        content = item_data.get("content", "")[:6000]
+        source_name = item_data.get("source_name", "Unbekannt")
+        published_at = item_data.get("published_at")
+        date_str = published_at.strftime("%Y-%m-%d") if published_at else "Unbekannt"
+
+        prompt = f"""Titel: {title}
+Inhalt: {content}
+Quelle: {source_name}
+Datum: {date_str}"""
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=6000,
+            )
+            return self._parse_analysis_response(response)
+
+        except Exception as e:
+            logger.error(f"Analysis from data failed: {e}")
+            return self._default_analysis()
+
     async def check_semantic_rule(self, item: Item, rule: Rule) -> bool:
         """Check if item matches a semantic (LLM-based) rule.
 

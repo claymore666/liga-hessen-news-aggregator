@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 logger = logging.getLogger(__name__)
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -50,15 +50,23 @@ async def list_sources(
     if is_stakeholder is not None:
         query = query.where(Source.is_stakeholder == is_stakeholder)
 
+    # Filter by error status using SQL EXISTS subquery (more efficient than Python filtering)
+    if has_errors is not None:
+        has_error_subquery = exists(
+            select(Channel.id).where(
+                and_(
+                    Channel.source_id == Source.id,
+                    Channel.last_error.isnot(None),
+                )
+            )
+        )
+        if has_errors:
+            query = query.where(has_error_subquery)
+        else:
+            query = query.where(~has_error_subquery)
+
     result = await db.execute(query)
     sources = result.scalars().all()
-
-    # Filter by error status if requested
-    if has_errors is not None:
-        sources = [
-            s for s in sources
-            if any(c.last_error for c in s.channels) == has_errors
-        ]
 
     return [_build_source_response(source) for source in sources]
 
@@ -68,18 +76,25 @@ async def list_sources_with_errors(
     db: AsyncSession = Depends(get_db),
 ) -> list[SourceResponse]:
     """List all sources that have channels with errors."""
+    # Use EXISTS subquery to filter in SQL (more efficient than Python filtering)
+    has_error_subquery = exists(
+        select(Channel.id).where(
+            and_(
+                Channel.source_id == Source.id,
+                Channel.last_error.isnot(None),
+            )
+        )
+    )
     query = (
         select(Source)
         .options(selectinload(Source.channels))
+        .where(has_error_subquery)
         .order_by(Source.name)
     )
     result = await db.execute(query)
     sources = result.scalars().all()
 
-    # Filter to sources with at least one channel error
-    sources_with_errors = [s for s in sources if any(c.last_error for c in s.channels)]
-
-    return [_build_source_response(source) for source in sources_with_errors]
+    return [_build_source_response(source) for source in sources]
 
 
 @router.get("/sources/{source_id}", response_model=SourceResponse)

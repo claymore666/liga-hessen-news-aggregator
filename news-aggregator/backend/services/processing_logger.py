@@ -434,6 +434,55 @@ class ProcessingLogger:
             output_data=result,
         )
 
+    async def log_classifier_worker_batch(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> list[ItemProcessingLog]:
+        """Log multiple classifier worker processing steps in a batch.
+
+        More efficient than calling log_classifier_worker individually
+        for each item in a batch.
+
+        Args:
+            updates: List of update dicts with keys: id, metadata_, old_priority, priority
+
+        Returns:
+            List of created log entries
+        """
+        from models import ItemProcessingLog
+
+        logs = []
+        now = datetime.utcnow()
+
+        for upd in updates:
+            result = upd["metadata_"].get("pre_filter", {})
+            confidence = result.get("relevance_confidence", 0.5)
+
+            log = ItemProcessingLog(
+                run_id=str(uuid4()),
+                step_type=ProcessingStepType.CLASSIFIER_OVERRIDE,
+                step_order=0,
+                item_id=upd["id"],
+                started_at=now,
+                completed_at=now,
+                model_name="nomic-embed-text-v2",
+                model_provider="classifier",
+                confidence_score=confidence,
+                priority_input=upd.get("old_priority", "unknown"),
+                priority_output=upd["priority"],
+                ak_suggestions=[result.get("ak")] if result.get("ak") else None,
+                ak_primary=result.get("ak"),
+                ak_confidence=result.get("ak_confidence"),
+                relevant=confidence >= 0.25,
+                relevance_score=confidence,
+                success=True,
+                output_data=result,
+            )
+            logs.append(log)
+
+        self.session.add_all(logs)
+        return logs
+
     async def log_reprocess(
         self,
         item_id: int,
