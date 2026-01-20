@@ -135,8 +135,43 @@ export const useItemsStore = defineStore('items', () => {
       if (currentItem.value?.id === id) {
         currentItem.value.is_archived = newArchivedState
       }
+      // Remove from list if filter excludes this state
+      const filterShowsArchived = filters.value.is_archived === true
+      const filterShowsActive = filters.value.is_archived === null || filters.value.is_archived === false
+      if ((newArchivedState && filterShowsActive) || (!newArchivedState && filterShowsArchived)) {
+        items.value = items.value.filter((i) => i.id !== id)
+        total.value = Math.max(0, total.value - 1)
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to toggle archive'
+      throw e
+    }
+  }
+
+  async function bulkArchive(ids: number[], isArchived: boolean = true) {
+    try {
+      const response = await itemsApi.bulkArchive(ids, isArchived)
+      // Update all affected items in the list (includes duplicates)
+      const affectedIds = response.data.item_ids || ids
+      items.value.forEach((item) => {
+        if (affectedIds.includes(item.id)) {
+          item.is_archived = isArchived
+        }
+      })
+      // Update currentItem if affected
+      if (currentItem.value && affectedIds.includes(currentItem.value.id)) {
+        currentItem.value.is_archived = isArchived
+      }
+      // Remove from list if filter excludes this state
+      const filterShowsArchived = filters.value.is_archived === true
+      const filterShowsActive = filters.value.is_archived === null || filters.value.is_archived === false
+      if ((isArchived && filterShowsActive) || (!isArchived && filterShowsArchived)) {
+        const removedCount = items.value.filter((i) => affectedIds.includes(i.id)).length
+        items.value = items.value.filter((i) => !affectedIds.includes(i.id))
+        total.value = Math.max(0, total.value - removedCount)
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to bulk archive items'
       throw e
     }
   }
@@ -222,6 +257,7 @@ export const useItemsStore = defineStore('items', () => {
     bulkMarkAsRead,
     bulkMarkAsUnread,
     archiveItem,
+    bulkArchive,
     updateItem,
     setFilter,
     clearFilters,

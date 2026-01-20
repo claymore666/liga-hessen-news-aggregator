@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel
-from schemas import DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
 
 
 class BulkUpdateRequest(BaseModel):
@@ -447,6 +447,83 @@ async def toggle_archive(
     )
 
     return {"status": "ok", "is_archived": item.is_archived}
+
+
+@router.post("/items/bulk-archive", response_model=BulkArchiveResponse)
+async def bulk_archive(
+    request_body: BulkArchiveRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> BulkArchiveResponse:
+    """Bulk archive or restore items.
+
+    When archiving/restoring an item that has duplicates or is part of a duplicate group,
+    all related items (primary + duplicates) are archived/restored together.
+    """
+    if not request_body.ids:
+        return BulkArchiveResponse(archived=0, item_ids=[])
+
+    # Collect all item IDs to archive (including duplicates)
+    all_item_ids: set[int] = set()
+
+    # First pass: get all requested items and their related items
+    for item_id in request_body.ids:
+        all_item_ids.add(item_id)
+
+        # Get the item to check if it's a duplicate or has duplicates
+        query = select(Item).where(Item.id == item_id).options(
+            selectinload(Item.duplicates)
+        )
+        result = await db.execute(query)
+        item = result.scalar_one_or_none()
+
+        if item:
+            # If this item is a duplicate, also include its primary
+            if item.similar_to_id:
+                all_item_ids.add(item.similar_to_id)
+                # Get siblings (other duplicates of the same primary)
+                sibling_query = select(Item.id).where(Item.similar_to_id == item.similar_to_id)
+                sibling_result = await db.execute(sibling_query)
+                for (sibling_id,) in sibling_result.fetchall():
+                    all_item_ids.add(sibling_id)
+
+            # If this item has duplicates, include them all
+            if item.duplicates:
+                for dup in item.duplicates:
+                    all_item_ids.add(dup.id)
+
+    # Now fetch and update all items
+    query = select(Item).where(Item.id.in_(list(all_item_ids)))
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    archived_count = 0
+    for item in items:
+        if item.is_archived != request_body.is_archived:
+            item.is_archived = request_body.is_archived
+            archived_count += 1
+
+    # Record events for all archived items
+    if archived_count > 0:
+        from services.item_events import record_events_batch, EVENT_ARCHIVED
+        ip_address = get_client_ip(request)
+
+        events_data = [
+            {
+                "item_id": item.id,
+                "event_type": EVENT_ARCHIVED,
+                "data": {"is_archived": request_body.is_archived, "bulk_archive": True},
+                "ip_address": ip_address,
+            }
+            for item in items
+            if item.is_archived == request_body.is_archived  # Only items that changed
+        ]
+        record_events_batch(db, events_data)
+
+    return BulkArchiveResponse(
+        archived=archived_count,
+        item_ids=list(all_item_ids)
+    )
 
 
 @router.post("/items/{item_id}/reprocess")

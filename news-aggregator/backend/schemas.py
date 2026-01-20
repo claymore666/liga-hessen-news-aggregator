@@ -194,6 +194,20 @@ class ItemListResponse(BaseModel):
     total_pages: int
 
 
+class BulkArchiveRequest(BaseModel):
+    """Request body for bulk archive operations."""
+
+    ids: list[int]
+    is_archived: bool = True  # True to archive, False to restore
+
+
+class BulkArchiveResponse(BaseModel):
+    """Response for bulk archive operations."""
+
+    archived: int  # Number of items archived/restored
+    item_ids: list[int]  # All affected item IDs (including duplicates)
+
+
 # === Rule schemas ===
 
 

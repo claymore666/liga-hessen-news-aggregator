@@ -146,6 +146,15 @@ useKeyboardShortcuts([
         handlePriorityChange(isRelevant ? 'none' : 'low')
       }
     }
+  },
+  {
+    key: 'Delete',
+    description: 'Archivieren',
+    action: () => {
+      if (selectedItem.value) {
+        handleArchive()
+      }
+    }
   }
 ])
 
@@ -237,6 +246,13 @@ const handleArchive = async () => {
   }
 }
 
+const bulkArchive = async () => {
+  if (selectedIds.value.length > 0) {
+    await itemsStore.bulkArchive(selectedIds.value)
+    selectedIds.value = []
+  }
+}
+
 // Watch for filter changes
 watch(
   () => [
@@ -304,11 +320,18 @@ onMounted(async () => {
         <!-- Filters -->
         <FilterBar
           :selected-count="selectedIds.length"
+          :focused-item-id="selectedItemId"
+          :focused-item-is-read="selectedItem?.is_read ?? false"
+          :focused-item-is-archived="selectedItem?.is_archived ?? false"
           @search="handleSearch"
           @clear-selection="clearSelection"
           @bulk-mark-read="bulkMarkRead"
           @bulk-mark-unread="bulkMarkUnread"
           @select-all="toggleSelectAll"
+          @mark-read="handleToggleRead"
+          @mark-unread="handleToggleRead"
+          @archive="handleArchive"
+          @bulk-archive="bulkArchive"
         />
 
         <!-- Loading -->

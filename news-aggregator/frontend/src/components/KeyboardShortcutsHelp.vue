@@ -15,6 +15,7 @@ const shortcuts = [
   { keys: ['K'], description: 'Vorheriger Eintrag' },
   { keys: ['Enter'], description: 'Eintrag öffnen' },
   { keys: ['M'], description: 'Als gelesen markieren' },
+  { keys: ['Entf'], description: 'Archivieren' },
   { keys: ['Esc'], description: 'Schließen / Zurück' }
 ]
 
