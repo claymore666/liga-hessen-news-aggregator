@@ -268,10 +268,11 @@ class ClassifierWorker:
         # Phase 3: Apply updates to database
         # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
         if updates:
-            from services.item_events import record_event, EVENT_CLASSIFIER_PROCESSED
+            from services.item_events import record_events_batch, EVENT_CLASSIFIER_PROCESSED
 
             try:
                 async with async_session_maker() as db:
+                    # Batch update items (individual updates required due to different metadata per item)
                     for upd in updates:
                         await db.execute(
                             update(Item)
@@ -283,31 +284,30 @@ class ClassifierWorker:
                                 needs_llm_processing=upd["needs_llm_processing"],
                             )
                         )
-                        # Record classifier event
-                        await record_event(
-                            db,
-                            upd["id"],
-                            EVENT_CLASSIFIER_PROCESSED,
-                            data={
+
+                    # Batch record classifier events (more efficient than individual calls)
+                    events_data = [
+                        {
+                            "item_id": upd["id"],
+                            "event_type": EVENT_CLASSIFIER_PROCESSED,
+                            "data": {
                                 "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
                                 "priority": upd["priority"],
                                 "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
                             },
-                        )
+                        }
+                        for upd in updates
+                    ]
+                    record_events_batch(db, events_data)
 
-                        # Log classifier processing for analytics
-                        try:
-                            from services.processing_logger import ProcessingLogger
+                    # Batch log classifier processing for analytics
+                    try:
+                        from services.processing_logger import ProcessingLogger
 
-                            plogger = ProcessingLogger(db)
-                            await plogger.log_classifier_worker(
-                                item_id=upd["id"],
-                                result=upd["metadata_"]["pre_filter"],
-                                priority_input=upd.get("old_priority", "unknown"),
-                                priority_output=upd["priority"],
-                            )
-                        except Exception as log_err:
-                            logger.warning(f"Failed to log classifier processing for item {upd['id']}: {log_err}")
+                        plogger = ProcessingLogger(db)
+                        await plogger.log_classifier_worker_batch(updates)
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log classifier processing batch: {log_err}")
 
                     await db.commit()
             except Exception as e:
