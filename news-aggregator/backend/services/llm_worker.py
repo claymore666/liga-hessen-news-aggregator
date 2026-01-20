@@ -345,6 +345,14 @@ class LLMWorker:
         """
         Process a batch of items through the LLM.
 
+        IMPORTANT: This method releases DB connections during LLM processing
+        to avoid monopolizing connections for extended periods (10-60 sec per item).
+
+        Pattern per item:
+        1. Quick read (acquire + release connection)
+        2. LLM processing (no connection held)
+        3. Quick write (acquire + release connection)
+
         Args:
             item_ids: List of item database IDs
             processor: ItemProcessor instance
@@ -353,23 +361,29 @@ class LLMWorker:
         Returns:
             Number of items successfully processed
         """
+        import time
+        from sqlalchemy import update as sql_update
+        from services.item_events import record_event, EVENT_LLM_PROCESSED
+
         processed = 0
         item_type = "fresh" if is_fresh else "backlog"
 
-        async with async_session_maker() as db:
-            for item_id in item_ids:
-                # Check for fresh items interrupting backlog
-                if not is_fresh and not self._fresh_queue.empty():
-                    logger.info(f"Fresh items arrived, pausing backlog after {processed} items")
-                    break
+        for item_id in item_ids:
+            # Check for fresh items interrupting backlog
+            if not is_fresh and not self._fresh_queue.empty():
+                logger.info(f"Fresh items arrived, pausing backlog after {processed} items")
+                break
 
-                # Check if paused
-                if self._paused:
-                    logger.info(f"Worker paused, stopping after {processed} items")
-                    break
+            # Check if paused
+            if self._paused:
+                logger.info(f"Worker paused, stopping after {processed} items")
+                break
 
-                try:
-                    # Load item with relationships
+            try:
+                # Phase 1: Quick read - extract data we need for LLM
+                # Connection is released after this block
+                item_data = None
+                async with async_session_maker() as db:
                     result = await db.execute(
                         select(Item)
                         .where(Item.id == item_id)
@@ -385,79 +399,97 @@ class LLMWorker:
                     if not is_fresh and not item.needs_llm_processing:
                         continue
 
-                    # Run LLM analysis with timing
-                    import time
-                    start_time = time.time()
+                    # Extract all data needed for LLM processing
                     source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
-                    analysis = await processor.analyze(item, source_name=source_name)
-                    elapsed = time.time() - start_time
-                    self._stats["total_processing_time"] += elapsed
-                    self._stats["items_timed"] += 1
-
-                    # Update item with results
-                    if analysis.get("summary"):
-                        item.summary = analysis["summary"]
-                    if analysis.get("detailed_analysis"):
-                        item.detailed_analysis = analysis["detailed_analysis"]
-
-                    # Use LLM priority directly (no remapping)
-                    llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-                    if analysis.get("relevant") is False:
-                        llm_priority = None
-
-                    if llm_priority == "high":
-                        item.priority = Priority.HIGH
-                        item.priority_score = max(item.priority_score or 0, 90)
-                    elif llm_priority == "medium":
-                        item.priority = Priority.MEDIUM
-                        item.priority_score = max(item.priority_score or 0, 70)
-                    elif llm_priority == "low":
-                        item.priority = Priority.LOW
-                        item.priority_score = max(item.priority_score or 0, 40)
-                    else:
-                        item.priority = Priority.NONE
-                        item.priority_score = min(item.priority_score or 100, 20)
-
-                    # Set assigned_aks: LLM takes precedence, classifier AK as fallback
-                    llm_aks = analysis.get("assigned_aks", [])
-                    if llm_aks:
-                        item.assigned_aks = llm_aks
-                        item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
-                    elif not item.assigned_aks:
-                        # Use classifier AK suggestion as fallback
-                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
-                        classifier_ak = pre_filter.get("ak_suggestion")
-                        if classifier_ak:
-                            item.assigned_aks = [classifier_ak]
-                            item.assigned_ak = classifier_ak  # Deprecated field
-                            logger.debug(f"Using classifier AK: {classifier_ak}")
-
-                    # Store LLM analysis in metadata
-                    new_metadata = dict(item.metadata_) if item.metadata_ else {}
-                    new_metadata["llm_analysis"] = {
-                        "relevance_score": analysis.get("relevance_score", 0.5),
-                        "priority_suggestion": llm_priority,
-                        "assigned_aks": llm_aks,
-                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated, for backward compat
-                        "tags": analysis.get("tags", []),
-                        "reasoning": analysis.get("reasoning"),
-                        "processed_at": datetime.utcnow().isoformat(),
-                        "source": "llm_worker",
+                    item_data = {
+                        "id": item.id,
+                        "title": item.title,
+                        "content": item.content,
+                        "url": item.url,
+                        "source_name": source_name,
+                        "priority_score": item.priority_score or 0,
+                        "metadata_": dict(item.metadata_) if item.metadata_ else {},
+                        "assigned_aks": item.assigned_aks or [],
                     }
-                    item.metadata_ = new_metadata
 
-                    # Clear retry flag
-                    item.needs_llm_processing = False
+                # Phase 2: LLM processing - NO connection held
+                # This can take 10-60 seconds per item
+                start_time = time.time()
+                analysis = await processor.analyze_from_data(item_data)
+                elapsed = time.time() - start_time
+                self._stats["total_processing_time"] += elapsed
+                self._stats["items_timed"] += 1
 
-                    # Commit after each item so count updates in real-time
+                # Compute values to update
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if analysis.get("relevant") is False:
+                    llm_priority = None
+
+                if llm_priority == "high":
+                    new_priority = Priority.HIGH
+                    new_score = max(item_data["priority_score"], 90)
+                elif llm_priority == "medium":
+                    new_priority = Priority.MEDIUM
+                    new_score = max(item_data["priority_score"], 70)
+                elif llm_priority == "low":
+                    new_priority = Priority.LOW
+                    new_score = max(item_data["priority_score"], 40)
+                else:
+                    new_priority = Priority.NONE
+                    new_score = min(item_data["priority_score"] or 100, 20)
+
+                # Set assigned_aks: LLM takes precedence, classifier AK as fallback
+                llm_aks = analysis.get("assigned_aks", [])
+                assigned_aks = llm_aks
+                assigned_ak = llm_aks[0] if llm_aks else None
+                if not llm_aks and not item_data["assigned_aks"]:
+                    pre_filter = item_data["metadata_"].get("pre_filter", {})
+                    classifier_ak = pre_filter.get("ak_suggestion")
+                    if classifier_ak:
+                        assigned_aks = [classifier_ak]
+                        assigned_ak = classifier_ak
+                        logger.debug(f"Using classifier AK: {classifier_ak}")
+
+                # Prepare metadata update
+                new_metadata = dict(item_data["metadata_"])
+                new_metadata["llm_analysis"] = {
+                    "relevance_score": analysis.get("relevance_score", 0.5),
+                    "priority_suggestion": llm_priority,
+                    "assigned_aks": llm_aks,
+                    "assigned_ak": llm_aks[0] if llm_aks else None,
+                    "tags": analysis.get("tags", []),
+                    "reasoning": analysis.get("reasoning"),
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "source": "llm_worker",
+                }
+
+                # Phase 3: Quick write - update item in database
+                # Connection is released after this block
+                async with async_session_maker() as db:
+                    update_values = {
+                        "summary": analysis.get("summary"),
+                        "detailed_analysis": analysis.get("detailed_analysis"),
+                        "priority": new_priority,
+                        "priority_score": new_score,
+                        "assigned_aks": assigned_aks,
+                        "assigned_ak": assigned_ak,
+                        "metadata_": new_metadata,
+                        "needs_llm_processing": False,
+                    }
+                    # Remove None values to avoid overwriting with None
+                    update_values = {k: v for k, v in update_values.items() if v is not None or k in ("assigned_ak", "needs_llm_processing")}
+
+                    await db.execute(
+                        sql_update(Item)
+                        .where(Item.id == item_id)
+                        .values(**update_values)
+                    )
                     await db.commit()
 
                     # Record LLM processing event
-                    from services.item_events import record_event, EVENT_LLM_PROCESSED
-
                     await record_event(
                         db,
-                        item.id,
+                        item_id,
                         EVENT_LLM_PROCESSED,
                         data={
                             "priority": llm_priority,
@@ -472,12 +504,11 @@ class LLMWorker:
                         from services.processing_logger import ProcessingLogger
 
                         plogger = ProcessingLogger(db)
-                        # Get priority before LLM (from pre_filter or previous value)
-                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
+                        pre_filter = item_data["metadata_"].get("pre_filter", {})
                         priority_input = pre_filter.get("priority_suggestion") or "unknown"
 
                         await plogger.log_llm_analysis(
-                            item_id=item.id,
+                            item_id=item_id,
                             analysis=analysis,
                             priority_input=priority_input,
                             priority_output=llm_priority,
@@ -486,14 +517,14 @@ class LLMWorker:
                     except Exception as log_err:
                         logger.warning(f"Failed to log LLM analysis for item {item_id}: {log_err}")
 
-                    processed += 1
-                    self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+                processed += 1
+                self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 
-                    logger.info(f"LLM {item_type}: {item.title[:40]}... -> {llm_priority}")
+                logger.info(f"LLM {item_type}: {item_data['title'][:40]}... -> {llm_priority}")
 
-                except Exception as e:
-                    logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
-                    self._stats["errors"] += 1
+            except Exception as e:
+                logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
+                self._stats["errors"] += 1
 
         return processed
 

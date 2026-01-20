@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     database_driver: str = "postgresql+asyncpg"  # SQLAlchemy async driver
 
     # Database - Connection Pool (PostgreSQL only)
-    database_pool_size: int = 5  # Number of persistent connections
-    database_pool_max_overflow: int = 10  # Extra connections allowed
+    database_pool_size: int = 10  # Number of persistent connections (increased from 5)
+    database_pool_max_overflow: int = 20  # Extra connections allowed (increased from 10)
     database_pool_timeout: int = 30  # Seconds to wait for connection
     database_pool_recycle: int = 1800  # Recycle connections after 30 min
 
@@ -114,8 +114,13 @@ class Settings(BaseSettings):
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)
 
     # Scheduler
+    scheduler_enabled: bool = True  # Set to False to disable scheduler on startup
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
+
+    # Workers
+    llm_worker_enabled: bool = True  # Set to False to disable LLM worker on startup
+    classifier_worker_enabled: bool = True  # Set to False to disable classifier on startup
 
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain

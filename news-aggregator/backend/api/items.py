@@ -856,20 +856,22 @@ async def bulk_update_items(
             updated += 1
 
     if updated > 0:
-        # Record events for all updated items
-        from services.item_events import record_event, EVENT_READ, EVENT_USER_MODIFIED
+        # Record events in batch for all updated items (more efficient than sequential)
+        from services.item_events import record_events_batch, EVENT_READ, EVENT_USER_MODIFIED
         ip_address = get_client_ip(request)
 
-        for item in items:
-            if request_body.is_read is not None:
-                event_type = EVENT_READ if request_body.is_read else EVENT_USER_MODIFIED
-                await record_event(
-                    db,
-                    item.id,
-                    event_type,
-                    data={"is_read": request_body.is_read, "bulk_update": True},
-                    ip_address=ip_address,
-                )
+        if request_body.is_read is not None:
+            event_type = EVENT_READ if request_body.is_read else EVENT_USER_MODIFIED
+            events_data = [
+                {
+                    "item_id": item.id,
+                    "event_type": event_type,
+                    "data": {"is_read": request_body.is_read, "bulk_update": True},
+                    "ip_address": ip_address,
+                }
+                for item in items
+            ]
+            record_events_batch(db, events_data)
 
     return {"updated": updated}
 

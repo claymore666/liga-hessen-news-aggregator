@@ -169,7 +169,6 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         Number of new items fetched.
     """
     from connectors import ConnectorRegistry
-    from database import db_write_lock
     from services.pipeline import Pipeline
     from services.processor import ItemProcessor, create_processor_from_settings
     from services.relevance_filter import create_relevance_filter
@@ -237,13 +236,12 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         logger.info(f"Connector returned {len(raw_items)} raw items from channel {channel_id}")
 
     except Exception as e:
-        # Phase 2 error: Update channel error status (needs db lock)
-        async with db_write_lock:
-            async with async_session_maker() as db:
-                channel = await db.get(Channel, channel_id)
-                if channel:
-                    channel.last_error = str(e)
-                    await db.commit()
+        # Phase 2 error: Update channel error status
+        async with async_session_maker() as db:
+            channel = await db.get(Channel, channel_id)
+            if channel:
+                channel.last_error = str(e)
+                await db.commit()
         logger.error(f"Error fetching channel {channel_id}: {e}")
         raise
 
@@ -268,49 +266,49 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                 logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
         logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
 
-    # Phase 3: Database writes - process and store items (serialized)
-    async with db_write_lock:
-        async with async_session_maker() as db:
-            # Re-fetch channel within this session (with source eager-loaded for indexing)
-            result = await db.execute(
-                select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+    # Phase 3: Database writes - process and store items
+    # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
+    async with async_session_maker() as db:
+        # Re-fetch channel within this session (with source eager-loaded for indexing)
+        result = await db.execute(
+            select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+        )
+        channel = result.scalar_one_or_none()
+        if channel is None:
+            return 0
+
+        try:
+            # Process through pipeline (includes database writes)
+            # Pass pre-computed filter results to avoid async context issues
+            pipeline = Pipeline(
+                db,
+                processor=processor,
+                relevance_filter=relevance_filter,
+                training_mode=training_mode,
+                pre_filter_results=pre_filter_results,
             )
-            channel = result.scalar_one_or_none()
-            if channel is None:
-                return 0
+            new_items = await pipeline.process(raw_items, channel)
 
+            channel.last_fetch_at = datetime.utcnow()
+            channel.last_error = None
+            await db.commit()
+
+            logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
+            return len(new_items)
+
+        except Exception as e:
+            logger.error(f"Error processing channel {channel_id}: {e}")
+            await db.rollback()
+            # Try to update error status
             try:
-                # Process through pipeline (includes database writes)
-                # Pass pre-computed filter results to avoid async context issues
-                pipeline = Pipeline(
-                    db,
-                    processor=processor,
-                    relevance_filter=relevance_filter,
-                    training_mode=training_mode,
-                    pre_filter_results=pre_filter_results,
-                )
-                new_items = await pipeline.process(raw_items, channel)
-
-                channel.last_fetch_at = datetime.utcnow()
-                channel.last_error = None
-                await db.commit()
-
-                logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
-                return len(new_items)
-
-            except Exception as e:
-                logger.error(f"Error processing channel {channel_id}: {e}")
-                await db.rollback()
-                # Try to update error status
-                try:
-                    channel = await db.get(Channel, channel_id)
-                    if channel:
-                        channel.last_error = str(e)
-                        await db.commit()
-                except Exception as store_err:
-                    # Don't let error storage failure mask original error
-                    logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
-                raise
+                channel = await db.get(Channel, channel_id)
+                if channel:
+                    channel.last_error = str(e)
+                    await db.commit()
+            except Exception as store_err:
+                # Don't let error storage failure mask original error
+                logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
+            raise
 
 
 async def _fetch_source_type_group(
