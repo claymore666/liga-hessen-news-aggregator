@@ -34,6 +34,23 @@ SOURCE_TYPE_LIMITS = {
     "linkedin": 2,
 }
 
+# Per-source-type fetch timeout in seconds
+# Playwright-based scrapers need more time due to browser startup and JS rendering
+# but must have hard limits to prevent indefinite hangs
+CHANNEL_FETCH_TIMEOUTS = {
+    "x_scraper": 300,  # 5 min - fetches tweets + follows links
+    "instagram_scraper": 300,  # 5 min - visits individual posts
+    "linkedin": 180,  # 3 min - browser-based
+    "html": 120,  # 2 min - may need JS rendering
+    "pdf": 120,  # 2 min - large file downloads
+    "rss": 60,  # 1 min - lightweight
+    "bluesky": 60,
+    "mastodon": 60,
+    "telegram": 60,
+    "google_alerts": 60,
+}
+DEFAULT_FETCH_TIMEOUT = 120  # 2 min default
+
 # Connector types that use proxy reservation
 PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
 
@@ -330,15 +347,31 @@ async def _fetch_source_type_group(
     """
     fetched = 0
     errors = 0
+    timeouts = 0
     results_lock = asyncio.Lock()
 
+    # Get timeout for this source type
+    timeout = CHANNEL_FETCH_TIMEOUTS.get(source_type, DEFAULT_FETCH_TIMEOUT)
+
     async def fetch_with_limit(channel: Channel) -> None:
-        nonlocal fetched, errors
+        nonlocal fetched, errors, timeouts
         async with semaphore:
             try:
-                await fetch_channel(channel.id, training_mode=training_mode)
+                # Wrap in timeout to prevent indefinite hangs
+                await asyncio.wait_for(
+                    fetch_channel(channel.id, training_mode=training_mode),
+                    timeout=timeout,
+                )
                 async with results_lock:
                     fetched += 1
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Channel {channel.id} ({channel.source.name}/{channel.connector_type}) "
+                    f"timed out after {timeout}s"
+                )
+                async with results_lock:
+                    timeouts += 1
+                    errors += 1
             except Exception as e:
                 logger.error(
                     f"Error fetching channel {channel.id} "
@@ -349,6 +382,10 @@ async def _fetch_source_type_group(
 
     # Run all channels of this type concurrently (within semaphore limit)
     await asyncio.gather(*[fetch_with_limit(ch) for ch in channels], return_exceptions=True)
+
+    if timeouts > 0:
+        logger.warning(f"{source_type}: {timeouts} channel(s) timed out after {timeout}s")
+
     return fetched, errors
 
 
