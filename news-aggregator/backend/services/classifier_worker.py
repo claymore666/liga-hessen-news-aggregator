@@ -475,6 +475,29 @@ class ClassifierWorker:
         if updates:
             try:
                 async with async_session_maker() as db:
+                    # Verify that similar_to_ids exist in database (ChromaDB may have stale entries)
+                    similar_ids_to_check = [
+                        upd["similar_to_id"] for upd in updates
+                        if upd["similar_to_id"] is not None
+                    ]
+                    if similar_ids_to_check:
+                        result = await db.execute(
+                            select(Item.id).where(Item.id.in_(similar_ids_to_check))
+                        )
+                        existing_ids = set(row[0] for row in result.fetchall())
+
+                        # Clear similar_to_id for non-existent items
+                        for upd in updates:
+                            if upd["similar_to_id"] is not None and upd["similar_to_id"] not in existing_ids:
+                                logger.warning(
+                                    f"Skipping similar_to_id={upd['similar_to_id']} for item {upd['id']} - "
+                                    f"referenced item no longer exists (stale ChromaDB entry)"
+                                )
+                                upd["similar_to_id"] = None
+                                # Remove duplicate_score from metadata since no valid duplicate
+                                if "duplicate_score" in upd["metadata_"]:
+                                    del upd["metadata_"]["duplicate_score"]
+
                     for upd in updates:
                         await db.execute(
                             update(Item)
