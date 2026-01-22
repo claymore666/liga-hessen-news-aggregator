@@ -1,5 +1,15 @@
-# Production deployment for docker-ai
-# PostgreSQL database, WoL support for gpu1, frontend on port 3001
+# =============================================================================
+# ENVIRONMENT: docker-ai (Production)
+# =============================================================================
+# This compose file is for docker-ai (production environment).
+# Workers and scheduler are ENABLED by default for automatic processing.
+# Sends WoL packets to gpu1 for LLM processing during active hours.
+#
+# Environment files:
+#   - docker-compose.yml      -> gpu1 (QA) - workers disabled
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled
+#   - docker-compose.training.yml -> classifier training
+# =============================================================================
 
 # Network for LAN access (Wake-on-LAN)
 networks:

@@ -1,3 +1,17 @@
+# =============================================================================
+# ENVIRONMENT: gpu1 (QA/Development)
+# =============================================================================
+# This compose file is for the gpu1 machine (local QA environment).
+# Workers and scheduler are DISABLED by default for manual testing.
+#
+# For production (docker-ai), use: docker-compose.prod.yml
+#
+# Environment files:
+#   - docker-compose.yml      -> gpu1 (QA) - workers disabled
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled
+#   - docker-compose.training.yml -> classifier training
+# =============================================================================
+
 # Network for LAN access (Wake-on-LAN)
 # Note: Verify the parent interface name with `ip link` on the host
 # Common names: eth0, ens18, enp0s3, etc.
@@ -66,9 +80,9 @@ services:
       - GPU1_ACTIVE_HOURS_END=${GPU1_ACTIVE_HOURS_END:-16}
       - GPU1_ACTIVE_WEEKDAYS_ONLY=${GPU1_ACTIVE_WEEKDAYS_ONLY:-true}
       # Worker/Scheduler control (can disable for testing)
-      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
-      - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}
-      - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-true}
+      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-false}
+      - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-false}
+      - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-false}
       - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
