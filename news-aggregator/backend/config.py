@@ -102,6 +102,7 @@ class Settings(BaseSettings):
 
     # GPU1 Power Management (Wake-on-LAN)
     gpu1_wol_enabled: bool = True  # Enable WoL feature
+    gpu1_ollama_url: str = "http://192.168.0.141:11434"  # Ollama URL on gpu1 for availability check
     gpu1_mac_address: str = "58:47:ca:7c:18:cc"  # gpu1 MAC address
     gpu1_broadcast: str = "255.255.255.255"  # Global broadcast (some NICs require this for WoL)
     gpu1_ssh_host: str = "192.168.0.141"  # gpu1 IP for SSH

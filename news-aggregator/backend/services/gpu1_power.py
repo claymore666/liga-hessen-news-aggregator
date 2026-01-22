@@ -454,7 +454,7 @@ def get_power_manager() -> Optional[GPU1PowerManager]:
 
     _power_manager = GPU1PowerManager(
         mac_address=settings.gpu1_mac_address,
-        ollama_url=settings.ollama_base_url,
+        ollama_url=settings.gpu1_ollama_url,
         broadcast=settings.gpu1_broadcast,
         ssh_host=settings.gpu1_ssh_host,
         ssh_user=settings.gpu1_ssh_user,
