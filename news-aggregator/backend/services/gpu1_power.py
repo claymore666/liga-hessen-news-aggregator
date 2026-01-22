@@ -388,6 +388,12 @@ class GPU1PowerManager:
             )
             return False
 
+        # Check if gpu1 is still available - if not, it was shut down externally
+        if not await self.is_available():
+            logger.info("gpu1 no longer available (external shutdown), resetting state")
+            self.reset_state()
+            return False
+
         # Check if other users are logged in before shutdown
         if await self.has_other_users():
             logger.debug("Skipping shutdown due to other users on gpu1")
