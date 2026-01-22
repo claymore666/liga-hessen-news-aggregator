@@ -42,6 +42,8 @@ class ProcessingQueueStats(BaseModel):
     total: int
     by_retry_priority: dict[str, int]
     awaiting_classifier: int
+    awaiting_dedup: int
+    awaiting_vectordb: int
 
 
 class ItemStats(BaseModel):
@@ -156,10 +158,27 @@ async def get_system_stats(
         )
     ) or 0
 
+    # Items awaiting dedup check (no similar_to_id and no duplicate_checked flag)
+    awaiting_dedup = await db.scalar(
+        select(func.count(Item.id)).where(
+            Item.similar_to_id.is_(None),
+            json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+        )
+    ) or 0
+
+    # Items awaiting vectordb indexing
+    awaiting_vectordb = await db.scalar(
+        select(func.count(Item.id)).where(
+            json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
+        )
+    ) or 0
+
     processing_queue = ProcessingQueueStats(
         total=queue_total,
         by_retry_priority=by_retry_priority,
         awaiting_classifier=awaiting_classifier,
+        awaiting_dedup=awaiting_dedup,
+        awaiting_vectordb=awaiting_vectordb,
     )
 
     # Item stats

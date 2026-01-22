@@ -162,6 +162,8 @@ export interface ProcessingQueueStats {
   total: number
   by_retry_priority: Record<string, number>
   awaiting_classifier: number
+  awaiting_dedup: number
+  awaiting_vectordb: number
 }
 
 export interface ItemStats {

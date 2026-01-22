@@ -620,7 +620,9 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-2 space-y-1 text-sm text-gray-500">
-            <div>Warteschlange: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div>Klassifizierung: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div>Duplikat-Check: {{ stats.processing_queue.awaiting_dedup }}</div>
+            <div>VectorDB-Index: {{ stats.processing_queue.awaiting_vectordb }}</div>
           </div>
 
           <div class="mt-4 flex gap-2">
