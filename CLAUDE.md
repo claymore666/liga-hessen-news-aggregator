@@ -13,9 +13,27 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen that fetch
 | **Classifier** | [relevance-tuner/CLAUDE.md](relevance-tuner/CLAUDE.md) | ML classifier training and API |
 | **Analytics** | [docs/architecture/PROCESSING_ANALYTICS.md](news-aggregator/docs/architecture/PROCESSING_ANALYTICS.md) | Processing logs and model comparison |
 
-## Deployment (gpu1)
+## Environments
 
-The system runs on gpu1 via Docker Compose:
+| Environment | Host | Compose File | Workers | Purpose |
+|-------------|------|--------------|---------|---------|
+| **Production** | docker-ai | `docker-compose.prod.yml` | Enabled | Live news aggregation |
+| **QA/Dev** | gpu1 | `docker-compose.yml` | Disabled | Testing, development |
+| **Training** | gpu1 | `docker-compose.training.yml` | N/A | Classifier retraining |
+
+## Deployment
+
+### Production (docker-ai)
+
+```bash
+ssh docker-ai
+cd /home/kamienc/projects/liga-hessen-news-aggregator
+git pull origin dev
+cd news-aggregator
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### QA/Development (gpu1)
 
 ```bash
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
