@@ -375,19 +375,25 @@ class ClassifierWorker:
             return 0
 
         # Find items without similar_to_id and without duplicate_checked flag
-        # Only check items from last 7 days to limit scope
+        # Limit to recent items by default (configurable via DUPLICATE_CHECK_DAYS, 0 = no limit)
+        import os
+        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+
         async with async_session_maker() as db:
             from database import json_extract_path
 
-            cutoff = datetime.utcnow() - timedelta(days=7)
+            conditions = [
+                Item.similar_to_id.is_(None),
+                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+            ]
+
+            if check_days > 0:
+                cutoff = datetime.utcnow() - timedelta(days=check_days)
+                conditions.append(Item.fetched_at >= cutoff)
 
             query = (
                 select(Item)
-                .where(
-                    Item.similar_to_id.is_(None),
-                    Item.fetched_at >= cutoff,
-                    json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
-                )
+                .where(*conditions)
                 .order_by(Item.fetched_at.desc())
                 .limit(self.batch_size)
             )
@@ -544,17 +550,24 @@ async def get_unclassified_count() -> int:
 
 
 async def get_unchecked_duplicates_count() -> int:
-    """Get count of items that haven't been checked for duplicates (last 7 days)."""
+    """Get count of items that haven't been checked for duplicates."""
+    import os
     from datetime import timedelta
     from database import json_extract_path
 
-    cutoff = datetime.utcnow() - timedelta(days=7)
+    check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+
+    conditions = [
+        Item.similar_to_id.is_(None),
+        json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+    ]
+
+    if check_days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=check_days)
+        conditions.append(Item.fetched_at >= cutoff)
+
     async with async_session_maker() as db:
         result = await db.execute(
-            select(func.count(Item.id)).where(
-                Item.similar_to_id.is_(None),
-                Item.fetched_at >= cutoff,
-                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
-            )
+            select(func.count(Item.id)).where(*conditions)
         )
         return result.scalar() or 0
