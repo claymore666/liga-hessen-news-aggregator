@@ -110,8 +110,9 @@ class Settings(BaseSettings):
     gpu1_auto_shutdown: bool = True  # Shutdown after idle if we woke it
     gpu1_idle_timeout: int = 300  # Seconds idle before auto-shutdown (5 min)
     gpu1_wake_timeout: int = 120  # Max seconds to wait for Ollama after WoL
-    gpu1_active_hours_start: int = 8  # Hour (0-23) when gpu1 usage allowed (default 8 AM)
+    gpu1_active_hours_start: int = 7  # Hour (0-23) when gpu1 usage allowed (default 7 AM)
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)
+    gpu1_active_weekdays_only: bool = True  # Only wake on weekdays (Mon-Fri)
 
     # Scheduler
     scheduler_enabled: bool = True  # Set to False to disable scheduler on startup

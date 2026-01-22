@@ -44,8 +44,9 @@ class GPU1PowerManager:
         auto_shutdown: bool = True,
         idle_timeout: int = 300,
         wake_timeout: int = 120,
-        active_hours_start: int = 8,
+        active_hours_start: int = 7,
         active_hours_end: int = 16,
+        active_weekdays_only: bool = True,
     ):
         """
         Initialize GPU1 power manager.
@@ -62,6 +63,7 @@ class GPU1PowerManager:
             wake_timeout: Max seconds to wait after WoL
             active_hours_start: Hour (0-23) when gpu1 usage is allowed
             active_hours_end: Hour (0-23) when gpu1 usage stops
+            active_weekdays_only: Only wake on weekdays (Mon-Fri)
         """
         self.mac_address = mac_address
         self.ollama_url = ollama_url.rstrip("/")
@@ -74,6 +76,7 @@ class GPU1PowerManager:
         self.wake_timeout = wake_timeout
         self.active_hours_start = active_hours_start
         self.active_hours_end = active_hours_end
+        self.active_weekdays_only = active_weekdays_only
 
         # State tracking
         self._was_sleeping = False
@@ -92,9 +95,14 @@ class GPU1PowerManager:
         Returns:
             True if gpu1 usage is allowed now, False otherwise
         """
-        current_hour = datetime.now().hour
+        now = datetime.now()
+        current_hour = now.hour
 
-        # Handle same-day range (e.g., 8-16)
+        # Check weekday restriction (Monday=0, Sunday=6)
+        if self.active_weekdays_only and now.weekday() >= 5:
+            return False
+
+        # Handle same-day range (e.g., 7-16)
         if self.active_hours_start < self.active_hours_end:
             return self.active_hours_start <= current_hour < self.active_hours_end
 
@@ -199,10 +207,13 @@ class GPU1PowerManager:
 
         # Check if we're allowed to wake it
         if not self.is_within_active_hours():
-            current_hour = datetime.now().hour
+            now = datetime.now()
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            weekday_str = f" ({day_names[now.weekday()]})" if self.active_weekdays_only else ""
+            weekday_restriction = " Mon-Fri" if self.active_weekdays_only else ""
             logger.info(
                 f"gpu1 not available and outside active hours "
-                f"(current: {current_hour}:00, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00). "
+                f"(current: {now.hour}:00{weekday_str}, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00{weekday_restriction}). "
                 f"Skipping WoL, items will be queued."
             )
             return False
@@ -447,12 +458,14 @@ def get_power_manager() -> Optional[GPU1PowerManager]:
         wake_timeout=settings.gpu1_wake_timeout,
         active_hours_start=settings.gpu1_active_hours_start,
         active_hours_end=settings.gpu1_active_hours_end,
+        active_weekdays_only=settings.gpu1_active_weekdays_only,
     )
 
+    weekdays_str = " (Mon-Fri only)" if settings.gpu1_active_weekdays_only else ""
     logger.info(
         f"GPU1 power manager initialized: "
         f"MAC={settings.gpu1_mac_address}, "
-        f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00, "
+        f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00{weekdays_str}, "
         f"broadcast={settings.gpu1_broadcast}, "
         f"auto_shutdown={settings.gpu1_auto_shutdown}"
     )

@@ -91,12 +91,17 @@ Environment variables (set in `.env` or docker-compose.yml):
 | `GPU1_MAC_ADDRESS` | `58:47:ca:7c:18:cc` | gpu1 MAC address |
 | `GPU1_BROADCAST` | `255.255.255.255` | LAN broadcast address |
 | `GPU1_SSH_HOST` | `192.168.0.141` | gpu1 IP for SSH |
-| `GPU1_SSH_USER` | `kamienc` | SSH user for shutdown |
+| `GPU1_SSH_USER` | `ligahessen` | SSH user for shutdown |
 | `GPU1_SSH_KEY_PATH` | `/app/ssh/id_ed25519` | SSH key path in container |
 | `GPU1_AUTO_SHUTDOWN` | `true` | Shutdown after idle if we woke it |
 | `GPU1_IDLE_TIMEOUT` | `300` | Seconds idle before shutdown (5 min) |
 | `GPU1_WAKE_TIMEOUT` | `120` | Max wait for Ollama (2 min) |
+| `GPU1_ACTIVE_HOURS_START` | `7` | Hour (0-23) when WoL is allowed (7 AM) |
+| `GPU1_ACTIVE_HOURS_END` | `16` | Hour (0-23) when WoL stops (4 PM) |
+| `GPU1_ACTIVE_WEEKDAYS_ONLY` | `true` | Only wake Mon-Fri, not weekends |
 | `LAN_INTERFACE` | `eth0` | Host network interface for macvlan |
+
+**Active Hours**: WoL packets are only sent during active hours (default 7:00-16:00 Mon-Fri). Outside these times, items queue with `needs_llm_processing=true` and are processed when gpu1 next wakes. If gpu1 is already awake, it will be used regardless of the time.
 
 ## Verification
 

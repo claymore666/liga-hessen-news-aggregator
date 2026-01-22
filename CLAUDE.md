@@ -162,11 +162,12 @@ ORDER BY hour;
 ### Active Hours Configuration
 
 Configured in docker-ai backend via environment variables:
-- `GPU1_ACTIVE_START`: Start hour for WoL (default: 8)
-- `GPU1_ACTIVE_END`: End hour for WoL (default: 16)
-- `GPU1_IDLE_TIMEOUT`: Seconds before auto-shutdown (default: 1800 = 30 min)
+- `GPU1_ACTIVE_HOURS_START`: Start hour for WoL (default: 7)
+- `GPU1_ACTIVE_HOURS_END`: End hour for WoL (default: 16)
+- `GPU1_ACTIVE_WEEKDAYS_ONLY`: Only wake Mon-Fri (default: true)
+- `GPU1_IDLE_TIMEOUT`: Seconds before auto-shutdown (default: 300 = 5 min)
 
-Outside active hours, items queue up with `needs_llm_processing=true` and are processed when gpu1 next wakes.
+Outside active hours (or on weekends when weekdays_only is true), items queue up with `needs_llm_processing=true` and are processed when gpu1 next wakes.
 
 ## Database
 
