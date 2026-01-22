@@ -71,6 +71,7 @@ services:
       - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
       - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}
       - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-true}
+      - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - backend-data:/app/data
