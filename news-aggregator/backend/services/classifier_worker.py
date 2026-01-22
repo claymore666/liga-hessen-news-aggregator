@@ -62,6 +62,8 @@ class ClassifierWorker:
         self._stats = {
             "processed": 0,
             "priority_changed": 0,
+            "duplicates_found": 0,
+            "duplicates_checked": 0,
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
@@ -128,15 +130,21 @@ class ClassifierWorker:
                     await asyncio.sleep(1.0)
                     continue
 
-                # Process unclassified items
+                # Priority 1: Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:
                     # More items might be available
                     await asyncio.sleep(0.5)
                     continue
 
+                # Priority 2: Re-check duplicates for items that missed the check
+                duplicates_checked = await self._process_unchecked_duplicates()
+                if duplicates_checked > 0:
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # No work available, sleep
-                logger.debug(f"No unclassified items, sleeping {self.idle_sleep}s")
+                logger.debug(f"No unclassified items or unchecked duplicates, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
             except asyncio.CancelledError:
@@ -345,6 +353,137 @@ class ClassifierWorker:
             # Certainly irrelevant - none priority, skip LLM
             return Priority.NONE, 20, True
 
+    async def _process_unchecked_duplicates(self) -> int:
+        """
+        Re-check duplicates for items that were ingested without the check.
+
+        This catches items that were saved while the classifier API was down.
+        Only checks items from the last 7 days to limit scope.
+
+        Returns:
+            Number of items checked
+        """
+        from datetime import timedelta
+
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                logger.debug("Classifier unavailable for duplicate check")
+                return 0
+        except Exception as e:
+            logger.debug(f"Cannot create classifier for duplicate check: {e}")
+            return 0
+
+        # Find items without similar_to_id and without duplicate_checked flag
+        # Only check items from last 7 days to limit scope
+        async with async_session_maker() as db:
+            from database import json_extract_path
+
+            cutoff = datetime.utcnow() - timedelta(days=7)
+
+            query = (
+                select(Item)
+                .where(
+                    Item.similar_to_id.is_(None),
+                    Item.fetched_at >= cutoff,
+                    json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+                )
+                .order_by(Item.fetched_at.desc())
+                .limit(self.batch_size)
+            )
+
+            result = await db.execute(query)
+            items = result.scalars().all()
+
+            if not items:
+                return 0
+
+            # Extract data needed for duplicate check
+            items_to_check = []
+            for item in items:
+                items_to_check.append({
+                    "id": item.id,
+                    "title": item.title,
+                    "content": item.content or "",
+                    "old_metadata": dict(item.metadata_) if item.metadata_ else {},
+                })
+
+        logger.info(f"Checking {len(items_to_check)} items for duplicates")
+
+        # Check each item for duplicates
+        checked = 0
+        duplicates_found = 0
+        updates = []
+
+        for item_data in items_to_check:
+            if self._paused or not self._running:
+                break
+
+            try:
+                # Find potential duplicates
+                duplicates = await classifier.find_duplicates(
+                    title=item_data["title"],
+                    content=item_data["content"],
+                    threshold=0.80,
+                )
+
+                # Prepare updated metadata
+                new_metadata = dict(item_data["old_metadata"])
+                new_metadata["duplicate_checked"] = True
+                new_metadata["duplicate_checked_at"] = datetime.utcnow().isoformat()
+
+                similar_to_id = None
+                if duplicates:
+                    # Find the best match that isn't the item itself
+                    for dup in duplicates:
+                        dup_id = int(dup["id"])
+                        if dup_id != item_data["id"]:
+                            similar_to_id = dup_id
+                            new_metadata["duplicate_score"] = dup.get("score")
+                            duplicates_found += 1
+                            logger.info(
+                                f"Duplicate found: '{item_data['title'][:40]}...' "
+                                f"similar to item {similar_to_id} (score: {dup.get('score', 0):.3f})"
+                            )
+                            break
+
+                updates.append({
+                    "id": item_data["id"],
+                    "similar_to_id": similar_to_id,
+                    "metadata_": new_metadata,
+                })
+                checked += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to check duplicates for item {item_data['id']}: {e}")
+                self._stats["errors"] += 1
+
+        # Apply updates to database
+        if updates:
+            try:
+                async with async_session_maker() as db:
+                    for upd in updates:
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == upd["id"])
+                            .values(
+                                similar_to_id=upd["similar_to_id"],
+                                metadata_=upd["metadata_"],
+                            )
+                        )
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to commit duplicate check updates: {e}")
+                raise
+
+        self._stats["duplicates_checked"] += checked
+        self._stats["duplicates_found"] += duplicates_found
+
+        if checked > 0:
+            logger.info(f"Checked {checked} items for duplicates ({duplicates_found} found)")
+
+        return checked
+
 
 # Global worker instance
 _worker: Optional[ClassifierWorker] = None
@@ -399,6 +538,23 @@ async def get_unclassified_count() -> int:
         result = await db.execute(
             select(func.count(Item.id)).where(
                 json_extract_path(Item.metadata_, "pre_filter").is_(None)
+            )
+        )
+        return result.scalar() or 0
+
+
+async def get_unchecked_duplicates_count() -> int:
+    """Get count of items that haven't been checked for duplicates (last 7 days)."""
+    from datetime import timedelta
+    from database import json_extract_path
+
+    cutoff = datetime.utcnow() - timedelta(days=7)
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(func.count(Item.id)).where(
+                Item.similar_to_id.is_(None),
+                Item.fetched_at >= cutoff,
+                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
             )
         )
         return result.scalar() or 0
