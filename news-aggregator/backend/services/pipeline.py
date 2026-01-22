@@ -362,6 +362,7 @@ class Pipeline:
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
+                indexed_ids = []
                 try:
                     items_to_index = [
                         {
@@ -379,8 +380,22 @@ class Pipeline:
                     indexed = await self.relevance_filter.index_items_batch(items_to_index)
                     if indexed > 0:
                         logger.info(f"Indexed {indexed} items in vector store")
+                        # Track which items were indexed (batch indexing is all-or-nothing)
+                        indexed_ids = [item.id for item in new_items]
                 except Exception as e:
                     logger.warning(f"Failed to index items in vector store: {e}")
+
+                # Update vectordb_indexed flag for successfully indexed items
+                if indexed_ids:
+                    try:
+                        for item in new_items:
+                            if item.id in indexed_ids:
+                                item.metadata_ = item.metadata_ or {}
+                                item.metadata_["vectordb_indexed"] = True
+                                item.metadata_["vectordb_indexed_at"] = datetime.utcnow().isoformat()
+                        await self.db.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to update vectordb_indexed flags: {e}")
 
             # 10. Enqueue fresh items to LLM worker for immediate processing
             if not self.training_mode:

@@ -64,6 +64,7 @@ class ClassifierWorker:
             "priority_changed": 0,
             "duplicates_found": 0,
             "duplicates_checked": 0,
+            "vectordb_indexed": 0,
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
@@ -143,8 +144,14 @@ class ClassifierWorker:
                     await asyncio.sleep(0.5)
                     continue
 
+                # Priority 3: Re-index items that weren't indexed in vector store
+                indexed = await self._process_unindexed_items()
+                if indexed > 0:
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # No work available, sleep
-                logger.debug(f"No unclassified items or unchecked duplicates, sleeping {self.idle_sleep}s")
+                logger.debug(f"No unclassified items, unchecked duplicates, or unindexed items, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
             except asyncio.CancelledError:
@@ -489,6 +496,105 @@ class ClassifierWorker:
             logger.info(f"Checked {checked} items for duplicates ({duplicates_found} found)")
 
         return checked
+
+    async def _process_unindexed_items(self) -> int:
+        """
+        Re-index items that weren't added to the vector store during ingestion.
+
+        This catches items that were saved while the classifier API was down.
+
+        Returns:
+            Number of items indexed
+        """
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                logger.debug("Classifier unavailable for indexing")
+                return 0
+        except Exception as e:
+            logger.debug(f"Cannot create classifier for indexing: {e}")
+            return 0
+
+        # Find items without vectordb_indexed flag
+        async with async_session_maker() as db:
+            from database import json_extract_path
+            from sqlalchemy.orm import selectinload
+
+            query = (
+                select(Item)
+                .where(
+                    json_extract_path(Item.metadata_, "vectordb_indexed").is_(None),
+                )
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+                .order_by(Item.fetched_at.desc())
+                .limit(self.batch_size)
+            )
+
+            result = await db.execute(query)
+            items = result.scalars().all()
+
+            if not items:
+                return 0
+
+            # Prepare items for indexing
+            items_to_index = []
+            item_ids = []
+            for item in items:
+                source_name = ""
+                if item.channel and item.channel.source:
+                    source_name = item.channel.source.name
+                items_to_index.append({
+                    "id": str(item.id),
+                    "title": item.title,
+                    "content": item.content or "",
+                    "metadata": {
+                        "source": source_name,
+                        "priority": item.priority.value if hasattr(item.priority, 'value') else str(item.priority),
+                        "channel_id": str(item.channel_id) if item.channel_id else "",
+                    },
+                })
+                item_ids.append(item.id)
+
+        logger.info(f"Indexing {len(items_to_index)} items in vector store")
+
+        # Index items
+        try:
+            indexed = await classifier.index_items_batch(items_to_index)
+        except Exception as e:
+            logger.warning(f"Failed to index items: {e}")
+            self._stats["errors"] += 1
+            return 0
+
+        # Update metadata for all items (even if indexed=0, the API succeeded)
+        if item_ids:
+            try:
+                async with async_session_maker() as db:
+                    for item_id in item_ids:
+                        # Get current metadata
+                        result = await db.execute(
+                            select(Item.metadata_).where(Item.id == item_id)
+                        )
+                        current_meta = result.scalar() or {}
+                        new_meta = dict(current_meta)
+                        new_meta["vectordb_indexed"] = True
+                        new_meta["vectordb_indexed_at"] = datetime.utcnow().isoformat()
+
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == item_id)
+                            .values(metadata_=new_meta)
+                        )
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to update vectordb_indexed flags: {e}")
+                raise
+
+        self._stats["vectordb_indexed"] += len(item_ids)
+
+        if len(item_ids) > 0:
+            logger.info(f"Indexed {len(item_ids)} items in vector store")
+
+        return len(item_ids)
 
 
 # Global worker instance
