@@ -128,11 +128,22 @@ def find_duplicates(self, title, content, threshold=0.70):
 
 ## Thresholds
 
-| Threshold | Meaning | Use Case |
-|-----------|---------|----------|
-| **0.70** | Default - catches same-story with different wording | Production |
-| 0.75 | More conservative - fewer false positives | High precision |
-| 0.80 | Very conservative - only near-exact matches | Minimal grouping |
+### Deduplication Threshold (0.70)
+
+Used for grouping same-story articles from different sources.
+
+| Value | Effect | Use Case |
+|-------|--------|----------|
+| **0.70** | Groups loosely related coverage | Production (current) |
+| 0.75 | Groups clearly same-story only | Higher precision |
+| 0.80 | Groups near-identical articles | Minimal grouping |
+
+**Model**: `paraphrase-multilingual-mpnet-base-v2`
+
+**Locations** (must be aligned):
+- `pipeline.py:139` - during ingestion
+- `classifier_worker.py:440` - backlog processing
+- `relevance_filter.py:258` - default value
 
 **Typical Similarity Scores**:
 - **0.95-1.00**: Exact duplicates (same article, different URLs)
@@ -140,6 +151,22 @@ def find_duplicates(self, title, content, threshold=0.70):
 - **0.75-0.85**: Same story, different angle/emphasis
 - **0.50-0.75**: Related topic, different story
 - **<0.50**: Unrelated
+
+### Classification Thresholds (DIFFERENT PURPOSE)
+
+Used for item priority based on relevance confidence. **Do NOT align with dedup threshold.**
+
+| Threshold | Value | Purpose |
+|-----------|-------|---------|
+| `CONFIDENCE_HIGH` | 0.50 | conf ≥ 0.50 → likely relevant (high/medium priority) |
+| `CONFIDENCE_EDGE` | 0.25 | 0.25-0.50 → edge case (needs LLM review) |
+| (implicit) | <0.25 | certainly irrelevant (skip LLM) |
+
+**Model**: `nomic-ai/nomic-embed-text-v2-moe` classifier
+
+**Location**: `classifier_worker.py:27-29`
+
+These thresholds control whether items get LLM processing, not whether they're grouped as duplicates.
 
 ## Data Model
 
