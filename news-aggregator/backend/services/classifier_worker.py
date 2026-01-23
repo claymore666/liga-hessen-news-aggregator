@@ -437,7 +437,7 @@ class ClassifierWorker:
                 duplicates = await classifier.find_duplicates(
                     title=item_data["title"],
                     content=item_data["content"],
-                    threshold=0.80,
+                    threshold=0.70,
                 )
 
                 # Prepare updated metadata
