@@ -447,18 +447,26 @@ class ClassifierWorker:
 
                 similar_to_id = None
                 if duplicates:
-                    # Find the best match that isn't the item itself
+                    # Find the best match that isn't the item itself and won't create circular reference
                     for dup in duplicates:
                         dup_id = int(dup["id"])
                         if dup_id != item_data["id"]:
-                            similar_to_id = dup_id
-                            new_metadata["duplicate_score"] = dup.get("score")
-                            duplicates_found += 1
-                            logger.info(
-                                f"Duplicate found: '{item_data['title'][:40]}...' "
-                                f"similar to item {similar_to_id} (score: {dup.get('score', 0):.3f})"
-                            )
-                            break
+                            # Only link to older items (lower ID) to prevent circular references
+                            # This ensures the oldest article in a cluster is always the primary
+                            if dup_id < item_data["id"]:
+                                similar_to_id = dup_id
+                                new_metadata["duplicate_score"] = dup.get("score")
+                                duplicates_found += 1
+                                logger.info(
+                                    f"Duplicate found: '{item_data['title'][:40]}...' "
+                                    f"similar to item {similar_to_id} (score: {dup.get('score', 0):.3f})"
+                                )
+                                break
+                            else:
+                                logger.debug(
+                                    f"Skipping newer duplicate {dup_id} for item {item_data['id']} "
+                                    f"(would create circular reference)"
+                                )
 
                 updates.append({
                     "id": item_data["id"],
