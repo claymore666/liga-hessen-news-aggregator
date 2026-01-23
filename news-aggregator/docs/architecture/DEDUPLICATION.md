@@ -81,7 +81,7 @@ async def process_items(self, items):
         duplicates = await self.relevance_filter.find_duplicates(
             title=item.title,
             content=item.content,
-            threshold=0.75,  # Configurable
+            threshold=0.70,  # Configurable
         )
 
         if duplicates:
@@ -101,7 +101,7 @@ async def process_items(self, items):
 
 ```python
 # classifier.py:600-650 (DuplicateStore.find_duplicates)
-def find_duplicates(self, title, content, threshold=0.75):
+def find_duplicates(self, title, content, threshold=0.70):
     # 1. Create embedding from title + content
     text = f"{title} {content}"
     embedding = self.embedder.encode([text])
@@ -130,9 +130,9 @@ def find_duplicates(self, title, content, threshold=0.75):
 
 | Threshold | Meaning | Use Case |
 |-----------|---------|----------|
-| **0.75** | Default - catches same-story with different wording | Production |
-| 0.80 | More conservative - fewer false positives | High precision |
-| 0.70 | More aggressive - catches looser similarities | High recall |
+| **0.70** | Default - catches same-story with different wording | Production |
+| 0.75 | More conservative - fewer false positives | High precision |
+| 0.80 | Very conservative - only near-exact matches | Minimal grouping |
 
 **Typical Similarity Scores**:
 - **0.95-1.00**: Exact duplicates (same article, different URLs)
@@ -336,7 +336,7 @@ The threshold is set in `pipeline.py:139`:
 duplicates = await self.relevance_filter.find_duplicates(
     title=normalized.title,
     content=normalized.content,
-    threshold=0.75,  # Adjust here
+    threshold=0.70,  # Adjust here
 )
 ```
 
