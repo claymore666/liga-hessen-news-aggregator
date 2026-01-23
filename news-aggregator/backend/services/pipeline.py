@@ -136,7 +136,7 @@ class Pipeline:
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=normalized.title,
                         content=normalized.content,
-                        threshold=0.70,  # Paraphrase model threshold for same-story detection
+                        threshold=0.75,  # Paraphrase model threshold for same-story detection
                     )
                     if duplicates:
                         best_match = duplicates[0]

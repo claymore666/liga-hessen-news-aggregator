@@ -19,7 +19,7 @@ class RelevanceFilter:
     before expensive LLM processing.
     """
 
-    def __init__(self, base_url: str, threshold: float = 0.70, timeout: int = 30):
+    def __init__(self, base_url: str, threshold: float = 0.75, timeout: int = 30):
         """
         Initialize the relevance filter.
 
@@ -255,7 +255,7 @@ class RelevanceFilter:
         self,
         title: str,
         content: str,
-        threshold: float = 0.70,
+        threshold: float = 0.75,
     ) -> list[dict]:
         """
         Find semantically similar items that may be duplicates.
