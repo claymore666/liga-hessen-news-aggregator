@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
+from services.pipeline import _strip_boilerplate
 
 logger = logging.getLogger(__name__)
 
@@ -433,10 +434,14 @@ class ClassifierWorker:
                 break
 
             try:
+                # Strip boilerplate before duplicate check to avoid false positives
+                clean_title = _strip_boilerplate(item_data["title"])
+                clean_content = _strip_boilerplate(item_data["content"])
+
                 # Find potential duplicates
                 duplicates = await classifier.find_duplicates(
-                    title=item_data["title"],
-                    content=item_data["content"],
+                    title=clean_title,
+                    content=clean_content,
                     threshold=0.75,
                 )
 
@@ -567,7 +572,7 @@ class ClassifierWorker:
             if not items:
                 return 0
 
-            # Prepare items for indexing
+            # Prepare items for indexing (strip boilerplate for better embeddings)
             items_to_index = []
             item_ids = []
             for item in items:
@@ -576,8 +581,8 @@ class ClassifierWorker:
                     source_name = item.channel.source.name
                 items_to_index.append({
                     "id": str(item.id),
-                    "title": item.title,
-                    "content": item.content or "",
+                    "title": _strip_boilerplate(item.title),
+                    "content": _strip_boilerplate(item.content or ""),
                     "metadata": {
                         "source": source_name,
                         "priority": item.priority.value if hasattr(item.priority, 'value') else str(item.priority),

@@ -22,6 +22,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# RSS boilerplate patterns that cause false positive similarity matches
+RSS_BOILERPLATE_PATTERNS = [
+    r"^RSS-Zusammenfassung:\s*",
+    r"\n\n--- Vollständiger Artikel von [^\n]+ ---\n\n",
+]
+
+
+def _strip_boilerplate(text: str) -> str:
+    """Strip RSS boilerplate text that causes false positive similarity matches.
+
+    The boilerplate is useful for display but creates structural similarity
+    between unrelated articles when creating embeddings.
+    """
+    result = text
+    for pattern in RSS_BOILERPLATE_PATTERNS:
+        result = re.sub(pattern, "", result, flags=re.IGNORECASE)
+    return result.strip()
+
 
 def _get_priority_value(priority) -> str:
     """Safely get priority value whether it's an enum or string."""
@@ -133,9 +151,12 @@ class Pipeline:
             similarity_score = None
             if self.relevance_filter and not self.training_mode:
                 try:
+                    # Strip boilerplate before embedding to avoid false positive similarity
+                    clean_title = _strip_boilerplate(normalized.title)
+                    clean_content = _strip_boilerplate(normalized.content)
                     duplicates = await self.relevance_filter.find_duplicates(
-                        title=normalized.title,
-                        content=normalized.content,
+                        title=clean_title,
+                        content=clean_content,
                         threshold=0.75,  # Paraphrase model threshold for same-story detection
                     )
                     if duplicates:
@@ -364,11 +385,12 @@ class Pipeline:
             if self.relevance_filter and not self.training_mode:
                 indexed_ids = []
                 try:
+                    # Strip boilerplate before indexing to improve duplicate detection quality
                     items_to_index = [
                         {
                             "id": str(item.id),
-                            "title": item.title,
-                            "content": item.content,
+                            "title": _strip_boilerplate(item.title),
+                            "content": _strip_boilerplate(item.content),
                             "metadata": {
                                 "source": channel.source.name if channel.source else "",
                                 "priority": _get_priority_value(item.priority) if item.priority else None,

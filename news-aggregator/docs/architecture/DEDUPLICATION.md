@@ -81,7 +81,7 @@ async def process_items(self, items):
         duplicates = await self.relevance_filter.find_duplicates(
             title=item.title,
             content=item.content,
-            threshold=0.70,  # Configurable
+            threshold=0.75,  # Configurable
         )
 
         if duplicates:
@@ -101,7 +101,7 @@ async def process_items(self, items):
 
 ```python
 # classifier.py:600-650 (DuplicateStore.find_duplicates)
-def find_duplicates(self, title, content, threshold=0.70):
+def find_duplicates(self, title, content, threshold=0.75):
     # 1. Create embedding from title + content
     text = f"{title} {content}"
     embedding = self.embedder.encode([text])
@@ -128,14 +128,14 @@ def find_duplicates(self, title, content, threshold=0.70):
 
 ## Thresholds
 
-### Deduplication Threshold (0.70)
+### Deduplication Threshold (0.75)
 
 Used for grouping same-story articles from different sources.
 
 | Value | Effect | Use Case |
 |-------|--------|----------|
-| **0.70** | Groups loosely related coverage | Production (current) |
-| 0.75 | Groups clearly same-story only | Higher precision |
+| 0.70 | Groups loosely related coverage | May cause false positives |
+| **0.75** | Groups clearly same-story only | Production (current) |
 | 0.80 | Groups near-identical articles | Minimal grouping |
 
 **Model**: `paraphrase-multilingual-mpnet-base-v2`
@@ -327,7 +327,7 @@ Consider adding a scheduled job to sync indexes periodically.
    ```bash
    curl -X POST http://gpu1:8082/find-duplicates \
      -H "Content-Type: application/json" \
-     -d '{"title": "Test title", "content": "Test content", "threshold": 0.70}'
+     -d '{"title": "Test title", "content": "Test content", "threshold": 0.75}'
    ```
 
 ### Stale References in Database
@@ -363,7 +363,7 @@ The threshold is set in `pipeline.py:139`:
 duplicates = await self.relevance_filter.find_duplicates(
     title=normalized.title,
     content=normalized.content,
-    threshold=0.70,  # Adjust here
+    threshold=0.75,  # Adjust here
 )
 ```
 

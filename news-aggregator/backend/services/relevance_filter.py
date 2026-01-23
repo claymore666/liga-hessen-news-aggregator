@@ -25,7 +25,7 @@ class RelevanceFilter:
 
         Args:
             base_url: Classifier API URL (e.g., http://gpu1:8081)
-            threshold: Confidence threshold for filtering (default: 0.8)
+            threshold: Confidence threshold for filtering (default: 0.75)
             timeout: Request timeout in seconds
         """
         self.base_url = base_url.rstrip("/")
@@ -267,7 +267,7 @@ class RelevanceFilter:
         Args:
             title: Item title
             content: Item content
-            threshold: Similarity threshold (default 0.92)
+            threshold: Similarity threshold (default 0.75)
 
         Returns:
             List of duplicate candidates with id, title, score, metadata
