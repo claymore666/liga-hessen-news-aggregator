@@ -317,14 +317,17 @@ class XScraperConnector(BaseConnector):
                         if href:
                             tweet_url = f"https://x.com{href}"
 
-                # Generate external ID from URL or create one
+                # Generate external ID from URL - skip if no valid tweet URL
                 external_id = ""
                 if tweet_url:
                     match = re.search(r"/status/(\d+)", tweet_url)
                     if match:
                         external_id = match.group(1)
-                if not external_id:
-                    external_id = f"{config.username}_{i}_{int(published_at.timestamp())}"
+
+                # Skip items without a valid tweet URL (likely promoted/spam content)
+                if not external_id or "/status/" not in tweet_url:
+                    logger.debug(f"Skipping item without valid tweet URL: {text[:50]}...")
+                    continue
 
                 # Extract and follow links if enabled
                 combined_content = text
@@ -383,7 +386,7 @@ Verlinkter Artikel von {article.source_domain}:
                         external_id=external_id,
                         title=text[:100] + "..." if len(text) > 100 else text,
                         content=combined_content,
-                        url=tweet_url or f"https://x.com/{config.username}",
+                        url=tweet_url,  # Guaranteed valid due to earlier check
                         author=author,
                         published_at=published_at,
                         metadata={
