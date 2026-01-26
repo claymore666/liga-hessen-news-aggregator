@@ -53,6 +53,8 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-backend
     restart: unless-stopped
+    ulimits:
+      core: 0  # Disable core dumps to prevent disk exhaustion
     environment:
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
