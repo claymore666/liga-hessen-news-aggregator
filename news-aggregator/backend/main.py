@@ -180,14 +180,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Shutdown
+    # Shutdown (in reverse order of startup)
+    logging.info("Shutting down...")
+    if settings.scheduler_enabled:
+        stop_scheduler()
     if settings.classifier_worker_enabled:
         await stop_classifier_worker()
     if settings.llm_worker_enabled:
         await stop_worker()
-    proxy_manager.stop_background_search()
-    if settings.scheduler_enabled:
-        stop_scheduler()
+    await proxy_manager.stop_background_search()
+    logging.info("Shutdown complete")
 
 
 API_DESCRIPTION = """

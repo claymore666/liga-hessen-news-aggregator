@@ -145,6 +145,7 @@ export const llmApi = {
 export interface WorkerStatus {
   running: boolean
   paused: boolean
+  stopped_due_to_errors?: boolean
   stats: Record<string, unknown>
 }
 

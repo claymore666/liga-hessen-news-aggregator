@@ -30,8 +30,14 @@ class Settings(BaseSettings):
     database_driver: str = "postgresql+asyncpg"  # SQLAlchemy async driver
 
     # Database - Connection Pool (PostgreSQL only)
-    database_pool_size: int = 10  # Number of persistent connections (increased from 5)
-    database_pool_max_overflow: int = 20  # Extra connections allowed (increased from 10)
+    # Pool sizing for concurrent workers:
+    # - Scheduler: up to 10 concurrent channel fetches
+    # - LLM Worker: batch_size=10
+    # - Classifier Worker: batch_size=50
+    # - API requests: ~20
+    # Total potential: ~90, so pool_size + max_overflow should be >= 50
+    database_pool_size: int = 20  # Number of persistent connections
+    database_pool_max_overflow: int = 30  # Extra connections allowed
     database_pool_timeout: int = 30  # Seconds to wait for connection
     database_pool_recycle: int = 1800  # Recycle connections after 30 min
 

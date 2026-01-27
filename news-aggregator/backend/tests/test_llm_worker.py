@@ -146,9 +146,10 @@ class TestLLMWorkerEnqueue:
 class TestLLMWorkerStatus:
     """Tests for status reporting."""
 
-    def test_get_status_initial(self, worker):
+    @pytest.mark.asyncio
+    async def test_get_status_initial(self, worker):
         """Should return initial status."""
-        status = worker.get_status()
+        status = await worker.get_status()
         assert status["running"] is False
         assert status["paused"] is False
         assert status["fresh_queue_size"] == 0
@@ -159,7 +160,7 @@ class TestLLMWorkerStatus:
         """Should reflect running state."""
         await worker.start()
         try:
-            status = worker.get_status()
+            status = await worker.get_status()
             assert status["running"] is True
         finally:
             await worker.stop()
@@ -169,12 +170,13 @@ class TestLLMWorkerStatus:
         """Should reflect queue size."""
         await worker.enqueue_fresh(1)
         await worker.enqueue_fresh(2)
-        status = worker.get_status()
+        status = await worker.get_status()
         assert status["fresh_queue_size"] == 2
 
-    def test_get_status_stats_copy(self, worker):
+    @pytest.mark.asyncio
+    async def test_get_status_stats_copy(self, worker):
         """Should return copy of stats."""
-        status = worker.get_status()
+        status = await worker.get_status()
         status["stats"]["errors"] = 999
         # Original should be unchanged
         assert worker._stats["errors"] == 0

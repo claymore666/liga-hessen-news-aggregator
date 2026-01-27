@@ -4,6 +4,7 @@ Direct scraping of instagram.com with stealth mode.
 Works for public profiles without authentication.
 """
 
+import asyncio
 import logging
 import random
 import re
@@ -109,17 +110,25 @@ class InstagramScraperConnector(BaseConnector):
 
         items = []
 
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
+        async with async_playwright() as p:
+            # Launch browser with timeout protection
+            try:
+                browser = await asyncio.wait_for(
+                    p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                        ],
+                    ),
+                    timeout=30.0,
                 )
+            except asyncio.TimeoutError:
+                logger.error(f"Chromium launch timeout for @{config.username}")
+                raise
 
+            try:
                 context_args = {
                     "user_agent": user_agent,
                     "viewport": viewport,
@@ -150,12 +159,10 @@ class InstagramScraperConnector(BaseConnector):
                 page_content = await page.content()
                 if "Sorry, this page isn't available" in page_content:
                     logger.warning(f"Instagram profile not found: @{config.username}")
-                    await browser.close()
                     return []
 
                 if "This Account is Private" in page_content:
                     logger.warning(f"Instagram profile is private: @{config.username}")
-                    await browser.close()
                     return []
 
                 # Wait for posts to load
@@ -164,20 +171,19 @@ class InstagramScraperConnector(BaseConnector):
                     await page.wait_for_selector("article a[href*='/p/']", timeout=15000)
                 except PlaywrightTimeout:
                     logger.warning(f"No posts found for @{config.username}")
-                    await browser.close()
                     return []
 
                 # Extract posts
                 items = await self._extract_posts(page, config)
 
+            except PlaywrightTimeout as e:
+                logger.error(f"Timeout scraping @{config.username}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error scraping @{config.username}: {e}")
+                raise
+            finally:
                 await browser.close()
-
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout scraping @{config.username}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error scraping @{config.username}: {e}")
-            raise
 
         logger.info(f"Extracted {len(items)} posts from @{config.username}")
         return items

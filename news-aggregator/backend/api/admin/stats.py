@@ -107,7 +107,7 @@ async def get_system_stats(
     # LLM Worker status
     llm_worker = get_llm_worker()
     if llm_worker:
-        llm_status = llm_worker.get_status()
+        llm_status = await llm_worker.get_status()
         llm_worker_status = WorkerStatus(
             running=llm_status["running"],
             paused=llm_status["paused"],
@@ -123,7 +123,7 @@ async def get_system_stats(
     # Classifier Worker status
     classifier_worker = get_classifier_worker()
     if classifier_worker:
-        clf_status = classifier_worker.get_status()
+        clf_status = await classifier_worker.get_status()
         classifier_worker_status = WorkerStatus(
             running=clf_status["running"],
             paused=clf_status["paused"],

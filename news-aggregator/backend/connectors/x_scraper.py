@@ -1,5 +1,6 @@
 """X.com (Twitter) scraper connector using Playwright."""
 
+import asyncio
 import json
 import logging
 import random
@@ -163,18 +164,25 @@ class XScraperConnector(BaseConnector):
 
         items = []
 
-        try:
-            async with async_playwright() as p:
-                # Launch browser
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
+        async with async_playwright() as p:
+            # Launch browser with timeout protection
+            try:
+                browser = await asyncio.wait_for(
+                    p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                        ],
+                    ),
+                    timeout=30.0,
                 )
+            except asyncio.TimeoutError:
+                logger.error(f"Chromium launch timeout for @{config.username}")
+                raise
 
+            try:
                 # Create context with random fingerprint
                 context_args = {
                     "user_agent": user_agent,
@@ -219,7 +227,6 @@ class XScraperConnector(BaseConnector):
                     tweets_exist = await page.query_selector('[data-testid="tweet"]')
                     if not tweets_exist:
                         logger.warning(f"No tweets found for @{config.username}")
-                        await browser.close()
                         return []
 
                 # Scroll to load more tweets
@@ -230,14 +237,14 @@ class XScraperConnector(BaseConnector):
                 # Extract tweets (pass context for Playwright-based article fetching)
                 items = await self._extract_tweets(page, config, context)
 
+            except PlaywrightTimeout as e:
+                logger.error(f"Timeout scraping @{config.username}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error scraping @{config.username}: {e}")
+                raise
+            finally:
                 await browser.close()
-
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout scraping @{config.username}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error scraping @{config.username}: {e}")
-            raise
 
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items

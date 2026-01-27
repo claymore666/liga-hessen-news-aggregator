@@ -579,7 +579,7 @@ async def get_worker_status() -> WorkerStatusResponse:
             },
         )
 
-    status = worker.get_status()
+    status = await worker.get_status()
     return WorkerStatusResponse(
         running=status["running"],
         paused=status["paused"],
@@ -653,7 +653,7 @@ async def get_classifier_worker_status() -> ClassifierWorkerStatusResponse:
             },
         )
 
-    status = worker.get_status()
+    status = await worker.get_status()
     return ClassifierWorkerStatusResponse(
         running=status["running"],
         paused=status["paused"],

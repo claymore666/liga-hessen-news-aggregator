@@ -84,8 +84,8 @@ def get_effective_limit(source_type: str) -> int:
 
     return base_limit
 
-# Track if a fetch is currently running to avoid overlapping fetches
-_fetch_in_progress = False
+# Lock to prevent overlapping fetches (replaces boolean flag to avoid race conditions)
+_fetch_lock = asyncio.Lock()
 
 scheduler = AsyncIOScheduler()
 
@@ -403,14 +403,12 @@ async def fetch_due_channels() -> dict:
     Returns:
         Dict with fetch statistics.
     """
-    global _fetch_in_progress
-
-    if _fetch_in_progress:
+    # Use lock to prevent overlapping fetches (atomic test-and-acquire)
+    if _fetch_lock.locked():
         logger.debug("Fetch already in progress, skipping")
         return {"skipped": True, "reason": "fetch_in_progress"}
 
-    _fetch_in_progress = True
-    try:
+    async with _fetch_lock:
         now = datetime.utcnow()
 
         async with async_session_maker() as db:
@@ -486,8 +484,6 @@ async def fetch_due_channels() -> dict:
             "fetched": total_fetched,
             "errors": total_errors,
         }
-    finally:
-        _fetch_in_progress = False
 
 
 async def retry_llm_processing(batch_size: int = 10) -> dict:

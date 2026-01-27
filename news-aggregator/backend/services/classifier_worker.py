@@ -59,7 +59,7 @@ class ClassifierWorker:
         self._task: Optional[asyncio.Task] = None
         self._classifier = None
 
-        # Statistics
+        # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
             "processed": 0,
             "priority_changed": 0,
@@ -70,6 +70,8 @@ class ClassifierWorker:
             "started_at": None,
             "last_processed_at": None,
         }
+        self._stats_lock = asyncio.Lock()
+        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
 
     async def start(self):
         """Start the worker background task."""
@@ -79,6 +81,7 @@ class ClassifierWorker:
 
         self._running = True
         self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         logger.info("Classifier worker started")
 
@@ -94,6 +97,12 @@ class ClassifierWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+        # Close HTTP client in classifier to prevent resource leak
+        if self._classifier:
+            await self._classifier.close()
+            self._classifier = None
+
         logger.info("Classifier worker stopped")
 
     def pause(self):
@@ -106,12 +115,15 @@ class ClassifierWorker:
         self._paused = False
         logger.info("Classifier worker resumed")
 
-    def get_status(self) -> dict:
+    async def get_status(self) -> dict:
         """Get worker status and statistics."""
+        async with self._stats_lock:
+            stats_copy = self._stats.copy()
         return {
             "running": self._running,
             "paused": self._paused,
-            "stats": self._stats.copy(),
+            "stopped_due_to_errors": self._stopped_due_to_errors,
+            "stats": stats_copy,
         }
 
     async def _get_classifier(self):
@@ -125,6 +137,9 @@ class ClassifierWorker:
         """Main worker loop."""
         logger.info("Classifier worker loop started")
 
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+
         while self._running:
             try:
                 # Check if paused
@@ -135,6 +150,7 @@ class ClassifierWorker:
                 # Priority 1: Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     # More items might be available
                     await asyncio.sleep(0.5)
                     continue
@@ -142,12 +158,14 @@ class ClassifierWorker:
                 # Priority 2: Re-check duplicates for items that missed the check
                 duplicates_checked = await self._process_unchecked_duplicates()
                 if duplicates_checked > 0:
+                    consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
 
                 # Priority 3: Re-index items that weren't indexed in vector store
                 indexed = await self._process_unindexed_items()
                 if indexed > 0:
+                    consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
 
@@ -159,9 +177,24 @@ class ClassifierWorker:
                 logger.info("Classifier worker cancelled")
                 break
             except Exception as e:
-                logger.error(f"Classifier worker error: {e}", exc_info=True)
-                self._stats["errors"] += 1
-                await asyncio.sleep(10.0)  # Back off on error
+                consecutive_errors += 1
+                logger.error(f"Classifier worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(
+                        f"Classifier worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
+                        "Manual restart required after fixing the issue."
+                    )
+                    self._stopped_due_to_errors = True
+                    self._running = False
+                    break
+
+                # Exponential backoff: 10s, 20s, 40s, ... up to 120s
+                backoff = min(120.0, 10.0 * (2 ** (consecutive_errors - 1)))
+                logger.info(f"Backing off for {backoff:.0f}s before retry")
+                await asyncio.sleep(backoff)
 
         logger.info("Classifier worker loop ended")
 
@@ -279,7 +312,8 @@ class ClassifierWorker:
 
             except Exception as e:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
-                self._stats["errors"] += 1
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
 
         # Phase 3: Apply updates to database
         # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
@@ -330,9 +364,10 @@ class ClassifierWorker:
                 logger.error(f"Failed to commit classifier updates: {e}")
                 raise
 
-        self._stats["processed"] += processed
-        self._stats["priority_changed"] += priority_changed
-        self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+        async with self._stats_lock:
+            self._stats["processed"] += processed
+            self._stats["priority_changed"] += priority_changed
+            self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 
         if processed > 0:
             logger.info(f"Classified {processed} items ({priority_changed} priority changes)")
@@ -482,7 +517,8 @@ class ClassifierWorker:
 
             except Exception as e:
                 logger.warning(f"Failed to check duplicates for item {item_data['id']}: {e}")
-                self._stats["errors"] += 1
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
 
         # Apply updates to database
         if updates:
@@ -525,8 +561,9 @@ class ClassifierWorker:
                 logger.error(f"Failed to commit duplicate check updates: {e}")
                 raise
 
-        self._stats["duplicates_checked"] += checked
-        self._stats["duplicates_found"] += duplicates_found
+        async with self._stats_lock:
+            self._stats["duplicates_checked"] += checked
+            self._stats["duplicates_found"] += duplicates_found
 
         if checked > 0:
             logger.info(f"Checked {checked} items for duplicates ({duplicates_found} found)")
@@ -598,7 +635,8 @@ class ClassifierWorker:
             indexed = await classifier.index_items_batch(items_to_index)
         except Exception as e:
             logger.warning(f"Failed to index items: {e}")
-            self._stats["errors"] += 1
+            async with self._stats_lock:
+                self._stats["errors"] += 1
             return 0
 
         # Update metadata for all items (even if indexed=0, the API succeeded)
@@ -625,7 +663,8 @@ class ClassifierWorker:
                 logger.error(f"Failed to update vectordb_indexed flags: {e}")
                 raise
 
-        self._stats["vectordb_indexed"] += len(item_ids)
+        async with self._stats_lock:
+            self._stats["vectordb_indexed"] += len(item_ids)
 
         if len(item_ids) > 0:
             logger.info(f"Indexed {len(item_ids)} items in vector store")

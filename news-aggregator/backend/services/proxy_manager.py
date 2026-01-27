@@ -377,11 +377,16 @@ class ProxyManager:
         if self._background_task is None or self._background_task.done():
             self._background_task = asyncio.create_task(self._background_maintenance())
 
-    def stop_background_search(self):
-        """Stop the background proxy manager."""
+    async def stop_background_search(self):
+        """Stop the background proxy manager and wait for cleanup."""
         self._running = False
         if self._background_task and not self._background_task.done():
             self._background_task.cancel()
+            try:
+                await self._background_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Proxy manager stopped")
 
     async def refresh_proxy_list(self) -> int:
         """Manual refresh - clear pool and refill."""

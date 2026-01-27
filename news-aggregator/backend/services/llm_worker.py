@@ -51,7 +51,8 @@ class LLMWorker:
         self.backlog_batch_size = backlog_batch_size
 
         # Fresh items queue (in-memory, highest priority)
-        self._fresh_queue: asyncio.Queue[int] = asyncio.Queue()
+        # Bounded to prevent memory surge if LLM processing is slow
+        self._fresh_queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1000)
 
         # Worker state
         self._running = False
@@ -59,7 +60,7 @@ class LLMWorker:
         self._task: Optional[asyncio.Task] = None
         self._processor = None
 
-        # Statistics
+        # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
             "fresh_processed": 0,
             "backlog_processed": 0,
@@ -69,6 +70,8 @@ class LLMWorker:
             "total_processing_time": 0.0,  # Total seconds spent processing
             "items_timed": 0,  # Number of items with timing data
         }
+        self._stats_lock = asyncio.Lock()
+        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
 
     async def start(self):
         """Start the worker background task."""
@@ -78,6 +81,7 @@ class LLMWorker:
 
         self._running = True
         self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         logger.info("LLM worker started")
 
@@ -105,23 +109,34 @@ class LLMWorker:
         self._paused = False
         logger.info("LLM worker resumed")
 
-    async def enqueue_fresh(self, item_id: int):
+    async def enqueue_fresh(self, item_id: int) -> bool:
         """
         Enqueue a fresh item for immediate processing.
 
         Args:
             item_id: Database ID of the item to process
-        """
-        await self._fresh_queue.put(item_id)
-        logger.debug(f"Enqueued fresh item {item_id} (queue size: {self._fresh_queue.qsize()})")
 
-    def get_status(self) -> dict:
+        Returns:
+            True if enqueued, False if queue is full (item will be processed via backlog)
+        """
+        try:
+            self._fresh_queue.put_nowait(item_id)
+            logger.debug(f"Enqueued fresh item {item_id} (queue size: {self._fresh_queue.qsize()})")
+            return True
+        except asyncio.QueueFull:
+            logger.warning(f"Fresh item queue full, item {item_id} will be processed via backlog")
+            return False
+
+    async def get_status(self) -> dict:
         """Get worker status and statistics."""
+        async with self._stats_lock:
+            stats_copy = self._stats.copy()
         return {
             "running": self._running,
             "paused": self._paused,
+            "stopped_due_to_errors": self._stopped_due_to_errors,
             "fresh_queue_size": self._fresh_queue.qsize(),
-            "stats": self._stats.copy(),
+            "stats": stats_copy,
         }
 
     async def _get_processor(self):
@@ -153,6 +168,9 @@ class LLMWorker:
         """Main worker loop."""
         logger.info("LLM worker loop started")
 
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+
         while self._running:
             try:
                 # Check if paused
@@ -163,12 +181,14 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
                     continue
@@ -184,9 +204,24 @@ class LLMWorker:
                 logger.info("LLM worker cancelled")
                 break
             except Exception as e:
-                logger.error(f"LLM worker error: {e}", exc_info=True)
-                self._stats["errors"] += 1
-                await asyncio.sleep(5.0)  # Back off on error
+                consecutive_errors += 1
+                logger.error(f"LLM worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(
+                        f"LLM worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
+                        "Manual restart required after fixing the issue."
+                    )
+                    self._stopped_due_to_errors = True
+                    self._running = False
+                    break
+
+                # Exponential backoff: 5s, 10s, 20s, 40s, ... up to 60s
+                backoff = min(60.0, 5.0 * (2 ** (consecutive_errors - 1)))
+                logger.info(f"Backing off for {backoff:.0f}s before retry")
+                await asyncio.sleep(backoff)
 
         logger.info("LLM worker loop ended")
 
@@ -244,11 +279,13 @@ class LLMWorker:
                 return 0
 
             processed = await self._process_items(item_ids, processor, is_fresh=True)
-            self._stats["fresh_processed"] += processed
+            async with self._stats_lock:
+                self._stats["fresh_processed"] += processed
 
         except Exception as e:
             logger.error(f"Error processing fresh items: {e}")
-            self._stats["errors"] += 1
+            async with self._stats_lock:
+                self._stats["errors"] += 1
 
         return processed
 
@@ -328,10 +365,12 @@ class LLMWorker:
 
         try:
             processed = await self._process_items(item_ids, processor, is_fresh=False)
-            self._stats["backlog_processed"] += processed
+            async with self._stats_lock:
+                self._stats["backlog_processed"] += processed
         except Exception as e:
             logger.error(f"Error processing backlog items: {e}")
-            self._stats["errors"] += 1
+            async with self._stats_lock:
+                self._stats["errors"] += 1
             return 0
 
         return processed
@@ -417,8 +456,9 @@ class LLMWorker:
                 start_time = time.time()
                 analysis = await processor.analyze_from_data(item_data)
                 elapsed = time.time() - start_time
-                self._stats["total_processing_time"] += elapsed
-                self._stats["items_timed"] += 1
+                async with self._stats_lock:
+                    self._stats["total_processing_time"] += elapsed
+                    self._stats["items_timed"] += 1
 
                 # Compute values to update
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
@@ -518,13 +558,15 @@ class LLMWorker:
                         logger.warning(f"Failed to log LLM analysis for item {item_id}: {log_err}")
 
                 processed += 1
-                self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+                async with self._stats_lock:
+                    self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 
                 logger.info(f"LLM {item_type}: {item_data['title'][:40]}... -> {llm_priority}")
 
             except Exception as e:
                 logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
-                self._stats["errors"] += 1
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
 
         return processed
 
