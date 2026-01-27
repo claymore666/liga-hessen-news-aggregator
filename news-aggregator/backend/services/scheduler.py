@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # For proxy-using connectors (x_scraper, instagram_scraper), the actual limit
 # is dynamically capped by available proxies via get_effective_limit()
 SOURCE_TYPE_LIMITS = {
-    "x_scraper": 4,  # Heavy browser + rate limits, uses proxies
-    "instagram_scraper": 4,  # Heavy browser, uses proxies
+    "x_scraper": 2,  # Heavy browser + rate limits, reduced to avoid cascade failures
+    "instagram_scraper": 2,  # Heavy browser, reduced to avoid cascade failures
     "instagram": 3,
     "mastodon": 5,
     "twitter": 5,

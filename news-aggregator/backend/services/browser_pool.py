@@ -34,18 +34,22 @@ class BrowserPool:
     this pool maintains a single driver and creates/recycles browsers from it.
     """
 
-    def __init__(self, max_browsers: int = 8):
+    def __init__(self, max_browsers: int = 8, error_threshold: int = 10):
         """
         Initialize the browser pool.
 
         Args:
             max_browsers: Maximum number of concurrent browsers
+            error_threshold: Number of consecutive errors before restarting driver
         """
         self._playwright: Optional[Playwright] = None
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_browsers)
         self._initialized = False
         self._shutting_down = False
+        self._error_count = 0
+        self._error_threshold = error_threshold
+        self._success_count = 0
 
     async def _ensure_initialized(self) -> Playwright:
         """Ensure Playwright is initialized, creating it if needed."""
@@ -116,11 +120,17 @@ class BrowserPool:
 
                 yield browser
 
+                # Success - reset error count
+                self._error_count = 0
+                self._success_count += 1
+
             except asyncio.TimeoutError:
                 logger.error("Browser launch timeout")
+                await self._handle_error()
                 raise
             except Exception as e:
                 logger.error(f"Browser error: {e}")
+                await self._handle_error()
                 raise
             finally:
                 if browser:
@@ -128,6 +138,36 @@ class BrowserPool:
                         await browser.close()
                     except Exception as e:
                         logger.debug(f"Error closing browser: {e}")
+
+    async def _handle_error(self):
+        """Handle browser error - restart driver if too many consecutive errors."""
+        self._error_count += 1
+        if self._error_count >= self._error_threshold:
+            logger.warning(
+                f"Browser error threshold reached ({self._error_count} errors), "
+                "restarting Playwright driver..."
+            )
+            await self._restart_driver()
+
+    async def _restart_driver(self):
+        """Restart the Playwright driver."""
+        async with self._lock:
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping Playwright during restart: {e}")
+                self._playwright = None
+                self._initialized = False
+
+            # Reinitialize
+            try:
+                self._playwright = await async_playwright().start()
+                self._initialized = True
+                self._error_count = 0
+                logger.info("Playwright driver restarted successfully")
+            except Exception as e:
+                logger.error(f"Failed to restart Playwright driver: {e}")
 
     async def shutdown(self):
         """Shutdown the browser pool and cleanup resources."""
@@ -168,4 +208,6 @@ class BrowserPool:
 
 
 # Singleton instance
-browser_pool = BrowserPool(max_browsers=8)
+# Keep concurrency low to avoid overwhelming the shared Playwright driver
+# When one browser crashes, it can cascade to affect others
+browser_pool = BrowserPool(max_browsers=4)
