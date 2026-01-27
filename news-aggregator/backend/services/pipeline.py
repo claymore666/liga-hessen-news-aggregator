@@ -195,6 +195,9 @@ class Pipeline:
                                     f"Skipping duplicate event: item {similar_to_id} no longer exists "
                                     "(vector index out of sync)"
                                 )
+                                # Reset similar_to_id to avoid foreign key violation
+                                similar_to_id = None
+                                similarity_score = None
                         except Exception as e:
                             logger.warning(f"Failed to record duplicate event: {e}")
                 except Exception as e:

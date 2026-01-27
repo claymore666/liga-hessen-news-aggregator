@@ -65,6 +65,18 @@ class StorageStats(BaseModel):
     total_size_human: str
 
 
+class VectorSyncPreview(BaseModel):
+    """Preview of vector index sync operation."""
+    orphaned_ids: int = Field(description="IDs in vector index but not in database")
+    missing_ids: int = Field(description="IDs in database but not in vector index")
+
+
+class VectorSyncResult(BaseModel):
+    """Result of vector index sync operation."""
+    orphaned_deleted: int = Field(description="Orphaned IDs removed from vector index")
+    missing_indexed: int = Field(description="Missing IDs added to vector index")
+
+
 def _format_bytes(size_bytes: int) -> str:
     """Format bytes as human-readable string."""
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -316,4 +328,78 @@ async def get_storage_stats(
         duplicate_index_items=duplicate_items,
         total_size_bytes=total_size,
         total_size_human=_format_bytes(total_size),
+    )
+
+
+@router.post("/admin/housekeeping/vector-sync/preview", response_model=VectorSyncPreview)
+async def preview_vector_sync(
+    db: AsyncSession = Depends(get_db),
+) -> VectorSyncPreview:
+    """Preview vector index sync - shows orphaned and missing IDs.
+
+    Orphaned: IDs in vector index that no longer exist in database (will be deleted)
+    Missing: IDs in database that are not in vector index (will be indexed)
+    """
+    from services.relevance_filter import create_relevance_filter
+
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        return VectorSyncPreview(orphaned_ids=0, missing_ids=0)
+
+    # Get all IDs from vector index
+    indexed_ids = await relevance_filter.get_all_indexed_ids()
+    indexed_set = set(indexed_ids)
+
+    # Get all IDs from database (only items that should be indexed)
+    result = await db.execute(select(Item.id))
+    db_ids = {str(row[0]) for row in result.fetchall()}
+
+    # Find orphaned (in vector but not in DB)
+    orphaned = indexed_set - db_ids
+
+    # Find missing (in DB but not in vector)
+    missing = db_ids - indexed_set
+
+    return VectorSyncPreview(
+        orphaned_ids=len(orphaned),
+        missing_ids=len(missing),
+    )
+
+
+@router.post("/admin/housekeeping/vector-sync", response_model=VectorSyncResult)
+async def execute_vector_sync(
+    db: AsyncSession = Depends(get_db),
+) -> VectorSyncResult:
+    """Sync vector index with database.
+
+    - Removes orphaned entries (IDs in vector index but not in database)
+    - Does NOT re-index missing items (too expensive, handled by classifier worker)
+    """
+    from services.relevance_filter import create_relevance_filter
+
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        return VectorSyncResult(orphaned_deleted=0, missing_indexed=0)
+
+    # Get all IDs from vector index
+    indexed_ids = await relevance_filter.get_all_indexed_ids()
+    indexed_set = set(indexed_ids)
+
+    # Get all IDs from database
+    result = await db.execute(select(Item.id))
+    db_ids = {str(row[0]) for row in result.fetchall()}
+
+    # Find orphaned (in vector but not in DB)
+    orphaned = list(indexed_set - db_ids)
+
+    # Delete orphaned entries
+    orphaned_deleted = 0
+    if orphaned:
+        deleted_search, deleted_dup = await relevance_filter.delete_items(orphaned)
+        orphaned_deleted = max(deleted_search, deleted_dup)
+        logger.info(f"Vector sync: deleted {orphaned_deleted} orphaned entries")
+
+    return VectorSyncResult(
+        orphaned_deleted=orphaned_deleted,
+        missing_indexed=0,  # Not implemented - too expensive
     )

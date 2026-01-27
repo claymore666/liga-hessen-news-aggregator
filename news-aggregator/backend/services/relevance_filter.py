@@ -310,6 +310,28 @@ class RelevanceFilter:
             logger.warning(f"Duplicate search failed: {e}")
             return []
 
+    async def get_all_indexed_ids(self) -> list[str]:
+        """
+        Get all item IDs currently indexed in the vector store.
+
+        Used for sync operations to find orphaned entries.
+
+        Returns:
+            List of all indexed item IDs as strings
+        """
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                f"{self.base_url}/ids",
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("ids", [])
+        except Exception as e:
+            logger.warning(f"Failed to get indexed IDs: {e}")
+            return []
+
     async def delete_items(self, item_ids: list[str]) -> tuple[int, int]:
         """
         Delete items from both vector indexes (search and duplicate).
