@@ -8,12 +8,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
 from pydantic import BaseModel, Field
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
+from services.browser_pool import browser_pool
 
 logger = logging.getLogger(__name__)
 
@@ -164,24 +165,8 @@ class XScraperConnector(BaseConnector):
 
         items = []
 
-        async with async_playwright() as p:
-            # Launch browser with timeout protection
-            try:
-                browser = await asyncio.wait_for(
-                    p.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                        ],
-                    ),
-                    timeout=30.0,
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"Chromium launch timeout for @{config.username}")
-                raise
-
+        # Use shared browser pool instead of creating new Playwright instance
+        async with browser_pool.get_browser() as browser:
             try:
                 # Create context with random fingerprint
                 context_args = {
@@ -244,7 +229,11 @@ class XScraperConnector(BaseConnector):
                 logger.error(f"Error scraping @{config.username}: {e}")
                 raise
             finally:
-                await browser.close()
+                # Close context (browser is closed by pool)
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items
@@ -682,24 +671,24 @@ Verlinkter Artikel von {article.source_domain}:
             Tuple of (success, message)
         """
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+            async with browser_pool.get_browser() as browser:
                 context = await browser.new_context(
                     user_agent=random.choice(self.USER_AGENTS),
                 )
-                page = await context.new_page()
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                try:
+                    page = await context.new_page()
+                    stealth = Stealth()
+                    await stealth.apply_stealth_async(page)
 
-                url = f"https://x.com/{config.username}"
-                response = await page.goto(url, timeout=15000)
+                    url = f"https://x.com/{config.username}"
+                    response = await page.goto(url, timeout=15000)
 
-                await browser.close()
-
-                if response and response.status == 200:
-                    return True, f"Profile @{config.username} found"
-                else:
-                    return False, f"Profile @{config.username} not found (HTTP {response.status if response else 'error'})"
+                    if response and response.status == 200:
+                        return True, f"Profile @{config.username} found"
+                    else:
+                        return False, f"Profile @{config.username} not found (HTTP {response.status if response else 'error'})"
+                finally:
+                    await context.close()
 
         except Exception as e:
             return False, f"Validation error: {str(e)}"

@@ -189,6 +189,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.llm_worker_enabled:
         await stop_worker()
     await proxy_manager.stop_background_search()
+
+    # Shutdown browser pool (cleanup Playwright driver)
+    from services.browser_pool import browser_pool
+    await browser_pool.shutdown()
+
     logging.info("Shutdown complete")
 
 
