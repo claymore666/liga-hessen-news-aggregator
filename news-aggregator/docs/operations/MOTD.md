@@ -45,10 +45,10 @@ curl http://localhost:8000/api/motd/history
 
 ### Session Behavior
 
-- MOTD is shown once per day per browser
-- Session expires at midnight (Europe/Berlin timezone)
-- If user dismisses, they won't see it again until next day
-- If MOTD content changes (new ID), users see the new message
+- MOTD is shown **only when it changes** (new ID or updated_at)
+- If user dismisses, they won't see the same MOTD again
+- If MOTD is updated (even same day), users see the new version
+- No daily reset - MOTD only appears when there's actually something new
 
 ## Writing Guidelines
 

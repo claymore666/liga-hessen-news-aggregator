@@ -13,54 +13,39 @@ const SESSION_KEY = 'motd_session'
 interface MOTDSession {
   dismissedAt: string
   motdId: number | null
+  motdUpdatedAt: string | null  // Track the version of MOTD seen
 }
 
 /**
- * Check if session has expired (expired at midnight Europe/Berlin)
+ * Check if this MOTD was already seen by the user.
+ * Returns true if user has already seen this exact MOTD version.
+ *
+ * Logic:
+ * - If no session exists, user hasn't seen any MOTD
+ * - If motdId matches AND motdUpdatedAt matches, user has seen this version
+ * - If motdId or updatedAt differs, this is a new/updated MOTD
  */
-function isSessionExpired(): boolean {
-  const sessionData = localStorage.getItem(SESSION_KEY)
-  if (!sessionData) return true
-
-  try {
-    const session: MOTDSession = JSON.parse(sessionData)
-    const dismissedDate = new Date(session.dismissedAt)
-    const now = new Date()
-
-    // Compare dates (ignore time) - session expires at midnight
-    const dismissedDay = dismissedDate.toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin' })
-    const today = now.toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin' })
-
-    return dismissedDay !== today
-  } catch {
-    return true
-  }
-}
-
-/**
- * Check if this specific MOTD was already dismissed today
- */
-function wasMotdDismissed(motdId: number | null): boolean {
-  if (isSessionExpired()) return false
-
+function hasSeenMotd(motdId: number | null, motdUpdatedAt: string | null): boolean {
   const sessionData = localStorage.getItem(SESSION_KEY)
   if (!sessionData) return false
 
   try {
     const session: MOTDSession = JSON.parse(sessionData)
-    return session.motdId === motdId
+    // User has seen this MOTD if both ID and updated_at match
+    return session.motdId === motdId && session.motdUpdatedAt === motdUpdatedAt
   } catch {
     return false
   }
 }
 
 /**
- * Save dismissal to localStorage
+ * Save that user has seen this MOTD version
  */
-function saveDismissal(motdId: number | null) {
+function saveDismissal(motdId: number | null, motdUpdatedAt: string | null) {
   const session: MOTDSession = {
     dismissedAt: new Date().toISOString(),
     motdId,
+    motdUpdatedAt,
   }
   localStorage.setItem(SESSION_KEY, JSON.stringify(session))
 }
@@ -70,7 +55,7 @@ function saveDismissal(motdId: number | null) {
  */
 function dismiss() {
   if (motd.value) {
-    saveDismissal(motd.value.id)
+    saveDismissal(motd.value.id, motd.value.updated_at)
   }
   isVisible.value = false
 }
@@ -84,8 +69,9 @@ async function checkMOTD() {
     const response = await motdApi.get()
     motd.value = response.data
 
-    // Show if there's an active message and user hasn't dismissed it today
-    if (motd.value.active && motd.value.message && !wasMotdDismissed(motd.value.id)) {
+    // Show if there's an active message and user hasn't seen this version yet
+    // Only show if the MOTD has actually changed since user last saw it
+    if (motd.value.active && motd.value.message && !hasSeenMotd(motd.value.id, motd.value.updated_at)) {
       isVisible.value = true
     }
   } catch (e) {
