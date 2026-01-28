@@ -116,9 +116,7 @@ class ItemProcessor:
         Returns:
             Tuple of (is_duplicate: bool, reasoning: str)
         """
-        # Use /no_think to disable qwen3 thinking mode for simple JSON response
-        prompt = f"""/no_think
-Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
+        prompt = f"""Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
 
 ARTIKEL A:
 Titel: {item_data.get('title', '')[:200]}
