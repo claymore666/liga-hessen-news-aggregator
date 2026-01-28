@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
     ulimits:
       core: 0  # Disable core dumps to prevent disk exhaustion
-    pids_limit: 500  # Prevent runaway Chrome processes from X scraper
+    pids_limit: 1000  # Prevent runaway Chrome processes - 4 browsers × ~100 PIDs each + headroom
     environment:
       - TZ=Europe/Berlin
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
