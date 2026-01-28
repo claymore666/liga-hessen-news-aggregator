@@ -1,8 +1,10 @@
 """Proxy manager service for rotating free HTTP proxies.
 
-Finds and maintains a pool of fast proxies on startup.
-Only searches when pool drops below minimum threshold.
-Persists known good proxies across restarts with 3-strike removal.
+Finds and maintains two separate pools of proxies:
+- HTTP pool: General purpose proxies for HTTP requests
+- HTTPS pool: Proxies that support HTTPS CONNECT tunneling (for X.com, etc.)
+
+Each pool has independent thresholds and is managed separately.
 """
 
 import asyncio
@@ -25,10 +27,11 @@ KNOWN_PROXIES_FILE = Path(__file__).parent.parent / "data" / "known_proxies.json
 
 
 class ProxyManager:
-    """Independent proxy management service.
+    """Independent proxy management service with separate HTTP and HTTPS pools.
 
-    Finds MIN_WORKING_PROXIES fast proxies on startup, then stops.
-    Periodically revalidates existing proxies and refills if needed.
+    Maintains two pools:
+    - http_proxies: General purpose, filled to min_http_proxies
+    - https_proxies: HTTPS tunnel capable, filled to min_https_proxies
     """
 
     # Multiple proxy sources for better coverage
@@ -52,27 +55,34 @@ class ProxyManager:
 
     # Validation settings
     VALIDATION_TIMEOUT = 3.0  # seconds - allow slightly slower proxies
-    # Use HTTP URLs that don't block proxy requests
     VALIDATION_URLS = [
         "http://httpbin.org/ip",
         "http://ifconfig.me/ip",
         "http://icanhazip.com",
         "http://ident.me",
     ]
-    MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds for HTTPS
+    MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds
     BATCH_SIZE = 100  # Test this many proxies per batch
     REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
-    KNOWN_PROXIES_TO_TRY_FIRST = 10  # Try this many from known list first
+    KNOWN_PROXIES_TO_TRY_FIRST = 20  # Try this many from known list first
 
     def __init__(self):
         # Configurable pool sizes from settings
-        self.min_working_proxies = settings.proxy_pool_min
-        self.max_working_proxies = settings.proxy_pool_max
-        self.max_known_proxies = settings.proxy_known_max
+        self.min_http_proxies = settings.proxy_pool_min
+        self.max_http_proxies = settings.proxy_pool_max
         self.min_https_proxies = settings.proxy_https_pool_min
-        self.working_proxies: list[dict] = []
-        self.current_index: int = 0
+        self.max_https_proxies = settings.proxy_https_pool_min + 5  # Small buffer
+        self.max_known_proxies = settings.proxy_known_max
+
+        # Separate pools
+        self.http_proxies: list[dict] = []
+        self.https_proxies: list[dict] = []
+
+        # Round-robin indices
+        self.http_index: int = 0
+        self.https_index: int = 0
+
         self.last_refresh: datetime | None = None
         self._lock = asyncio.Lock()
         self._all_proxies: list[str] = []
@@ -80,10 +90,14 @@ class ProxyManager:
         self._background_task: asyncio.Task | None = None
         self._running = False
         self._initial_fill_complete = False
-        # Known good proxies with failure tracking: {proxy: {latency, failures, last_success, https_capable}}
+
+        # Known good proxies: {proxy: {latency, failures, last_success, https_capable}}
         self._known_proxies: dict[str, dict] = {}
+
         # Per-connector proxy reservations: {connector_type: {proxy1, proxy2, ...}}
-        self._reserved: dict[str, set[str]] = defaultdict(set)
+        self._reserved_http: dict[str, set[str]] = defaultdict(set)
+        self._reserved_https: dict[str, set[str]] = defaultdict(set)
+
         self._load_known_proxies()
 
     def _load_known_proxies(self) -> None:
@@ -137,26 +151,47 @@ class ProxyManager:
                 logger.info(f"Removed proxy {proxy} after {self.MAX_FAILURES} failures")
             self._save_known_proxies()
 
-    def _record_proxy_success(self, proxy: str, latency: float, https_capable: bool | None = None) -> None:
+    def _record_proxy_success(self, proxy: str, latency: float, https_capable: bool) -> None:
         """Record a successful use of a proxy, resetting failure count."""
         if proxy in self._known_proxies:
             self._known_proxies[proxy]["failures"] = 0
             self._known_proxies[proxy]["latency"] = round(latency, 2)
             self._known_proxies[proxy]["last_success"] = datetime.utcnow().isoformat()
-            # Only update https_capable if explicitly provided (don't override with False)
-            if https_capable is not None:
-                self._known_proxies[proxy]["https_capable"] = https_capable
+            self._known_proxies[proxy]["https_capable"] = https_capable
         else:
-            self._add_known_proxy(proxy, latency, https_capable or False)
+            self._add_known_proxy(proxy, latency, https_capable)
 
-    async def _try_known_proxies_first(self) -> int:
-        """Try known good proxies first before searching for new ones.
+    def _add_to_pool(self, proxy: str, latency: float, https_capable: bool) -> None:
+        """Add proxy to the appropriate pool."""
+        proxy_info = {
+            "proxy": proxy,
+            "latency": round(latency, 2),
+            "last_checked": datetime.utcnow().isoformat(),
+            "failures": 0,
+        }
 
-        Returns number of working proxies found from known list.
-        """
+        if https_capable:
+            # Check if already in HTTPS pool
+            existing = {p["proxy"] for p in self.https_proxies}
+            if proxy not in existing and len(self.https_proxies) < self.max_https_proxies:
+                self.https_proxies.append(proxy_info)
+                self.https_proxies.sort(key=lambda x: x["latency"])
+                logger.info(f"✓ Found HTTPS proxy: {proxy} ({latency:.0f}ms)")
+        else:
+            # Check if already in HTTP pool
+            existing = {p["proxy"] for p in self.http_proxies}
+            if proxy not in existing and len(self.http_proxies) < self.max_http_proxies:
+                self.http_proxies.append(proxy_info)
+                self.http_proxies.sort(key=lambda x: x["latency"])
+                logger.info(f"✓ Found HTTP proxy: {proxy} ({latency:.0f}ms)")
+
+        self._record_proxy_success(proxy, latency, https_capable)
+
+    async def _try_known_proxies_first(self) -> tuple[int, int]:
+        """Try known good proxies first. Returns (http_found, https_found)."""
         if not self._known_proxies:
             logger.info("No known proxies to try")
-            return 0
+            return 0, 0
 
         # Sort by lowest latency and take first N
         sorted_known = sorted(
@@ -165,10 +200,11 @@ class ProxyManager:
         )[:self.KNOWN_PROXIES_TO_TRY_FIRST]
 
         if not sorted_known:
-            return 0
+            return 0, 0
 
         logger.info(f"Trying {len(sorted_known)} known proxies first...")
-        found = 0
+        http_found = 0
+        https_found = 0
 
         for proxy, info in sorted_known:
             success, latency = await self.validate_proxy(proxy)
@@ -176,25 +212,19 @@ class ProxyManager:
                 # Use stored https_capable or re-test if unknown
                 https_capable = info.get("https_capable", False)
                 if not https_capable:
-                    # Re-test HTTPS capability for proxies that weren't tested before
                     https_capable = await self.validate_https_tunnel(proxy)
-                self.working_proxies.append({
-                    "proxy": proxy,
-                    "latency": round(latency, 2),
-                    "last_checked": datetime.utcnow().isoformat(),
-                    "https_capable": https_capable,
-                })
-                self._record_proxy_success(proxy, latency, https_capable)
-                found += 1
-                https_label = " [HTTPS]" if https_capable else ""
-                logger.info(f"✓ Known proxy still works: {proxy} ({latency:.0f}ms){https_label}")
+
+                self._add_to_pool(proxy, latency, https_capable)
+                if https_capable:
+                    https_found += 1
+                else:
+                    http_found += 1
             else:
                 self._record_proxy_failure(proxy)
-                logger.info(f"✗ Known proxy failed: {proxy}")
+                logger.debug(f"✗ Known proxy failed: {proxy}")
 
-        self.working_proxies.sort(key=lambda x: x["latency"])
-        logger.info(f"Found {found}/{len(sorted_known)} working proxies from known list")
-        return found
+        logger.info(f"Found {http_found} HTTP, {https_found} HTTPS from known list")
+        return http_found, https_found
 
     async def fetch_proxy_list(self) -> list[str]:
         """Fetch proxies from all sources in parallel."""
@@ -255,32 +285,26 @@ class ProxyManager:
             return False, 0.0
 
     async def validate_https_tunnel(self, proxy: str) -> bool:
-        """Test if proxy supports HTTPS CONNECT tunnel to x.com.
-
-        Many free proxies only support HTTP but not HTTPS tunneling.
-        X.com requires HTTPS, so we need to verify CONNECT method works.
-        """
-        import ssl
+        """Test if proxy supports HTTPS CONNECT tunnel to x.com."""
         import socket
 
-        proxy_host, proxy_port = proxy.split(":")
-        proxy_port = int(proxy_port)
+        try:
+            proxy_host, proxy_port = proxy.split(":")
+            proxy_port = int(proxy_port)
+        except ValueError:
+            return False
 
         try:
-            # Create socket connection to proxy
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             sock.connect((proxy_host, proxy_port))
 
-            # Send CONNECT request
             connect_request = f"CONNECT x.com:443 HTTP/1.1\r\nHost: x.com:443\r\n\r\n"
             sock.send(connect_request.encode())
 
-            # Read response
             response = sock.recv(1024).decode()
             sock.close()
 
-            # Check for successful tunnel (HTTP 200)
             if "200" in response.split("\r\n")[0]:
                 logger.debug(f"HTTPS tunnel OK for {proxy}")
                 return True
@@ -292,8 +316,8 @@ class ProxyManager:
             logger.debug(f"HTTPS tunnel test failed for {proxy}: {e}")
             return False
 
-    async def _search_batch(self) -> int:
-        """Test a batch of proxies and add fast ones."""
+    async def _search_batch(self) -> tuple[int, int]:
+        """Test a batch of proxies. Returns (http_found, https_found)."""
         untested = [p for p in self._all_proxies if p not in self._tested_proxies]
 
         if not untested:
@@ -303,7 +327,7 @@ class ProxyManager:
             untested = self._all_proxies
 
         if not untested:
-            return 0
+            return 0, 0
 
         random.shuffle(untested)
         batch = untested[:self.BATCH_SIZE]
@@ -313,157 +337,135 @@ class ProxyManager:
         tasks = [self.validate_proxy(proxy) for proxy in batch]
         results = await asyncio.gather(*tasks)
 
-        new_fast = 0
-        new_https = 0
-        existing = {p["proxy"] for p in self.working_proxies}
-
-        # Collect working proxies first, then test HTTPS in batch
+        # Collect working proxies
         working_batch = []
+        existing_http = {p["proxy"] for p in self.http_proxies}
+        existing_https = {p["proxy"] for p in self.https_proxies}
+        existing = existing_http | existing_https
+
         for proxy, (success, latency) in zip(batch, results):
             if success and proxy not in existing:
                 working_batch.append((proxy, latency))
 
-        # Test HTTPS capability for all working proxies in parallel
-        if working_batch:
-            https_tasks = [self.validate_https_tunnel(p) for p, _ in working_batch]
-            https_results = await asyncio.gather(*https_tasks)
+        if not working_batch:
+            return 0, 0
 
-            for (proxy, latency), https_capable in zip(working_batch, https_results):
-                self.working_proxies.append({
-                    "proxy": proxy,
-                    "latency": round(latency, 2),
-                    "last_checked": datetime.utcnow().isoformat(),
-                    "https_capable": https_capable,
-                })
-                # Also add to known proxies for persistence
-                self._record_proxy_success(proxy, latency, https_capable)
-                new_fast += 1
-                if https_capable:
-                    new_https += 1
-                https_label = " [HTTPS]" if https_capable else ""
-                logger.info(f"✓ Found fast proxy: {proxy} ({latency:.0f}ms){https_label}")
+        # Test HTTPS capability in parallel
+        https_tasks = [self.validate_https_tunnel(p) for p, _ in working_batch]
+        https_results = await asyncio.gather(*https_tasks)
 
-        # Smart truncation: prioritize keeping HTTPS proxies
-        # Split into HTTPS and HTTP pools
-        https_proxies = [p for p in self.working_proxies if p.get("https_capable", False)]
-        http_proxies = [p for p in self.working_proxies if not p.get("https_capable", False)]
+        http_found = 0
+        https_found = 0
 
-        # Sort each by latency
-        https_proxies.sort(key=lambda x: x["latency"])
-        http_proxies.sort(key=lambda x: x["latency"])
+        for (proxy, latency), https_capable in zip(working_batch, https_results):
+            # Only add if we need more in that pool
+            if https_capable and len(self.https_proxies) < self.max_https_proxies:
+                self._add_to_pool(proxy, latency, https_capable=True)
+                https_found += 1
+            elif not https_capable and len(self.http_proxies) < self.max_http_proxies:
+                self._add_to_pool(proxy, latency, https_capable=False)
+                http_found += 1
 
-        # Keep all HTTPS (they're rare), fill remaining slots with fastest HTTP
-        https_slots = min(len(https_proxies), self.max_working_proxies)
-        http_slots = self.max_working_proxies - https_slots
-
-        self.working_proxies = https_proxies[:https_slots] + http_proxies[:http_slots]
-        # Re-sort combined list by latency for round-robin fairness
-        self.working_proxies.sort(key=lambda x: x["latency"])
         self.last_refresh = datetime.utcnow()
+        return http_found, https_found
 
-        return new_fast
+    def _pools_filled(self) -> bool:
+        """Check if both pools meet their minimums."""
+        return (len(self.http_proxies) >= self.min_http_proxies and
+                len(self.https_proxies) >= self.min_https_proxies)
 
-    def _count_https_proxies(self) -> int:
-        """Count working proxies that support HTTPS tunneling."""
-        return sum(1 for p in self.working_proxies if p.get("https_capable", False))
-
-    async def _fill_pool(self):
-        """Fill proxy pool until we have MIN_WORKING_PROXIES and MIN_HTTPS_PROXIES."""
-        max_batches = 20  # Limit search to avoid infinite loops
+    async def _fill_pools(self):
+        """Fill both pools until they meet their minimums."""
+        max_batches = 30  # Limit search to avoid infinite loops
         batches_tried = 0
 
-        while len(self.working_proxies) < self.min_working_proxies or \
-              (self._count_https_proxies() < self.min_https_proxies and batches_tried < max_batches):
-            found = await self._search_batch()
+        while not self._pools_filled() and batches_tried < max_batches:
+            http_found, https_found = await self._search_batch()
             batches_tried += 1
-            if found == 0:
-                # No luck this batch, small delay before next
+
+            if http_found == 0 and https_found == 0:
                 await asyncio.sleep(1)
 
-            https_count = self._count_https_proxies()
-            logger.info(f"Proxy pool: {len(self.working_proxies)}/{self.min_working_proxies} "
-                       f"(HTTPS: {https_count}/{self.min_https_proxies})")
+            logger.info(f"Pools: HTTP {len(self.http_proxies)}/{self.min_http_proxies}, "
+                       f"HTTPS {len(self.https_proxies)}/{self.min_https_proxies}")
 
-            # If we have enough total proxies but still need HTTPS, continue searching
-            if len(self.working_proxies) >= self.min_working_proxies and https_count < self.min_https_proxies:
-                logger.info(f"Need more HTTPS proxies ({https_count}/{self.min_https_proxies}), continuing search...")
+        if len(self.http_proxies) < self.min_http_proxies:
+            logger.warning(f"Could not fill HTTP pool: {len(self.http_proxies)}/{self.min_http_proxies}")
+        if len(self.https_proxies) < self.min_https_proxies:
+            logger.warning(f"Could not fill HTTPS pool: {len(self.https_proxies)}/{self.min_https_proxies}")
 
-        if self._count_https_proxies() < self.min_https_proxies:
-            logger.warning(f"Could not find enough HTTPS proxies: {self._count_https_proxies()}/{self.min_https_proxies}")
-
-    async def _revalidate_existing(self) -> int:
-        """Revalidate existing proxies and remove dead ones. Returns removed count."""
-        if not self.working_proxies:
+    async def _revalidate_pool(self, pool: list[dict], pool_name: str) -> int:
+        """Revalidate a pool and remove dead proxies. Returns removed count."""
+        if not pool:
             return 0
-
-        logger.info(f"Health check: validating {len(self.working_proxies)} proxies...")
 
         still_working = []
         removed = 0
 
-        for proxy_info in self.working_proxies:
+        for proxy_info in pool:
             proxy = proxy_info["proxy"]
             success, latency = await self.validate_proxy(proxy)
             if success:
                 proxy_info["latency"] = round(latency, 2)
                 proxy_info["last_checked"] = datetime.utcnow().isoformat()
-                proxy_info["failures"] = 0  # Reset failure counter on success
-                # Preserve https_capable flag (it was tested on initial add)
-                https_capable = proxy_info.get("https_capable", False)
+                proxy_info["failures"] = 0
                 still_working.append(proxy_info)
-                # Update known proxies with success, preserving https_capable
-                self._record_proxy_success(proxy, latency, https_capable)
             else:
-                # Track consecutive failures - only remove after MAX_FAILURES
                 failures = proxy_info.get("failures", 0) + 1
                 proxy_info["failures"] = failures
                 if failures >= self.MAX_FAILURES:
-                    logger.info(f"✗ Removing dead proxy after {failures} failures: {proxy}")
+                    logger.info(f"✗ Removing dead {pool_name} proxy: {proxy}")
                     self._record_proxy_failure(proxy)
                     removed += 1
                 else:
-                    logger.debug(f"Proxy {proxy} failed ({failures}/{self.MAX_FAILURES}), keeping")
                     still_working.append(proxy_info)
 
-        self.working_proxies = still_working
-        self.working_proxies.sort(key=lambda x: x["latency"])
+        pool.clear()
+        pool.extend(still_working)
+        pool.sort(key=lambda x: x["latency"])
 
-        https_count = self._count_https_proxies()
-        logger.info(f"Health check complete: {len(self.working_proxies)} healthy ({https_count} HTTPS), {removed} removed")
         return removed
 
+    async def _revalidate_existing(self) -> tuple[int, int]:
+        """Revalidate both pools. Returns (http_removed, https_removed)."""
+        logger.info(f"Health check: HTTP={len(self.http_proxies)}, HTTPS={len(self.https_proxies)}")
+
+        http_removed = await self._revalidate_pool(self.http_proxies, "HTTP")
+        https_removed = await self._revalidate_pool(self.https_proxies, "HTTPS")
+
+        logger.info(f"Health check complete: HTTP={len(self.http_proxies)} (-{http_removed}), "
+                   f"HTTPS={len(self.https_proxies)} (-{https_removed})")
+        return http_removed, https_removed
+
     async def _background_maintenance(self):
-        """Background task: fill pool on startup, then periodic health checks."""
-        logger.info("🚀 Starting proxy manager...")
+        """Background task: fill pools on startup, then periodic health checks."""
+        logger.info("🚀 Starting proxy manager (split pools)...")
         self._running = True
 
         try:
             # Phase 0: Try known good proxies first
             if self._known_proxies:
-                logger.info(f"Phase 0: Trying {len(self._known_proxies)} known proxies first...")
+                logger.info(f"Phase 0: Trying {len(self._known_proxies)} known proxies...")
                 await self._try_known_proxies_first()
-                logger.info(f"Found {len(self.working_proxies)} working proxies from known list")
 
-            # Phase 1: Fill remaining slots from fresh proxy lists
-            if len(self.working_proxies) < self.min_working_proxies:
-                logger.info(f"Phase 1: Finding {self.min_working_proxies - len(self.working_proxies)} more fast proxies (<{self.MAX_LATENCY_MS}ms)...")
+            # Phase 1: Fill remaining slots
+            if not self._pools_filled():
+                logger.info("Phase 1: Finding more proxies...")
                 self._all_proxies = await self.fetch_proxy_list()
-                await self._fill_pool()
+                await self._fill_pools()
 
             self._initial_fill_complete = True
-            logger.info(f"✅ Initial fill complete: {len(self.working_proxies)} proxies ready")
+            logger.info(f"✅ Initial fill complete: HTTP={len(self.http_proxies)}, "
+                       f"HTTPS={len(self.https_proxies)}")
 
             # Phase 2: Maintenance mode
             while self._running:
                 await asyncio.sleep(self.REVALIDATION_INTERVAL)
+                await self._revalidate_existing()
 
-                # Health check
-                removed = await self._revalidate_existing()
-
-                # Refill if below minimum
-                if len(self.working_proxies) < self.min_working_proxies:
-                    logger.info(f"Pool below minimum ({len(self.working_proxies)}/{self.min_working_proxies}), refilling...")
-                    await self._fill_pool()
+                if not self._pools_filled():
+                    logger.info("Pool below minimum, refilling...")
+                    await self._fill_pools()
 
         except asyncio.CancelledError:
             logger.info("Proxy manager stopped")
@@ -478,7 +480,7 @@ class ProxyManager:
             self._background_task = asyncio.create_task(self._background_maintenance())
 
     async def stop_background_search(self):
-        """Stop the background proxy manager and wait for cleanup."""
+        """Stop the background proxy manager."""
         self._running = False
         if self._background_task and not self._background_task.done():
             self._background_task.cancel()
@@ -489,119 +491,110 @@ class ProxyManager:
         logger.info("Proxy manager stopped")
 
     async def refresh_proxy_list(self) -> int:
-        """Manual refresh - clear pool and refill."""
+        """Manual refresh - clear pools and refill."""
         async with self._lock:
             self._all_proxies = await self.fetch_proxy_list()
             self._tested_proxies.clear()
-            self.working_proxies.clear()
+            self.http_proxies.clear()
+            self.https_proxies.clear()
 
-            await self._fill_pool()
-            return len(self.working_proxies)
+            await self._fill_pools()
+            return len(self.http_proxies) + len(self.https_proxies)
 
     def get_next_proxy(self) -> str | None:
-        """Get next proxy from round-robin rotation."""
-        if not self.working_proxies:
+        """Get next HTTP proxy from round-robin rotation."""
+        if not self.http_proxies:
             return None
 
-        proxy_info = self.working_proxies[self.current_index % len(self.working_proxies)]
-        self.current_index += 1
+        proxy_info = self.http_proxies[self.http_index % len(self.http_proxies)]
+        self.http_index += 1
         return proxy_info["proxy"]
 
     async def checkout_proxy(self, connector_type: str, prefer_https: bool = False) -> str | None:
         """Reserve a proxy for exclusive use by a connector type.
 
-        This ensures concurrent scrapers of the same type get different proxies,
-        preventing multiple scrapers from using the same IP to hit rate-limited sites.
-
         Args:
             connector_type: The connector type (e.g., "x_scraper", "instagram_scraper")
-            prefer_https: If True, prefer proxies that support HTTPS tunneling.
-                         Falls back to HTTP proxies if no HTTPS available.
+            prefer_https: If True, draw from HTTPS pool. If False, draw from HTTP pool.
 
         Returns:
             Reserved proxy string (ip:port) or None if no proxies available
         """
         async with self._lock:
-            # Get proxies already reserved by this connector type
-            reserved_by_type = self._reserved[connector_type]
-
-            # Build available proxy sets
-            available_https = set()
-            available_http = set()
-
-            for p in self.working_proxies:
-                proxy = p["proxy"]
-                if proxy not in reserved_by_type:
-                    if p.get("https_capable", False):
-                        available_https.add(proxy)
-                    else:
-                        available_http.add(proxy)
-
-            # Choose proxy based on preference
-            if prefer_https and available_https:
-                proxy = random.choice(list(available_https))
-                logger.debug(f"Checked out HTTPS proxy {proxy} for {connector_type} "
-                            f"({len(available_https)-1} HTTPS, {len(available_http)} HTTP remaining)")
-            elif available_https or available_http:
-                # Fall back to any available proxy
-                available = available_https | available_http
-                proxy = random.choice(list(available))
-                proxy_type = "HTTPS" if proxy in available_https else "HTTP"
-                logger.debug(f"Checked out {proxy_type} proxy {proxy} for {connector_type} "
-                            f"({len(available_https)} HTTPS, {len(available_http)} HTTP remaining)")
+            if prefer_https:
+                pool = self.https_proxies
+                reserved = self._reserved_https[connector_type]
+                pool_name = "HTTPS"
             else:
-                logger.debug(f"No available proxies for {connector_type} "
-                           f"(reserved={len(reserved_by_type)})")
+                pool = self.http_proxies
+                reserved = self._reserved_http[connector_type]
+                pool_name = "HTTP"
+
+            # Find available proxies
+            available = [p["proxy"] for p in pool if p["proxy"] not in reserved]
+
+            if not available:
+                logger.debug(f"No available {pool_name} proxies for {connector_type} "
+                           f"(pool={len(pool)}, reserved={len(reserved)})")
                 return None
 
-            self._reserved[connector_type].add(proxy)
+            proxy = random.choice(available)
+            reserved.add(proxy)
+
+            logger.debug(f"Checked out {pool_name} proxy {proxy} for {connector_type} "
+                        f"({len(available)-1} remaining)")
             return proxy
 
-    async def checkin_proxy(self, connector_type: str, proxy: str) -> None:
-        """Release a reserved proxy back to the pool.
-
-        Args:
-            connector_type: The connector type that reserved the proxy
-            proxy: The proxy to release
-        """
+    async def checkin_proxy(self, connector_type: str, proxy: str, is_https: bool = False) -> None:
+        """Release a reserved proxy back to the pool."""
         async with self._lock:
-            self._reserved[connector_type].discard(proxy)
+            if is_https:
+                self._reserved_https[connector_type].discard(proxy)
+            else:
+                self._reserved_http[connector_type].discard(proxy)
             logger.debug(f"Checked in proxy {proxy} for {connector_type}")
 
-    def available_count(self, connector_type: str) -> int:
-        """Get count of proxies available for a connector type.
+    def available_count(self, connector_type: str, https: bool = False) -> int:
+        """Get count of proxies available for a connector type."""
+        if https:
+            pool = self.https_proxies
+            reserved = self._reserved_https.get(connector_type, set())
+        else:
+            pool = self.http_proxies
+            reserved = self._reserved_http.get(connector_type, set())
 
-        Args:
-            connector_type: The connector type to check
+        return len([p for p in pool if p["proxy"] not in reserved])
 
-        Returns:
-            Number of working proxies not reserved by this connector type
-        """
-        working_set = {p["proxy"] for p in self.working_proxies}
-        reserved_by_type = self._reserved.get(connector_type, set())
-        return len(working_set - reserved_by_type)
+    # Legacy property for backward compatibility
+    @property
+    def working_proxies(self) -> list[dict]:
+        """Combined list of all working proxies (for backward compatibility)."""
+        return self.http_proxies + self.https_proxies
 
     def get_status(self) -> dict:
         """Get current proxy pool status."""
-        https_count = self._count_https_proxies()
         return {
-            "working_count": len(self.working_proxies),
-            "https_count": https_count,
-            "min_required": self.min_working_proxies,
-            "min_https_required": self.min_https_proxies,
-            "max_working": self.max_working_proxies,
+            "http_count": len(self.http_proxies),
+            "https_count": len(self.https_proxies),
+            "http_min_required": self.min_http_proxies,
+            "https_min_required": self.min_https_proxies,
+            "http_max": self.max_http_proxies,
+            "https_max": self.max_https_proxies,
             "max_latency_ms": self.MAX_LATENCY_MS,
-            "proxies": self.working_proxies,
+            "http_proxies": self.http_proxies,
+            "https_proxies": self.https_proxies,
             "last_refresh": self.last_refresh.isoformat() if self.last_refresh else None,
-            "current_index": self.current_index,
             "background_running": self._running,
             "initial_fill_complete": self._initial_fill_complete,
             "tested_count": len(self._tested_proxies),
             "total_available": len(self._all_proxies),
             "known_proxies_count": len(self._known_proxies),
-            "known_proxies_max": self.max_known_proxies,
-            "max_failures_before_removal": self.MAX_FAILURES,
-            "reserved_by_type": {k: len(v) for k, v in self._reserved.items()},
+            "reserved_http": {k: len(v) for k, v in self._reserved_http.items()},
+            "reserved_https": {k: len(v) for k, v in self._reserved_https.items()},
+            # Legacy fields for backward compatibility
+            "working_count": len(self.http_proxies) + len(self.https_proxies),
+            "min_required": self.min_http_proxies,
+            "min_https_required": self.min_https_proxies,
         }
 
 

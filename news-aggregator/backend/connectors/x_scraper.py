@@ -142,7 +142,7 @@ class XScraperConnector(BaseConnector):
             if proxy:
                 try:
                     from services.proxy_manager import proxy_manager
-                    await proxy_manager.checkin_proxy(self.connector_type, proxy)
+                    await proxy_manager.checkin_proxy(self.connector_type, proxy, is_https=True)
                     logger.debug(f"Released proxy {proxy} for {self.connector_type}")
                 except Exception as e:
                     logger.warning(f"Failed to checkin proxy: {e}")

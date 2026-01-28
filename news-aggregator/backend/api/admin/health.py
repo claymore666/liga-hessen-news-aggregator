@@ -80,13 +80,13 @@ async def get_system_health(
     except Exception as e:
         logger.debug(f"LLM health check failed: {e}")
 
-    # Proxy status
+    # Proxy status (split pools)
     proxy_status = proxy_manager.get_status()
-    proxy_count = proxy_status["working_count"]
+    proxy_count = proxy_status.get("http_count", 0)
     proxy_working = proxy_count
     proxy_https_count = proxy_status.get("https_count", 0)
-    proxy_min_required = proxy_status.get("min_required", 20)
-    proxy_https_min_required = proxy_status.get("min_https_required", 5)
+    proxy_min_required = proxy_status.get("http_min_required", 20)
+    proxy_https_min_required = proxy_status.get("https_min_required", 5)
 
     # Database status
     database_ok = True
