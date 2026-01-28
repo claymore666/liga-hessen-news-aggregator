@@ -343,8 +343,22 @@ class ProxyManager:
                 https_label = " [HTTPS]" if https_capable else ""
                 logger.info(f"✓ Found fast proxy: {proxy} ({latency:.0f}ms){https_label}")
 
+        # Smart truncation: prioritize keeping HTTPS proxies
+        # Split into HTTPS and HTTP pools
+        https_proxies = [p for p in self.working_proxies if p.get("https_capable", False)]
+        http_proxies = [p for p in self.working_proxies if not p.get("https_capable", False)]
+
+        # Sort each by latency
+        https_proxies.sort(key=lambda x: x["latency"])
+        http_proxies.sort(key=lambda x: x["latency"])
+
+        # Keep all HTTPS (they're rare), fill remaining slots with fastest HTTP
+        https_slots = min(len(https_proxies), self.max_working_proxies)
+        http_slots = self.max_working_proxies - https_slots
+
+        self.working_proxies = https_proxies[:https_slots] + http_proxies[:http_slots]
+        # Re-sort combined list by latency for round-robin fairness
         self.working_proxies.sort(key=lambda x: x["latency"])
-        self.working_proxies = self.working_proxies[:self.max_working_proxies]
         self.last_refresh = datetime.utcnow()
 
         return new_fast
