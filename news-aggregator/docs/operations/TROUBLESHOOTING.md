@@ -213,6 +213,34 @@ TimeoutError: Browser timeout
 - Try increasing timeout in config
 - Check Playwright browsers installed
 
+```
+BrowserType.launch: Failed to launch: Error: spawn ... EAGAIN
+```
+- **Cause**: Container PID limit exhausted (cgroup accounting)
+- Each Chromium browser spawns ~100 PIDs (main + zygote + GPU + network + renderer + audio)
+- With 4 concurrent browsers = ~400 PIDs during operation
+- **Fix**: Restart backend container to reset cgroup accounting
+  ```bash
+  docker compose -f docker-compose.prod.yml restart backend
+  ```
+- **Prevention**: `pids_limit: 1000` in docker-compose.prod.yml provides headroom
+
+```
+net::ERR_TUNNEL_CONNECTION_FAILED
+```
+- **Cause**: Proxy connection failed (free proxies are unreliable)
+- X scraper automatically falls back to direct connection
+- Direct connections work but risk rate limiting with high volume
+- Check proxy status in logs: `docker logs liga-news-backend | grep -i proxy`
+
+```
+Target page, context or browser has been closed
+```
+- **Cause**: Browser pool driver crashed or restarted during operation
+- Cascade failure: one crash affects all pending requests
+- Usually recovers automatically on next fetch cycle
+- If persistent, restart backend container
+
 #### Mastodon
 ```
 401 Unauthorized

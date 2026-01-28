@@ -70,31 +70,37 @@ The paraphrase model is specifically trained to recognize that "Pflegekosten ste
 ### During Item Ingestion
 
 ```python
-# pipeline.py:129-180 (simplified)
+# pipeline.py (simplified)
 async def process_items(self, items):
+    batch_titles = []  # Track items in current batch
+
     for item in items:
         # 1. URL-based deduplication (exact match)
         if await self._is_duplicate(channel_id, external_id, content_hash):
             continue
 
-        # 2. Semantic duplicate detection
+        # 2. Semantic duplicate detection (via ChromaDB)
         duplicates = await self.relevance_filter.find_duplicates(
             title=item.title,
             content=item.content,
-            threshold=0.75,  # Configurable
+            threshold=0.75,
         )
 
         if duplicates:
-            # Link to primary item
             similar_to_id = duplicates[0]["id"]
         else:
             similar_to_id = None
 
-        # 3. Store item with duplicate link
-        new_item = Item(
-            ...
-            similar_to_id=similar_to_id,
-        )
+        # 3. Intra-batch deduplication (items in same fetch)
+        # Items arriving together can't find each other via ChromaDB
+        if not similar_to_id:
+            for idx, existing_title in enumerate(batch_titles):
+                if _titles_similar(item.title, existing_title):  # 70% word overlap
+                    batch_similar_to_idx = idx
+                    break
+
+        batch_titles.append(item.title)
+        # ... store item, resolve batch refs after flush
 ```
 
 ### Duplicate Detection (Classifier API)
@@ -328,6 +334,34 @@ Consider adding a scheduled job to sync indexes periodically.
    curl -X POST http://gpu1:8082/find-duplicates \
      -H "Content-Type: application/json" \
      -d '{"title": "Test title", "content": "Test content", "threshold": 0.75}'
+   ```
+
+4. **Items arrived in same batch** (intra-batch race condition):
+   Items fetched at the exact same timestamp can't find each other via ChromaDB
+   because neither is indexed when the other is checked.
+
+   **Symptoms**: Items with identical `fetched_at` timestamps not linked
+   ```sql
+   SELECT id, title, fetched_at, similar_to_id
+   FROM items WHERE fetched_at = '2026-01-28 05:22:49.929525';
+   ```
+
+   **Solution**: The pipeline now includes intra-batch deduplication using title
+   word overlap (70% threshold). This was added in commit `a01466c`.
+
+   **Manual fix for existing items**:
+   ```sql
+   -- Link item B to item A if they should be grouped
+   UPDATE items SET similar_to_id = <primary_id> WHERE id = <duplicate_id>;
+   ```
+
+   **Re-run dedup for recent items**:
+   ```sql
+   -- Reset duplicate_checked flag to trigger classifier worker re-check
+   UPDATE items
+   SET metadata = (metadata::jsonb - 'duplicate_checked')::json
+   WHERE fetched_at > NOW() - INTERVAL '7 days'
+     AND metadata->>'duplicate_checked' = 'true';
    ```
 
 ### Stale References in Database
