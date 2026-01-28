@@ -228,10 +228,13 @@ BrowserType.launch: Failed to launch: Error: spawn ... EAGAIN
 ```
 net::ERR_TUNNEL_CONNECTION_FAILED
 ```
-- **Cause**: Proxy connection failed (free proxies are unreliable)
-- X scraper automatically falls back to direct connection
-- Direct connections work but risk rate limiting with high volume
-- Check proxy status in logs: `docker logs liga-news-backend | grep -i proxy`
+- **Cause**: Proxy doesn't support HTTPS CONNECT tunneling
+- Most free HTTP proxies only support plain HTTP, not HTTPS tunneling
+- X.com requires HTTPS, so these proxies fail to establish the tunnel
+- **Solution**: The proxy manager now tests HTTPS tunnel capability and maintains a separate pool of HTTPS-capable proxies
+- X scraper requests HTTPS proxies via `checkout_proxy(prefer_https=True)`
+- Falls back to direct connection if no HTTPS proxies available
+- Check HTTPS proxy status: `curl http://localhost:8000/api/admin/proxies | jq '.https_count'`
 
 ```
 Target page, context or browser has been closed

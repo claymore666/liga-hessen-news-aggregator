@@ -119,7 +119,8 @@ class XScraperConnector(BaseConnector):
         if config.use_proxy:
             try:
                 from services.proxy_manager import proxy_manager
-                proxy = await proxy_manager.checkout_proxy(self.connector_type)
+                # X.com requires HTTPS, so prefer proxies that support HTTPS tunneling
+                proxy = await proxy_manager.checkout_proxy(self.connector_type, prefer_https=True)
                 if proxy:
                     proxy_server = f"http://{proxy}"
                     logger.info(f"Checked out proxy for {self.connector_type}: {proxy}")
