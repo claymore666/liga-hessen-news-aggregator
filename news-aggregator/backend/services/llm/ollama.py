@@ -82,8 +82,14 @@ class OllamaProvider(BaseLLMProvider):
             response.raise_for_status()
             data = response.json()
 
+        content = data["message"]["content"]
+        # qwen3 models may use thinking mode where response is in 'thinking' field
+        # If content is empty but thinking exists, the model didn't produce output
+        if not content and data["message"].get("thinking"):
+            logger.warning(f"Ollama returned empty content with thinking mode active")
+
         return LLMResponse(
-            text=data["message"]["content"],
+            text=content,
             model=self.model,
             tokens_used=data.get("eval_count"),
             prompt_tokens=data.get("prompt_eval_count"),
@@ -92,6 +98,7 @@ class OllamaProvider(BaseLLMProvider):
                 "provider": self.provider_name,
                 "total_duration": data.get("total_duration"),
                 "load_duration": data.get("load_duration"),
+                "has_thinking": bool(data["message"].get("thinking")),
             },
         )
 

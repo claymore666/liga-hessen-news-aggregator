@@ -116,7 +116,9 @@ class ItemProcessor:
         Returns:
             Tuple of (is_duplicate: bool, reasoning: str)
         """
-        prompt = f"""Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
+        # Use /no_think to disable qwen3 thinking mode for simple JSON response
+        prompt = f"""/no_think
+Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
 
 ARTIKEL A:
 Titel: {item_data.get('title', '')[:200]}
@@ -146,12 +148,19 @@ Antworte NUR mit JSON:
                 max_tokens=200,
             )
             text = response.text.strip()
+            logger.debug(f"Duplicate confirmation raw response: {repr(text[:500])}")
 
             # Remove markdown code blocks if present
             if text.startswith("```"):
                 lines = text.split("\n")
                 lines = [line for line in lines if not line.strip().startswith("```")]
                 text = "\n".join(lines).strip()
+
+            # Handle qwen3 thinking mode: sometimes model returns empty content
+            # when it's "thinking" - the actual response is in the thinking field
+            if not text:
+                logger.warning("LLM returned empty content for duplicate confirmation")
+                return False, "LLM returned empty response"
 
             # Parse JSON response
             result = json.loads(text)
