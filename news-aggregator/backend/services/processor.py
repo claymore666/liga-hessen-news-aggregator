@@ -99,6 +99,74 @@ class ItemProcessor:
         """
         self.llm = llm_service
 
+    async def confirm_duplicate(
+        self,
+        item_data: dict,
+        candidate_data: dict,
+    ) -> tuple[bool, str]:
+        """
+        Ask LLM to confirm whether two articles are duplicates (same story).
+
+        Used for edge-case duplicates where semantic similarity is uncertain (0.60-0.75).
+
+        Args:
+            item_data: Dict with title, content of the new item
+            candidate_data: Dict with title, content of the potential duplicate
+
+        Returns:
+            Tuple of (is_duplicate: bool, reasoning: str)
+        """
+        prompt = f"""Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
+
+ARTIKEL A:
+Titel: {item_data.get('title', '')[:200]}
+Inhalt: {item_data.get('content', '')[:1500]}
+
+ARTIKEL B:
+Titel: {candidate_data.get('title', '')[:200]}
+Inhalt: {candidate_data.get('content', '')[:1500]}
+
+GLEICHE Geschichte wenn:
+- Beide berichten über exakt dasselbe Ereignis (gleiche Personen, Orte, Entscheidungen)
+- Einer ist eine Kurzversion/Update des anderen
+- Unterschiedliche Quellen berichten über dieselbe Pressemitteilung/Nachricht
+
+UNTERSCHIEDLICHE Geschichten wenn:
+- Ähnliches Thema, aber verschiedene Ereignisse (z.B. zwei verschiedene Kita-Schließungen)
+- Gleiche Person, aber andere Handlung/Entscheidung
+- Hintergrundbericht vs. aktuelle Meldung zum selben Thema
+
+Antworte NUR mit JSON:
+{{"is_duplicate": true/false, "reasoning": "Kurze Begründung"}}"""
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                temperature=0.1,
+                max_tokens=200,
+            )
+            text = response.text.strip()
+
+            # Remove markdown code blocks if present
+            if text.startswith("```"):
+                lines = text.split("\n")
+                lines = [line for line in lines if not line.strip().startswith("```")]
+                text = "\n".join(lines).strip()
+
+            # Parse JSON response
+            result = json.loads(text)
+            is_dup = result.get("is_duplicate", False)
+            reasoning = result.get("reasoning", "Keine Begründung")
+            return is_dup, reasoning
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse duplicate confirmation response: {e}, text: {text[:100]}")
+            # Default to not duplicate if parsing fails
+            return False, "Antwort konnte nicht verarbeitet werden"
+        except Exception as e:
+            logger.error(f"Duplicate confirmation failed: {e}")
+            return False, f"Fehler: {e}"
+
     async def summarize(self, item: Item) -> str | None:
         """Generate a summary for an item.
 

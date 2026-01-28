@@ -28,6 +28,12 @@ RSS_BOILERPLATE_PATTERNS = [
     r"\n\n--- Vollständiger Artikel von [^\n]+ ---\n\n",
 ]
 
+# Semantic duplicate thresholds
+# Items >= THRESHOLD_CONFIRMED are automatically marked as duplicates
+# Items between THRESHOLD_MAYBE and THRESHOLD_CONFIRMED are marked for LLM review
+DUPLICATE_THRESHOLD_CONFIRMED = 0.75  # Auto-confirm as duplicate
+DUPLICATE_THRESHOLD_MAYBE = 0.60  # Mark for LLM review
+
 
 def _strip_boilerplate(text: str) -> str:
     """Strip RSS boilerplate text that causes false positive similarity matches.
@@ -178,60 +184,84 @@ class Pipeline:
 
             # 3a. Check for semantic duplicates (cross-channel)
             # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
+            # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
             similar_to_id = None
             duplicates = []
             similarity_score = None
+            duplicate_candidate = None  # For edge cases needing LLM review
             if self.relevance_filter and not self.training_mode:
                 try:
                     # Strip boilerplate before embedding to avoid false positive similarity
                     clean_title = _strip_boilerplate(normalized.title)
                     clean_content = _strip_boilerplate(normalized.content)
+                    # Use lower threshold to catch "maybe duplicates" for LLM review
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=clean_title,
                         content=clean_content,
-                        threshold=0.75,  # Paraphrase model threshold for same-story detection
+                        threshold=DUPLICATE_THRESHOLD_MAYBE,  # 0.60 - catches edge cases
                     )
                     if duplicates:
                         best_match = duplicates[0]
-                        similar_to_id = int(best_match["id"])
-                        similarity_score = best_match.get("score")
-                        logger.info(
-                            f"Semantic duplicate: '{normalized.title[:40]}...' "
-                            f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
-                            f"(score: {best_match.get('score', 0):.3f})"
-                        )
+                        match_score = best_match.get("score", 0)
+                        match_id = int(best_match["id"])
 
-                        # Record duplicate detection in audit trail of EXISTING item
-                        # First verify the item still exists (vector index may be out of sync)
+                        # Verify the candidate item still exists (vector index may be out of sync)
                         from sqlalchemy import select
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
                         try:
                             existing = await self.db.scalar(
-                                select(Item.id).where(Item.id == similar_to_id)
+                                select(Item.id).where(Item.id == match_id)
                             )
-                            if existing:
-                                await record_event(
-                                    self.db,
-                                    similar_to_id,  # Existing item ID
-                                    EVENT_DUPLICATE_DETECTED,
-                                    data={
-                                        "duplicate_title": normalized.title,
-                                        "duplicate_source": channel.source.name if channel.source else None,
-                                        "duplicate_channel_id": channel.id,
-                                        "duplicate_url": normalized.url,
-                                        "similarity_score": best_match.get("score"),
-                                    },
-                                )
-                            else:
+                            if not existing:
                                 logger.warning(
-                                    f"Skipping duplicate event: item {similar_to_id} no longer exists "
+                                    f"Skipping duplicate: item {match_id} no longer exists "
                                     "(vector index out of sync)"
                                 )
-                                # Reset similar_to_id to avoid foreign key violation
-                                similar_to_id = None
-                                similarity_score = None
+                                match_id = None
+                                match_score = None
                         except Exception as e:
-                            logger.warning(f"Failed to record duplicate event: {e}")
+                            logger.warning(f"Failed to verify candidate item: {e}")
+                            match_id = None
+
+                        if match_id:
+                            if match_score >= DUPLICATE_THRESHOLD_CONFIRMED:
+                                # High confidence: auto-link as duplicate
+                                similar_to_id = match_id
+                                similarity_score = match_score
+                                logger.info(
+                                    f"Semantic duplicate (confirmed): '{normalized.title[:40]}...' "
+                                    f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
+                                    f"(score: {match_score:.3f})"
+                                )
+
+                                # Record duplicate detection in audit trail of EXISTING item
+                                try:
+                                    await record_event(
+                                        self.db,
+                                        similar_to_id,  # Existing item ID
+                                        EVENT_DUPLICATE_DETECTED,
+                                        data={
+                                            "duplicate_title": normalized.title,
+                                            "duplicate_source": channel.source.name if channel.source else None,
+                                            "duplicate_channel_id": channel.id,
+                                            "duplicate_url": normalized.url,
+                                            "similarity_score": match_score,
+                                        },
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to record duplicate event: {e}")
+                            else:
+                                # Edge case (0.60-0.75): mark for LLM review
+                                duplicate_candidate = {
+                                    "candidate_id": match_id,
+                                    "candidate_title": best_match.get("title", ""),
+                                    "similarity_score": match_score,
+                                }
+                                logger.info(
+                                    f"Maybe duplicate (LLM review needed): '{normalized.title[:40]}...' "
+                                    f"similar to item {match_id} '{best_match.get('title', '')[:40]}...' "
+                                    f"(score: {match_score:.3f})"
+                                )
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
 
@@ -262,6 +292,11 @@ class Pipeline:
                     logger.warning(f"Failed to log duplicate check: {e}")
 
             # 4. Create item
+            # Include duplicate_candidate in metadata for LLM review if edge case
+            item_metadata = dict(normalized.metadata) if normalized.metadata else {}
+            if duplicate_candidate:
+                item_metadata["duplicate_candidate"] = duplicate_candidate
+
             item = Item(
                 channel_id=channel.id,
                 external_id=normalized.external_id,
@@ -271,8 +306,10 @@ class Pipeline:
                 author=normalized.author,
                 published_at=normalized.published_at,
                 content_hash=content_hash,
-                metadata_=normalized.metadata,
-                similar_to_id=similar_to_id,  # Link to primary item if duplicate
+                metadata_=item_metadata,
+                similar_to_id=similar_to_id,  # Link to primary item if confirmed duplicate
+                # Mark for LLM processing if there's a duplicate candidate to review
+                needs_llm_processing=duplicate_candidate is not None,
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)

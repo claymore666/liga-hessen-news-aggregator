@@ -422,6 +422,7 @@ class LLMWorker:
                 # Phase 1: Quick read - extract data we need for LLM
                 # Connection is released after this block
                 item_data = None
+                candidate_data = None  # For edge-case duplicate confirmation
                 async with async_session_maker() as db:
                     result = await db.execute(
                         select(Item)
@@ -451,9 +452,45 @@ class LLMWorker:
                         "assigned_aks": item.assigned_aks or [],
                     }
 
+                    # Check for edge-case duplicate candidate needing LLM confirmation
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate")
+                    if dup_candidate:
+                        candidate_id = dup_candidate.get("candidate_id")
+                        if candidate_id:
+                            cand_result = await db.execute(
+                                select(Item).where(Item.id == candidate_id)
+                            )
+                            cand_item = cand_result.scalar_one_or_none()
+                            if cand_item:
+                                candidate_data = {
+                                    "id": cand_item.id,
+                                    "title": cand_item.title,
+                                    "content": cand_item.content,
+                                }
+                            else:
+                                logger.warning(f"Duplicate candidate {candidate_id} not found, skipping confirmation")
+
                 # Phase 2: LLM processing - NO connection held
                 # This can take 10-60 seconds per item
                 start_time = time.time()
+
+                # 2a. Check for edge-case duplicate confirmation first
+                duplicate_confirmed = None
+                duplicate_reasoning = None
+                if candidate_data:
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                    logger.info(
+                        f"Confirming duplicate: '{item_data['title'][:40]}...' vs "
+                        f"'{candidate_data['title'][:40]}...' (score: {dup_candidate.get('similarity_score', 0):.3f})"
+                    )
+                    duplicate_confirmed, duplicate_reasoning = await processor.confirm_duplicate(
+                        item_data, candidate_data
+                    )
+                    logger.info(
+                        f"Duplicate confirmation: {duplicate_confirmed} - {duplicate_reasoning}"
+                    )
+
+                # 2b. Main item analysis
                 analysis = await processor.analyze_from_data(item_data)
                 elapsed = time.time() - start_time
                 async with self._stats_lock:
@@ -503,6 +540,24 @@ class LLMWorker:
                     "source": "llm_worker",
                 }
 
+                # Record duplicate confirmation result in metadata
+                confirmed_similar_to_id = None
+                if duplicate_confirmed is not None:
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                    new_metadata["duplicate_confirmation"] = {
+                        "confirmed": duplicate_confirmed,
+                        "reasoning": duplicate_reasoning,
+                        "candidate_id": dup_candidate.get("candidate_id"),
+                        "similarity_score": dup_candidate.get("similarity_score"),
+                        "confirmed_at": datetime.utcnow().isoformat(),
+                    }
+                    # Clear the candidate since we've processed it
+                    if "duplicate_candidate" in new_metadata:
+                        del new_metadata["duplicate_candidate"]
+
+                    if duplicate_confirmed:
+                        confirmed_similar_to_id = dup_candidate.get("candidate_id")
+
                 # Phase 3: Quick write - update item in database
                 # Connection is released after this block
                 async with async_session_maker() as db:
@@ -516,6 +571,11 @@ class LLMWorker:
                         "metadata_": new_metadata,
                         "needs_llm_processing": False,
                     }
+
+                    # Set similar_to_id if duplicate was confirmed by LLM
+                    if confirmed_similar_to_id:
+                        update_values["similar_to_id"] = confirmed_similar_to_id
+
                     # Remove None values to avoid overwriting with None
                     update_values = {k: v for k, v in update_values.items() if v is not None or k in ("assigned_ak", "needs_llm_processing")}
 
@@ -538,6 +598,23 @@ class LLMWorker:
                             "source": item_type,
                         },
                     )
+
+                    # Record duplicate confirmation event if applicable
+                    if duplicate_confirmed is not None:
+                        from services.item_events import EVENT_DUPLICATE_DETECTED
+                        dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                        event_type = EVENT_DUPLICATE_DETECTED if duplicate_confirmed else "duplicate_rejected"
+                        await record_event(
+                            db,
+                            item_id,
+                            event_type,
+                            data={
+                                "candidate_id": dup_candidate.get("candidate_id"),
+                                "similarity_score": dup_candidate.get("similarity_score"),
+                                "llm_confirmed": duplicate_confirmed,
+                                "reasoning": duplicate_reasoning,
+                            },
+                        )
 
                     # Log LLM analysis for analytics
                     try:
