@@ -283,6 +283,9 @@ export interface HealthCheckResponse {
   llm_provider: string | null
   proxy_count: number
   proxy_working: number
+  proxy_https_count: number
+  proxy_min_required: number
+  proxy_https_min_required: number
   database_ok: boolean
   database_info: {
     type: string

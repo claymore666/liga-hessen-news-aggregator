@@ -19,7 +19,8 @@ import {
   DocumentTextIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  FunnelIcon
+  FunnelIcon,
+  GlobeAltIcon
 } from '@heroicons/vue/24/outline'
 import {
   adminApi,
@@ -304,7 +305,7 @@ onUnmounted(() => {
     <!-- Status Tab -->
     <template v-else-if="activeTab === 'status'">
       <!-- Service Availability Cards -->
-      <div class="grid gap-4 md:grid-cols-4">
+      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
         <!-- Database -->
         <div class="card">
           <div class="flex items-center gap-3">
@@ -360,6 +361,38 @@ onUnmounted(() => {
                 <span :class="gpu1Status?.available ? 'text-green-600' : 'text-red-600'">
                   {{ gpu1Status?.available ? 'Läuft' : 'Aus' }}
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Proxy Pool -->
+        <div class="card">
+          <div class="flex items-center gap-3">
+            <GlobeAltIcon class="h-8 w-8 text-gray-400" />
+            <div>
+              <div class="text-sm font-medium text-gray-500">Proxy Pool</div>
+              <div class="flex flex-col gap-0.5">
+                <div class="flex items-center gap-1">
+                  <component
+                    :is="(health?.proxy_count ?? 0) >= (health?.proxy_min_required ?? 20) ? CheckCircleIcon : ExclamationTriangleIcon"
+                    class="h-4 w-4"
+                    :class="(health?.proxy_count ?? 0) >= (health?.proxy_min_required ?? 20) ? 'text-green-500' : 'text-yellow-500'"
+                  />
+                  <span class="text-sm" :class="(health?.proxy_count ?? 0) >= (health?.proxy_min_required ?? 20) ? 'text-green-600' : 'text-yellow-600'">
+                    {{ health?.proxy_count ?? 0 }}/{{ health?.proxy_min_required ?? 20 }} HTTP
+                  </span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <component
+                    :is="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? CheckCircleIcon : ExclamationTriangleIcon"
+                    class="h-4 w-4"
+                    :class="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? 'text-green-500' : 'text-yellow-500'"
+                  />
+                  <span class="text-sm" :class="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? 'text-green-600' : 'text-yellow-600'">
+                    {{ health?.proxy_https_count ?? 0 }}/{{ health?.proxy_https_min_required ?? 5 }} HTTPS
+                  </span>
+                </div>
               </div>
             </div>
           </div>

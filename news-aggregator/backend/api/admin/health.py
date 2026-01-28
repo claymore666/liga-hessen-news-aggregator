@@ -38,6 +38,9 @@ class HealthCheckResponse(BaseModel):
     llm_provider: str | None
     proxy_count: int
     proxy_working: int
+    proxy_https_count: int
+    proxy_min_required: int
+    proxy_https_min_required: int
     database_ok: bool
     database_info: DatabaseInfo
     items_count: int
@@ -78,8 +81,12 @@ async def get_system_health(
         logger.debug(f"LLM health check failed: {e}")
 
     # Proxy status
-    proxy_count = len(proxy_manager.working_proxies)
+    proxy_status = proxy_manager.get_status()
+    proxy_count = proxy_status["working_count"]
     proxy_working = proxy_count
+    proxy_https_count = proxy_status.get("https_count", 0)
+    proxy_min_required = proxy_status.get("min_required", 20)
+    proxy_https_min_required = proxy_status.get("min_https_required", 5)
 
     # Database status
     database_ok = True
@@ -111,6 +118,9 @@ async def get_system_health(
         llm_provider=llm_provider,
         proxy_count=proxy_count,
         proxy_working=proxy_working,
+        proxy_https_count=proxy_https_count,
+        proxy_min_required=proxy_min_required,
+        proxy_https_min_required=proxy_https_min_required,
         database_ok=database_ok,
         database_info=DatabaseInfo(**db_info),
         items_count=items_count,
