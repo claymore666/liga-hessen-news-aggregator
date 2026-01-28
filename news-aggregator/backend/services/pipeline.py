@@ -41,6 +41,35 @@ def _strip_boilerplate(text: str) -> str:
     return result.strip()
 
 
+def _titles_similar(title1: str, title2: str, threshold: float = 0.7) -> bool:
+    """Check if two titles are similar enough to be the same story.
+
+    Uses word overlap (Jaccard-like similarity) to detect duplicate headlines.
+    This catches cases like:
+    - "Vielen Kitas fehlen Fachkräfte - Mittelhessen"
+    - "Kinderbetreuung: Vielen Kitas fehlen Fachkräfte | DPA"
+
+    Args:
+        title1: First title (lowercase, cleaned)
+        title2: Second title (lowercase, cleaned)
+        threshold: Minimum word overlap ratio (default 0.7 = 70%)
+
+    Returns:
+        True if titles share enough words to be considered the same story
+    """
+    # Split into words, remove very short words (articles, etc.)
+    words1 = {w for w in title1.split() if len(w) > 2}
+    words2 = {w for w in title2.split() if len(w) > 2}
+
+    if not words1 or not words2:
+        return False
+
+    intersection = words1 & words2
+    # Use the smaller set as denominator to catch partial matches
+    smaller = min(len(words1), len(words2))
+    return len(intersection) / smaller >= threshold
+
+
 def _get_priority_value(priority) -> str:
     """Safely get priority value whether it's an enum or string."""
     if hasattr(priority, 'value'):
@@ -118,6 +147,9 @@ class Pipeline:
             List of newly created items.
         """
         new_items = []
+        # Track items for intra-batch deduplication (items arriving together can't
+        # find each other via ChromaDB since neither is indexed yet)
+        batch_titles: list[str] = []  # Cleaned titles for comparison
 
         for raw in raw_items:
             # Create item-specific logger for this processing run
@@ -202,6 +234,20 @@ class Pipeline:
                             logger.warning(f"Failed to record duplicate event: {e}")
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
+
+            # 3b. Check for intra-batch duplicates (items in same fetch can't find each other
+            # via ChromaDB since neither is indexed yet)
+            batch_similar_to_idx = None
+            if not similar_to_id and batch_titles and not self.training_mode:
+                clean_title = _strip_boilerplate(normalized.title).lower()
+                for idx, existing_title in enumerate(batch_titles):
+                    if _titles_similar(clean_title, existing_title):
+                        batch_similar_to_idx = idx
+                        logger.info(
+                            f"Intra-batch duplicate: '{normalized.title[:40]}...' "
+                            f"similar to batch item #{idx} (will link after flush)"
+                        )
+                        break
 
             # Log duplicate check result
             if item_logger:
@@ -343,11 +389,34 @@ class Pipeline:
             self.db.add(item)
             # Store logger reference for post-flush logging
             item._processing_logger = item_logger
+            # Store intra-batch duplicate reference (resolved to real ID after flush)
+            if batch_similar_to_idx is not None:
+                item._batch_similar_to_idx = batch_similar_to_idx
+            # Track this item's title for intra-batch dedup of subsequent items
+            batch_titles.append(_strip_boilerplate(normalized.title).lower())
             new_items.append(item)
 
         if new_items:
             await self.db.flush()
             logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
+
+            # Resolve intra-batch duplicates now that items have IDs
+            intra_batch_count = 0
+            for item in new_items:
+                if hasattr(item, "_batch_similar_to_idx"):
+                    similar_idx = item._batch_similar_to_idx
+                    if 0 <= similar_idx < len(new_items):
+                        primary_item = new_items[similar_idx]
+                        item.similar_to_id = primary_item.id
+                        intra_batch_count += 1
+                        logger.info(
+                            f"Linked intra-batch duplicate: item {item.id} -> {primary_item.id} "
+                            f"('{item.title[:30]}...' -> '{primary_item.title[:30]}...')"
+                        )
+                    delattr(item, "_batch_similar_to_idx")
+
+            if intra_batch_count > 0:
+                logger.info(f"Resolved {intra_batch_count} intra-batch duplicates")
 
             # Record creation events
             from services.item_events import record_event, EVENT_CREATED
