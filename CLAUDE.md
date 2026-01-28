@@ -124,6 +124,35 @@ docker compose logs backend | grep -i error
 curl http://localhost:8000/api/channels/{id}
 ```
 
+### Update MOTD after commits
+
+After each commit, ask the user if they want to announce it via MOTD.
+
+**When to offer MOTD:**
+- Bug fixes that users would have noticed (fewer errors, better reliability)
+- New features visible in the UI
+- Improvements to data quality (better deduplication, classification, etc.)
+
+**Skip asking for:**
+- Internal refactoring
+- Performance optimizations users won't notice
+- Developer tooling changes
+- Documentation-only changes
+
+**Writing guidelines:** See [docs/operations/MOTD.md](news-aggregator/docs/operations/MOTD.md) - target audience is a non-technical journalist.
+
+**Set MOTD on production:**
+```bash
+ssh docker-ai 'curl -s -X POST http://localhost:8000/api/motd/admin \
+  -H "Content-Type: application/json" \
+  -d '"'"'{"message": "Your message here", "active": true}'"'"''
+```
+
+**Check current MOTD:**
+```bash
+ssh docker-ai "curl -s http://localhost:8000/api/motd" | jq .
+```
+
 ## GPU1 Power Management Monitoring
 
 gpu1 uses Wake-on-LAN (WoL) to wake for LLM processing during active hours (8:00-16:00).
