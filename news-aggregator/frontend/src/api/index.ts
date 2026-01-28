@@ -336,3 +336,25 @@ export const adminApi = {
   executeCleanup: () => api.post<CleanupResult>('/admin/housekeeping/cleanup'),
   getStorage: () => api.get<StorageStats>('/admin/storage'),
 }
+
+// MOTD Types
+export interface MOTDResponse {
+  id: number | null
+  message: string | null
+  active: boolean
+  updated_at: string | null
+  expires_at: string | null
+}
+
+export interface MOTDCreate {
+  message: string
+  active?: boolean
+  expires_at?: string | null
+}
+
+export const motdApi = {
+  get: () => api.get<MOTDResponse>('/motd'),
+  set: (data: MOTDCreate) => api.post<{ success: boolean; message: string; motd: MOTDResponse }>('/motd/admin', data),
+  clear: () => api.delete<{ success: boolean; message: string }>('/motd/admin'),
+  history: (limit?: number) => api.get<MOTDResponse[]>('/motd/history', { params: { limit } }),
+}
