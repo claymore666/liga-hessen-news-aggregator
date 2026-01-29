@@ -384,9 +384,11 @@ Antworte NUR mit JA oder NEIN."""
                 "Barrierefreiheit, Ausbildung, Gesetzgebung, Förderung, Blutspende, Weiterbildung\n\n"
                 "GUTE Labels: Kita-Personalmangel Hessen, Pflegekosten-Eigenanteil Anstieg, "
                 "Bürgergeld-Sanktionsverschärfung, Krankenhausreform Bettenabbau, "
-                "Pflegekräfte-Tarifstreit Diakonie\n"
+                "Pflegekräfte-Tarifstreit Diakonie, Infrastruktur-Schutzgesetz\n"
                 "SCHLECHTE Labels: Pflege, Migration, Digitalisierung, Fachkräftemangel "
-                "(zu generisch - passt auf hunderte Artikel)\n\n"
+                "(zu generisch), KRITIS-Dachgesetz (zu technisch/fachsprachlich)\n\n"
+                "Verwende allgemeinverständliche Begriffe. Keine Fachbegriffe oder Abkürzungen. "
+                "Eine Journalistin muss das Label sofort verstehen.\n\n"
                 "Antwort NUR als JSON: {\"topics\": [\"Label\"]}"
             ),
         }
