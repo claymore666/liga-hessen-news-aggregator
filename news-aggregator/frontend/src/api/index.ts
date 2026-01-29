@@ -70,8 +70,11 @@ export interface TopicItemBrief {
   url: string
   priority: string
   source_name: string | null
+  source_domain: string | null
   published_at: string | null
   summary: string | null
+  assigned_aks: string[]
+  is_read: boolean
 }
 
 export interface TopicGroup {

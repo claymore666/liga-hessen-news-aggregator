@@ -271,17 +271,25 @@ async def get_items_by_topic(
         AND i.priority != 'none'
     """
 
-    # Query items with topics (unnested)
-    raw_query = sql_text(f"""
-        SELECT
-            topic,
+    # Common SELECT fields for item brief
+    item_fields = """
             i.id,
             i.title,
             i.url,
             i.priority,
             i.published_at,
             i.summary,
-            s.name as source_name
+            s.name as source_name,
+            (i.metadata::jsonb)->>'source_domain' as source_domain,
+            i.assigned_aks,
+            i.is_read
+    """
+
+    # Query items with topics (unnested)
+    raw_query = sql_text(f"""
+        SELECT
+            topic,
+            {item_fields}
         FROM items i
         LEFT JOIN channels c ON i.channel_id = c.id
         LEFT JOIN sources s ON c.source_id = s.id
@@ -296,23 +304,30 @@ async def get_items_by_topic(
     result = await db.execute(raw_query, {"since": since_dt})
     rows = result.fetchall()
 
+    def _make_brief(row, offset=0) -> TopicItemBrief:
+        return TopicItemBrief(
+            id=row[0 + offset],
+            title=row[1 + offset],
+            url=row[2 + offset],
+            priority=row[3 + offset],
+            published_at=row[4 + offset],
+            summary=row[5 + offset],
+            source_name=row[6 + offset],
+            source_domain=row[7 + offset],
+            assigned_aks=row[8 + offset] or [],
+            is_read=row[9 + offset],
+        )
+
     # Group by topic
     topic_items: dict[str, list[TopicItemBrief]] = defaultdict(list)
     seen_per_topic: dict[str, set[int]] = defaultdict(set)
 
     for row in rows:
-        topic, item_id, title, url, priority, published_at, summary, source_name = row
+        topic = row[0]
+        item_id = row[1]
         if item_id not in seen_per_topic[topic]:
             seen_per_topic[topic].add(item_id)
-            topic_items[topic].append(TopicItemBrief(
-                id=item_id,
-                title=title,
-                url=url,
-                priority=priority,
-                source_name=source_name,
-                published_at=published_at,
-                summary=summary,
-            ))
+            topic_items[topic].append(_make_brief(row, offset=1))
 
     # Filter to groups with enough items
     groups = []
@@ -325,7 +340,7 @@ async def get_items_by_topic(
 
     # Query ALL items in period to find ungrouped ones
     all_items_query = sql_text(f"""
-        SELECT i.id, i.title, i.url, i.priority, i.published_at, i.summary, s.name as source_name
+        SELECT {item_fields}
         FROM items i
         LEFT JOIN channels c ON i.channel_id = c.id
         LEFT JOIN sources s ON c.source_id = s.id
@@ -337,17 +352,8 @@ async def get_items_by_topic(
 
     ungrouped_items = []
     for row in all_rows:
-        item_id, title, url, priority, published_at, summary, source_name = row
-        if item_id not in grouped_item_ids:
-            ungrouped_items.append(TopicItemBrief(
-                id=item_id,
-                title=title,
-                url=url,
-                priority=priority,
-                source_name=source_name,
-                published_at=published_at,
-                summary=summary,
-            ))
+        if row[0] not in grouped_item_ids:
+            ungrouped_items.append(_make_brief(row, offset=0))
 
     return TopicGroupsResponse(
         topics=groups,

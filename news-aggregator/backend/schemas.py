@@ -219,8 +219,11 @@ class TopicItemBrief(BaseModel):
     url: str
     priority: Priority
     source_name: str | None = None
+    source_domain: str | None = None
     published_at: datetime | None = None
     summary: str | None = None
+    assigned_aks: list[str] = Field(default_factory=list)
+    is_read: bool = False
 
 
 class TopicGroup(BaseModel):
