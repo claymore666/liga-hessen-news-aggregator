@@ -36,7 +36,7 @@ async def backfill():
             select(Item)
             .options(selectinload(Item.channel).selectinload(Channel.source))
             .where(
-                Item.published_at >= sql_text("CURRENT_DATE"),
+                Item.published_at >= sql_text("CURRENT_DATE - INTERVAL '30 days'"),
                 Item.similar_to_id.is_(None),
                 Item.priority != "none",
             )

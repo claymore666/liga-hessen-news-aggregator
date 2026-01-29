@@ -374,13 +374,13 @@ Antworte NUR mit JA oder NEIN."""
         follow_up = {
             "role": "user",
             "content": (
-                "Based on the article you just analyzed, assign 1-2 specific topic keywords "
-                "for grouping similar articles about the SAME concrete issue. "
-                "Be very specific - use the concrete event, policy, or problem "
-                "(e.g. 'Kita-Personalmangel Hessen' or 'Bürgergeld-Kürzungen 2026'). "
-                "NEVER use generic AK-level topics like 'Pflege', 'Migration', 'Kinder' or 'Sozialpolitik'. "
-                "The topic must be narrow enough that only articles about the same story would share it. "
-                "Return JSON: {\"topics\": [\"topic1\", \"topic2\"]}"
+                "Gib 1-2 kurze Themen-Labels für diesen Artikel. "
+                "Die Labels sollen andere Artikel zum GLEICHEN Thema gruppieren. "
+                "2-3 Wörter, KEINE Jahreszahlen, KEINE Eigennamen von Personen.\n\n"
+                "GUTE Labels: Teilzeitdebatte, Kita-Personalmangel, Pflegekosten-Anstieg, Bürgergeld-Reform, Krankenhausreform\n"
+                "SCHLECHTE Labels: Pflege, Migration, Sozialpolitik (zu generisch), "
+                "Pflegeabteilung-JVA-Wittlich-2026 (zu spezifisch, kein anderer Artikel matcht)\n\n"
+                "Antwort NUR als JSON: {\"topics\": [\"Label1\", \"Label2\"]}"
             ),
         }
         messages = conversation_messages + [follow_up]
