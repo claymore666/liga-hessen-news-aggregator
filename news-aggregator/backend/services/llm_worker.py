@@ -325,7 +325,6 @@ class LLMWorker:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
             pre_filter = json_extract_path(Item.metadata_, "pre_filter")
-            assigned_aks = json_extract_path(Item.metadata_, "llm_analysis", "assigned_aks")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "edge_case", 2),
@@ -338,18 +337,10 @@ class LLMWorker:
                 .where(
                     # Must be classified first (pre_filter exists)
                     pre_filter.is_not(None),
-                    or_(
-                        # Standard backlog: needs processing and not certainly irrelevant
-                        and_(
-                            Item.needs_llm_processing == True,  # noqa: E712
-                            or_(retry_priority != "low", retry_priority.is_(None)),
-                        ),
-                        # Relevant items without AK assigned need reprocessing
-                        and_(
-                            Item.priority != "none",
-                            or_(assigned_aks.is_(None), assigned_aks == "[]"),
-                        ),
-                    )
+                    # Must need LLM processing
+                    Item.needs_llm_processing == True,  # noqa: E712
+                    # Skip certainly irrelevant items
+                    or_(retry_priority != "low", retry_priority.is_(None)),
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
