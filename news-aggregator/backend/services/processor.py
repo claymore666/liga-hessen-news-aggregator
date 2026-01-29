@@ -375,8 +375,12 @@ Antworte NUR mit JA oder NEIN."""
             "role": "user",
             "content": (
                 "Based on the article you just analyzed, assign 1-2 specific topic keywords "
-                "for grouping similar articles. Be specific (e.g. 'Kita-Finanzierung Hessen' "
-                "not 'Kita'). Return JSON: {\"topics\": [\"topic1\", \"topic2\"]}"
+                "for grouping similar articles about the SAME concrete issue. "
+                "Be very specific - use the concrete event, policy, or problem "
+                "(e.g. 'Kita-Personalmangel Hessen' or 'Bürgergeld-Kürzungen 2026'). "
+                "NEVER use generic AK-level topics like 'Pflege', 'Migration', 'Kinder' or 'Sozialpolitik'. "
+                "The topic must be narrow enough that only articles about the same story would share it. "
+                "Return JSON: {\"topics\": [\"topic1\", \"topic2\"]}"
             ),
         }
         messages = conversation_messages + [follow_up]

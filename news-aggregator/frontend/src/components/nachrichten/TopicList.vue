@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TopicGroup } from '@/api'
+import type { Priority } from '@/types'
 import PriorityBadge from '@/components/PriorityBadge.vue'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
@@ -49,7 +50,7 @@ const formatTime = (date: string | null) => {
             ]"
             @click="emit('select', item.id)"
           >
-            <PriorityBadge :priority="item.priority" size="sm" class="flex-shrink-0 mr-2" />
+            <PriorityBadge :priority="(item.priority as Priority)" size="sm" class="flex-shrink-0 mr-2" />
             <span class="min-w-0 flex-1 truncate text-xs font-medium text-gray-900">
               {{ item.title }}
             </span>
