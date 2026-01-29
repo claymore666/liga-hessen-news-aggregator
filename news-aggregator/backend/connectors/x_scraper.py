@@ -1,5 +1,6 @@
 """X.com (Twitter) scraper connector using Playwright."""
 
+import asyncio
 import json
 import logging
 import random
@@ -7,12 +8,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
 from pydantic import BaseModel, Field
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
+from services.browser_pool import browser_pool
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +119,8 @@ class XScraperConnector(BaseConnector):
         if config.use_proxy:
             try:
                 from services.proxy_manager import proxy_manager
-                proxy = await proxy_manager.checkout_proxy(self.connector_type)
+                # X.com requires HTTPS, so prefer proxies that support HTTPS tunneling
+                proxy = await proxy_manager.checkout_proxy(self.connector_type, prefer_https=True)
                 if proxy:
                     proxy_server = f"http://{proxy}"
                     logger.info(f"Checked out proxy for {self.connector_type}: {proxy}")
@@ -139,7 +142,7 @@ class XScraperConnector(BaseConnector):
             if proxy:
                 try:
                     from services.proxy_manager import proxy_manager
-                    await proxy_manager.checkin_proxy(self.connector_type, proxy)
+                    await proxy_manager.checkin_proxy(self.connector_type, proxy, is_https=True)
                     logger.debug(f"Released proxy {proxy} for {self.connector_type}")
                 except Exception as e:
                     logger.warning(f"Failed to checkin proxy: {e}")
@@ -163,18 +166,9 @@ class XScraperConnector(BaseConnector):
 
         items = []
 
-        try:
-            async with async_playwright() as p:
-                # Launch browser
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
-                )
-
+        # Use shared browser pool instead of creating new Playwright instance
+        async with browser_pool.get_browser() as browser:
+            try:
                 # Create context with random fingerprint
                 context_args = {
                     "user_agent": user_agent,
@@ -219,7 +213,6 @@ class XScraperConnector(BaseConnector):
                     tweets_exist = await page.query_selector('[data-testid="tweet"]')
                     if not tweets_exist:
                         logger.warning(f"No tweets found for @{config.username}")
-                        await browser.close()
                         return []
 
                 # Scroll to load more tweets
@@ -230,14 +223,18 @@ class XScraperConnector(BaseConnector):
                 # Extract tweets (pass context for Playwright-based article fetching)
                 items = await self._extract_tweets(page, config, context)
 
-                await browser.close()
-
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout scraping @{config.username}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error scraping @{config.username}: {e}")
-            raise
+            except PlaywrightTimeout as e:
+                logger.error(f"Timeout scraping @{config.username}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error scraping @{config.username}: {e}")
+                raise
+            finally:
+                # Close context (browser is closed by pool)
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items
@@ -317,14 +314,17 @@ class XScraperConnector(BaseConnector):
                         if href:
                             tweet_url = f"https://x.com{href}"
 
-                # Generate external ID from URL or create one
+                # Generate external ID from URL - skip if no valid tweet URL
                 external_id = ""
                 if tweet_url:
                     match = re.search(r"/status/(\d+)", tweet_url)
                     if match:
                         external_id = match.group(1)
-                if not external_id:
-                    external_id = f"{config.username}_{i}_{int(published_at.timestamp())}"
+
+                # Skip items without a valid tweet URL (likely promoted/spam content)
+                if not external_id or "/status/" not in tweet_url:
+                    logger.debug(f"Skipping item without valid tweet URL: {text[:50]}...")
+                    continue
 
                 # Extract and follow links if enabled
                 combined_content = text
@@ -383,7 +383,7 @@ Verlinkter Artikel von {article.source_domain}:
                         external_id=external_id,
                         title=text[:100] + "..." if len(text) > 100 else text,
                         content=combined_content,
-                        url=tweet_url or f"https://x.com/{config.username}",
+                        url=tweet_url,  # Guaranteed valid due to earlier check
                         author=author,
                         published_at=published_at,
                         metadata={
@@ -672,24 +672,24 @@ Verlinkter Artikel von {article.source_domain}:
             Tuple of (success, message)
         """
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+            async with browser_pool.get_browser() as browser:
                 context = await browser.new_context(
                     user_agent=random.choice(self.USER_AGENTS),
                 )
-                page = await context.new_page()
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                try:
+                    page = await context.new_page()
+                    stealth = Stealth()
+                    await stealth.apply_stealth_async(page)
 
-                url = f"https://x.com/{config.username}"
-                response = await page.goto(url, timeout=15000)
+                    url = f"https://x.com/{config.username}"
+                    response = await page.goto(url, timeout=15000)
 
-                await browser.close()
-
-                if response and response.status == 200:
-                    return True, f"Profile @{config.username} found"
-                else:
-                    return False, f"Profile @{config.username} not found (HTTP {response.status if response else 'error'})"
+                    if response and response.status == 200:
+                        return True, f"Profile @{config.username} found"
+                    else:
+                        return False, f"Profile @{config.username} not found (HTTP {response.status if response else 'error'})"
+                finally:
+                    await context.close()
 
         except Exception as e:
             return False, f"Validation error: {str(e)}"

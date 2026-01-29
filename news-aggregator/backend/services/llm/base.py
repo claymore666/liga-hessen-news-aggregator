@@ -50,6 +50,25 @@ class BaseLLMProvider(ABC):
         pass
 
     @abstractmethod
+    async def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Generate a completion from a full messages list.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0.0-1.0)
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            LLMResponse with generated text
+        """
+        pass
+
+    @abstractmethod
     async def is_available(self) -> bool:
         """Check if the provider is accessible.
 

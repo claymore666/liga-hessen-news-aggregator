@@ -138,34 +138,63 @@ async def run_migrations() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler for startup/shutdown."""
+    # Set up in-memory log buffer for web UI
+    from api.admin.logs import setup_memory_logging
+    setup_memory_logging()
+
     # Startup
     await init_db()
     await run_migrations()
-    start_scheduler()
+
+    # Start scheduler if enabled
+    if settings.scheduler_enabled:
+        start_scheduler()
+        logging.info("Scheduler enabled and started")
+    else:
+        logging.info("Scheduler disabled via SCHEDULER_ENABLED=false")
+
     proxy_manager.start_background_search()
 
-    # Start LLM worker for continuous processing
+    # Start LLM worker for continuous processing (if enabled)
     # Worker processes fresh items immediately, backlog when idle
-    await start_worker(
-        batch_size=10,          # Fresh items per batch
-        idle_sleep=30.0,        # Seconds to sleep when no work
-        backlog_batch_size=50,  # Backlog items per query
-    )
+    if settings.llm_worker_enabled:
+        await start_worker(
+            batch_size=10,          # Fresh items per batch
+            idle_sleep=30.0,        # Seconds to sleep when no work
+            backlog_batch_size=50,  # Backlog items per query
+        )
+        logging.info("LLM worker enabled and started")
+    else:
+        logging.info("LLM worker disabled via LLM_WORKER_ENABLED=false")
 
-    # Start classifier worker for processing unclassified items
+    # Start classifier worker for processing unclassified items (if enabled)
     # Worker classifies items without pre_filter metadata
-    await start_classifier_worker(
-        batch_size=50,          # Items per batch
-        idle_sleep=60.0,        # Seconds to sleep when idle
-    )
+    if settings.classifier_worker_enabled:
+        await start_classifier_worker(
+            batch_size=50,          # Items per batch
+            idle_sleep=60.0,        # Seconds to sleep when idle
+        )
+        logging.info("Classifier worker enabled and started")
+    else:
+        logging.info("Classifier worker disabled via CLASSIFIER_WORKER_ENABLED=false")
 
     yield
 
-    # Shutdown
-    await stop_classifier_worker()
-    await stop_worker()
-    proxy_manager.stop_background_search()
-    stop_scheduler()
+    # Shutdown (in reverse order of startup)
+    logging.info("Shutting down...")
+    if settings.scheduler_enabled:
+        stop_scheduler()
+    if settings.classifier_worker_enabled:
+        await stop_classifier_worker()
+    if settings.llm_worker_enabled:
+        await stop_worker()
+    await proxy_manager.stop_background_search()
+
+    # Shutdown browser pool (cleanup Playwright driver)
+    from services.browser_pool import browser_pool
+    await browser_pool.shutdown()
+
+    logging.info("Shutdown complete")
 
 
 API_DESCRIPTION = """
@@ -249,7 +278,7 @@ async def health_check() -> dict[str, str]:
 
 
 # Import and include routers
-from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config, analytics  # noqa: E402
+from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config, analytics, motd  # noqa: E402
 from api import scheduler as scheduler_api  # noqa: E402
 
 app.include_router(items.router, prefix=settings.api_prefix, tags=["items"])
@@ -264,3 +293,4 @@ app.include_router(admin.router, prefix=settings.api_prefix, tags=["admin"])
 app.include_router(config.router, prefix=settings.api_prefix, tags=["admin"])
 app.include_router(scheduler_api.router, prefix=settings.api_prefix, tags=["scheduler"])
 app.include_router(analytics.router, prefix=settings.api_prefix, tags=["analytics"])
+app.include_router(motd.router, prefix=settings.api_prefix, tags=["motd"])

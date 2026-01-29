@@ -30,8 +30,14 @@ class Settings(BaseSettings):
     database_driver: str = "postgresql+asyncpg"  # SQLAlchemy async driver
 
     # Database - Connection Pool (PostgreSQL only)
-    database_pool_size: int = 5  # Number of persistent connections
-    database_pool_max_overflow: int = 10  # Extra connections allowed
+    # Pool sizing for concurrent workers:
+    # - Scheduler: up to 10 concurrent channel fetches
+    # - LLM Worker: batch_size=10
+    # - Classifier Worker: batch_size=50
+    # - API requests: ~20
+    # Total potential: ~90, so pool_size + max_overflow should be >= 50
+    database_pool_size: int = 20  # Number of persistent connections
+    database_pool_max_overflow: int = 30  # Extra connections allowed
     database_pool_timeout: int = 30  # Seconds to wait for connection
     database_pool_recycle: int = 1800  # Recycle connections after 30 min
 
@@ -102,25 +108,33 @@ class Settings(BaseSettings):
 
     # GPU1 Power Management (Wake-on-LAN)
     gpu1_wol_enabled: bool = True  # Enable WoL feature
+    gpu1_ollama_url: str = "http://192.168.0.141:11434"  # Ollama URL on gpu1 for availability check
     gpu1_mac_address: str = "58:47:ca:7c:18:cc"  # gpu1 MAC address
-    gpu1_broadcast: str = "192.168.0.255"  # LAN broadcast address
+    gpu1_broadcast: str = "255.255.255.255"  # Global broadcast (some NICs require this for WoL)
     gpu1_ssh_host: str = "192.168.0.141"  # gpu1 IP for SSH
     gpu1_ssh_user: str = "ligahessen"  # SSH user for shutdown (dedicated user)
     gpu1_ssh_key_path: str = "/app/ssh/id_ed25519"  # SSH key path in container
     gpu1_auto_shutdown: bool = True  # Shutdown after idle if we woke it
     gpu1_idle_timeout: int = 300  # Seconds idle before auto-shutdown (5 min)
     gpu1_wake_timeout: int = 120  # Max seconds to wait for Ollama after WoL
-    gpu1_active_hours_start: int = 8  # Hour (0-23) when gpu1 usage allowed (default 8 AM)
+    gpu1_active_hours_start: int = 7  # Hour (0-23) when gpu1 usage allowed (default 7 AM)
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)
+    gpu1_active_weekdays_only: bool = True  # Only wake on weekdays (Mon-Fri)
 
     # Scheduler
+    scheduler_enabled: bool = True  # Set to False to disable scheduler on startup
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
+
+    # Workers
+    llm_worker_enabled: bool = True  # Set to False to disable LLM worker on startup
+    classifier_worker_enabled: bool = True  # Set to False to disable classifier on startup
 
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
     proxy_pool_max: int = 25  # Maximum working proxies (buffer)
     proxy_known_max: int = 100  # Maximum known good proxies to store
+    proxy_https_pool_min: int = 5  # Minimum HTTPS-capable proxies for X scraper
 
     # API
     api_prefix: str = "/api"

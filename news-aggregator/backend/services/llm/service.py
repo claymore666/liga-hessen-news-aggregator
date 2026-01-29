@@ -80,6 +80,47 @@ class LLMService:
         error_summary = "; ".join(errors)
         raise RuntimeError(f"All LLM providers failed: {error_summary}")
 
+    async def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Generate completion from messages using first available provider.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            LLMResponse from successful provider
+
+        Raises:
+            RuntimeError: If all providers fail
+        """
+        errors = []
+
+        for provider in self.providers:
+            try:
+                logger.debug(f"Trying provider (chat): {provider.provider_name}")
+                response = await provider.chat(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                logger.info(f"LLM chat response from {provider.provider_name}")
+                return response
+
+            except Exception as e:
+                error_msg = f"{provider.provider_name}: {str(e)}"
+                logger.warning(f"Provider chat failed: {error_msg}")
+                errors.append(error_msg)
+                continue
+
+        error_summary = "; ".join(errors)
+        raise RuntimeError(f"All LLM providers failed (chat): {error_summary}")
+
     async def check_availability(self) -> dict[str, bool]:
         """Check availability of all providers.
 

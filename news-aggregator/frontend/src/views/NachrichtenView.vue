@@ -5,8 +5,11 @@ import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
 import { ArrowPathIcon } from '@heroicons/vue/24/outline'
 import FilterBar from '@/components/nachrichten/FilterBar.vue'
 import MessageList from '@/components/nachrichten/MessageList.vue'
+import TopicList from '@/components/nachrichten/TopicList.vue'
 import MessageDetail from '@/components/nachrichten/MessageDetail.vue'
 import FeedbackPanel from '@/components/nachrichten/FeedbackPanel.vue'
+import { itemsApi } from '@/api'
+import type { TopicGroup, TopicItemBrief } from '@/api'
 import type { Priority } from '@/types'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 
@@ -17,6 +20,35 @@ const uiStore = useUiStore()
 
 // Grid columns: 1/3-2/3 when sidebar collapsed, fixed 400px otherwise
 const gridColumns = computed(() => uiStore.messageListGridColumns)
+
+// View mode: 'date' (default) or 'topic'
+const viewMode = ref<'date' | 'topic'>('topic')
+const topicGroups = ref<TopicGroup[]>([])
+const topicUngroupedItems = ref<TopicItemBrief[]>([])
+const topicLoading = ref(false)
+
+const loadTopics = async () => {
+  topicLoading.value = true
+  try {
+    const since = itemsStore.filters.since || undefined
+    const { data } = await itemsApi.byTopic({ since })
+    topicGroups.value = data.topics
+    topicUngroupedItems.value = data.ungrouped_items
+  } catch (e) {
+    console.error('Failed to load topics:', e)
+    topicGroups.value = []
+    topicUngroupedItems.value = []
+  } finally {
+    topicLoading.value = false
+  }
+}
+
+const switchViewMode = (mode: 'date' | 'topic') => {
+  viewMode.value = mode
+  if (mode === 'topic') {
+    loadTopics()
+  }
+}
 
 const page = ref(1)
 const pageSize = 50
@@ -146,6 +178,15 @@ useKeyboardShortcuts([
         handlePriorityChange(isRelevant ? 'none' : 'low')
       }
     }
+  },
+  {
+    key: 'Delete',
+    description: 'Archivieren',
+    action: () => {
+      if (selectedItem.value) {
+        handleArchive()
+      }
+    }
   }
 ])
 
@@ -237,7 +278,14 @@ const handleArchive = async () => {
   }
 }
 
-// Watch for filter changes
+const bulkArchive = async () => {
+  if (selectedIds.value.length > 0) {
+    await itemsStore.bulkArchive(selectedIds.value)
+    selectedIds.value = []
+  }
+}
+
+// Watch for filter changes — reload both date view and topic view
 watch(
   () => [
     itemsStore.filters.priorities,
@@ -250,8 +298,21 @@ watch(
   () => {
     page.value = 1
     loadItems()
+    if (viewMode.value === 'topic') {
+      loadTopics()
+    }
   },
   { deep: true }
+)
+
+// Watch since filter separately (date preset changes)
+watch(
+  () => itemsStore.filters.since,
+  () => {
+    if (viewMode.value === 'topic') {
+      loadTopics()
+    }
+  }
 )
 
 // Handle deep-link to specific item
@@ -271,7 +332,7 @@ watch(
 )
 
 onMounted(async () => {
-  await Promise.all([loadItems(), sourcesStore.fetchSources()])
+  await Promise.all([loadItems(), loadTopics(), sourcesStore.fetchSources()])
 })
 </script>
 
@@ -283,12 +344,12 @@ onMounted(async () => {
       <button
         type="button"
         class="btn btn-primary text-sm"
-        :disabled="itemsStore.loading"
-        @click="loadItems"
+        :disabled="itemsStore.loading || topicLoading"
+        @click="viewMode === 'topic' ? loadTopics() : loadItems()"
       >
         <ArrowPathIcon
           class="mr-1.5 h-4 w-4"
-          :class="{ 'animate-spin': itemsStore.loading }"
+          :class="{ 'animate-spin': itemsStore.loading || topicLoading }"
         />
         Aktualisieren
       </button>
@@ -304,19 +365,59 @@ onMounted(async () => {
         <!-- Filters -->
         <FilterBar
           :selected-count="selectedIds.length"
+          :focused-item-id="selectedItemId"
+          :focused-item-is-read="selectedItem?.is_read ?? false"
+          :focused-item-is-archived="selectedItem?.is_archived ?? false"
           @search="handleSearch"
           @clear-selection="clearSelection"
           @bulk-mark-read="bulkMarkRead"
           @bulk-mark-unread="bulkMarkUnread"
           @select-all="toggleSelectAll"
+          @mark-read="handleToggleRead"
+          @mark-unread="handleToggleRead"
+          @archive="handleArchive"
+          @bulk-archive="bulkArchive"
         />
 
+        <!-- View mode tabs -->
+        <div class="flex border-b border-blue-300 bg-blue-50 flex-shrink-0">
+          <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-xs font-medium text-center border-b-2 transition-colors"
+            :class="viewMode === 'date'
+              ? 'border-b-blue-600 text-blue-700 bg-white'
+              : 'border-b-transparent text-gray-500 hover:text-gray-700 hover:bg-blue-100'"
+            @click="switchViewMode('date')"
+          >
+            Nach Datum
+          </button>
+          <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-xs font-medium text-center border-b-2 transition-colors"
+            :class="viewMode === 'topic'
+              ? 'border-b-blue-600 text-blue-700 bg-white'
+              : 'border-b-transparent text-gray-500 hover:text-gray-700 hover:bg-blue-100'"
+            @click="switchViewMode('topic')"
+          >
+            Nach Thema
+          </button>
+        </div>
+
         <!-- Loading -->
-        <div v-if="itemsStore.loading && itemsStore.items.length === 0" class="flex items-center justify-center py-6 bg-blue-100 flex-1">
+        <div v-if="(viewMode === 'date' && itemsStore.loading && itemsStore.items.length === 0) || (viewMode === 'topic' && topicLoading)" class="flex items-center justify-center py-6 bg-blue-100 flex-1">
           <ArrowPathIcon class="h-6 w-6 animate-spin text-blue-500" />
         </div>
 
-        <!-- Message List -->
+        <!-- Topic List (topic view mode) -->
+        <TopicList
+          v-else-if="viewMode === 'topic'"
+          :topics="topicGroups"
+          :ungrouped-items="topicUngroupedItems"
+          :selected-id="selectedItemId"
+          @select="selectItem"
+        />
+
+        <!-- Message List (date view mode) -->
         <MessageList
           v-else
           :items="itemsStore.items"
@@ -328,8 +429,8 @@ onMounted(async () => {
           @focus="focusedIndex = $event"
         />
 
-        <!-- Pagination -->
-        <div v-if="itemsStore.total > pageSize" class="flex items-center justify-between border-t border-blue-300 bg-blue-100 px-3 py-2 flex-shrink-0">
+        <!-- Pagination (date view only) -->
+        <div v-if="viewMode === 'date' && itemsStore.total > pageSize" class="flex items-center justify-between border-t border-blue-300 bg-blue-100 px-3 py-2 flex-shrink-0">
           <p class="text-xs text-black">
             {{ (page - 1) * pageSize + 1 }}-{{ Math.min(page * pageSize, itemsStore.total) }} von {{ itemsStore.total }}
           </p>

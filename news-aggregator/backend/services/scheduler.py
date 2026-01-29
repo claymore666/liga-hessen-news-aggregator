@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # For proxy-using connectors (x_scraper, instagram_scraper), the actual limit
 # is dynamically capped by available proxies via get_effective_limit()
 SOURCE_TYPE_LIMITS = {
-    "x_scraper": 4,  # Heavy browser + rate limits, uses proxies
-    "instagram_scraper": 4,  # Heavy browser, uses proxies
+    "x_scraper": 2,  # Heavy browser + rate limits, reduced to avoid cascade failures
+    "instagram_scraper": 2,  # Heavy browser, reduced to avoid cascade failures
     "instagram": 3,
     "mastodon": 5,
     "twitter": 5,
@@ -33,6 +33,23 @@ SOURCE_TYPE_LIMITS = {
     "google_alerts": 5,
     "linkedin": 2,
 }
+
+# Per-source-type fetch timeout in seconds
+# Playwright-based scrapers need more time due to browser startup and JS rendering
+# but must have hard limits to prevent indefinite hangs
+CHANNEL_FETCH_TIMEOUTS = {
+    "x_scraper": 300,  # 5 min - fetches tweets + follows links
+    "instagram_scraper": 300,  # 5 min - visits individual posts
+    "linkedin": 180,  # 3 min - browser-based
+    "html": 120,  # 2 min - may need JS rendering
+    "pdf": 120,  # 2 min - large file downloads
+    "rss": 60,  # 1 min - lightweight
+    "bluesky": 60,
+    "mastodon": 60,
+    "telegram": 60,
+    "google_alerts": 60,
+}
+DEFAULT_FETCH_TIMEOUT = 120  # 2 min default
 
 # Connector types that use proxy reservation
 PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
@@ -67,8 +84,8 @@ def get_effective_limit(source_type: str) -> int:
 
     return base_limit
 
-# Track if a fetch is currently running to avoid overlapping fetches
-_fetch_in_progress = False
+# Lock to prevent overlapping fetches (replaces boolean flag to avoid race conditions)
+_fetch_lock = asyncio.Lock()
 
 scheduler = AsyncIOScheduler()
 
@@ -169,7 +186,6 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         Number of new items fetched.
     """
     from connectors import ConnectorRegistry
-    from database import db_write_lock
     from services.pipeline import Pipeline
     from services.processor import ItemProcessor, create_processor_from_settings
     from services.relevance_filter import create_relevance_filter
@@ -237,13 +253,12 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         logger.info(f"Connector returned {len(raw_items)} raw items from channel {channel_id}")
 
     except Exception as e:
-        # Phase 2 error: Update channel error status (needs db lock)
-        async with db_write_lock:
-            async with async_session_maker() as db:
-                channel = await db.get(Channel, channel_id)
-                if channel:
-                    channel.last_error = str(e)
-                    await db.commit()
+        # Phase 2 error: Update channel error status
+        async with async_session_maker() as db:
+            channel = await db.get(Channel, channel_id)
+            if channel:
+                channel.last_error = str(e)
+                await db.commit()
         logger.error(f"Error fetching channel {channel_id}: {e}")
         raise
 
@@ -268,49 +283,49 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                 logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
         logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
 
-    # Phase 3: Database writes - process and store items (serialized)
-    async with db_write_lock:
-        async with async_session_maker() as db:
-            # Re-fetch channel within this session (with source eager-loaded for indexing)
-            result = await db.execute(
-                select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+    # Phase 3: Database writes - process and store items
+    # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
+    async with async_session_maker() as db:
+        # Re-fetch channel within this session (with source eager-loaded for indexing)
+        result = await db.execute(
+            select(Channel).options(selectinload(Channel.source)).where(Channel.id == channel_id)
+        )
+        channel = result.scalar_one_or_none()
+        if channel is None:
+            return 0
+
+        try:
+            # Process through pipeline (includes database writes)
+            # Pass pre-computed filter results to avoid async context issues
+            pipeline = Pipeline(
+                db,
+                processor=processor,
+                relevance_filter=relevance_filter,
+                training_mode=training_mode,
+                pre_filter_results=pre_filter_results,
             )
-            channel = result.scalar_one_or_none()
-            if channel is None:
-                return 0
+            new_items = await pipeline.process(raw_items, channel)
 
+            channel.last_fetch_at = datetime.utcnow()
+            channel.last_error = None
+            await db.commit()
+
+            logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
+            return len(new_items)
+
+        except Exception as e:
+            logger.error(f"Error processing channel {channel_id}: {e}")
+            await db.rollback()
+            # Try to update error status
             try:
-                # Process through pipeline (includes database writes)
-                # Pass pre-computed filter results to avoid async context issues
-                pipeline = Pipeline(
-                    db,
-                    processor=processor,
-                    relevance_filter=relevance_filter,
-                    training_mode=training_mode,
-                    pre_filter_results=pre_filter_results,
-                )
-                new_items = await pipeline.process(raw_items, channel)
-
-                channel.last_fetch_at = datetime.utcnow()
-                channel.last_error = None
-                await db.commit()
-
-                logger.info(f"Fetched {len(new_items)} new items from channel {channel_id}{mode_str}")
-                return len(new_items)
-
-            except Exception as e:
-                logger.error(f"Error processing channel {channel_id}: {e}")
-                await db.rollback()
-                # Try to update error status
-                try:
-                    channel = await db.get(Channel, channel_id)
-                    if channel:
-                        channel.last_error = str(e)
-                        await db.commit()
-                except Exception as store_err:
-                    # Don't let error storage failure mask original error
-                    logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
-                raise
+                channel = await db.get(Channel, channel_id)
+                if channel:
+                    channel.last_error = str(e)
+                    await db.commit()
+            except Exception as store_err:
+                # Don't let error storage failure mask original error
+                logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
+            raise
 
 
 async def _fetch_source_type_group(
@@ -332,15 +347,31 @@ async def _fetch_source_type_group(
     """
     fetched = 0
     errors = 0
+    timeouts = 0
     results_lock = asyncio.Lock()
 
+    # Get timeout for this source type
+    timeout = CHANNEL_FETCH_TIMEOUTS.get(source_type, DEFAULT_FETCH_TIMEOUT)
+
     async def fetch_with_limit(channel: Channel) -> None:
-        nonlocal fetched, errors
+        nonlocal fetched, errors, timeouts
         async with semaphore:
             try:
-                await fetch_channel(channel.id, training_mode=training_mode)
+                # Wrap in timeout to prevent indefinite hangs
+                await asyncio.wait_for(
+                    fetch_channel(channel.id, training_mode=training_mode),
+                    timeout=timeout,
+                )
                 async with results_lock:
                     fetched += 1
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Channel {channel.id} ({channel.source.name}/{channel.connector_type}) "
+                    f"timed out after {timeout}s"
+                )
+                async with results_lock:
+                    timeouts += 1
+                    errors += 1
             except Exception as e:
                 logger.error(
                     f"Error fetching channel {channel.id} "
@@ -351,6 +382,10 @@ async def _fetch_source_type_group(
 
     # Run all channels of this type concurrently (within semaphore limit)
     await asyncio.gather(*[fetch_with_limit(ch) for ch in channels], return_exceptions=True)
+
+    if timeouts > 0:
+        logger.warning(f"{source_type}: {timeouts} channel(s) timed out after {timeout}s")
+
     return fetched, errors
 
 
@@ -368,14 +403,12 @@ async def fetch_due_channels() -> dict:
     Returns:
         Dict with fetch statistics.
     """
-    global _fetch_in_progress
-
-    if _fetch_in_progress:
+    # Use lock to prevent overlapping fetches (atomic test-and-acquire)
+    if _fetch_lock.locked():
         logger.debug("Fetch already in progress, skipping")
         return {"skipped": True, "reason": "fetch_in_progress"}
 
-    _fetch_in_progress = True
-    try:
+    async with _fetch_lock:
         now = datetime.utcnow()
 
         async with async_session_maker() as db:
@@ -451,8 +484,6 @@ async def fetch_due_channels() -> dict:
             "fetched": total_fetched,
             "errors": total_errors,
         }
-    finally:
-        _fetch_in_progress = False
 
 
 async def retry_llm_processing(batch_size: int = 10) -> dict:
@@ -625,6 +656,9 @@ async def cleanup_old_items() -> dict:
         total_deleted = 0
         by_priority: dict[str, int] = {}
 
+        # Collect all item IDs to delete across priorities
+        all_ids_to_delete: list[int] = []
+
         # Delete per-priority with different retention periods
         for priority, days_key in [
             (Priority.HIGH, "retention_days_high"),
@@ -643,17 +677,36 @@ async def cleanup_old_items() -> dict:
             if exclude_starred:
                 conditions.append(Item.is_starred == False)  # noqa: E712
 
-            stmt = delete(Item).where(and_(*conditions))
-            result = await db.execute(stmt)
-            count = result.rowcount
+            # First collect the IDs
+            id_result = await db.execute(select(Item.id).where(and_(*conditions)))
+            ids_to_delete = [row[0] for row in id_result.fetchall()]
 
-            if count > 0:
+            if ids_to_delete:
+                all_ids_to_delete.extend(ids_to_delete)
+                stmt = delete(Item).where(Item.id.in_(ids_to_delete))
+                await db.execute(stmt)
+                count = len(ids_to_delete)
                 by_priority[priority.value] = count
                 total_deleted += count
                 logger.info(
                     f"Deleted {count} {priority.value} priority items "
                     f"older than {retention_days} days"
                 )
+
+        # Clean up vector indexes
+        if all_ids_to_delete:
+            try:
+                from services.relevance_filter import create_relevance_filter
+                relevance_filter = await create_relevance_filter()
+                if relevance_filter:
+                    str_ids = [str(id) for id in all_ids_to_delete]
+                    deleted_search, deleted_dup = await relevance_filter.delete_items(str_ids)
+                    logger.info(
+                        f"Vector index cleanup: {deleted_search} from search, "
+                        f"{deleted_dup} from duplicate index"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to clean up vector indexes: {e}")
 
         await db.commit()
 

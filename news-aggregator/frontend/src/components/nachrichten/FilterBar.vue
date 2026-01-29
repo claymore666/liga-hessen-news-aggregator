@@ -6,13 +6,18 @@ import {
   ChevronUpDownIcon,
   XMarkIcon,
   CheckIcon,
-  EyeSlashIcon
+  EyeSlashIcon,
+  ArchiveBoxIcon,
+  ArchiveBoxXMarkIcon
 } from '@heroicons/vue/24/outline'
 import type { Priority } from '@/types'
 import { startOfDay, subDays, isMonday } from 'date-fns'
 
 const props = defineProps<{
   selectedCount: number
+  focusedItemId: number | null
+  focusedItemIsRead: boolean
+  focusedItemIsArchived: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,7 +26,51 @@ const emit = defineEmits<{
   (e: 'bulk-mark-read'): void
   (e: 'bulk-mark-unread'): void
   (e: 'select-all'): void
+  (e: 'mark-read'): void
+  (e: 'mark-unread'): void
+  (e: 'archive'): void
+  (e: 'bulk-archive'): void
 }>()
+
+// Computed properties for action bar
+const hasTarget = computed(() => props.selectedCount > 0 || props.focusedItemId !== null)
+const targetLabel = computed(() =>
+  props.selectedCount > 0 ? `${props.selectedCount} ausgewählt` : 'Aktuelle Nachricht'
+)
+const showReadButton = computed(() =>
+  props.selectedCount > 0 || (props.focusedItemId !== null && !props.focusedItemIsRead)
+)
+const showUnreadButton = computed(() =>
+  props.selectedCount > 0 || (props.focusedItemId !== null && props.focusedItemIsRead)
+)
+const archiveLabel = computed(() =>
+  props.focusedItemIsArchived ? 'Wiederherstellen' : 'Archivieren'
+)
+
+// Action handlers
+const handleMarkRead = () => {
+  if (props.selectedCount > 0) {
+    emit('bulk-mark-read')
+  } else {
+    emit('mark-read')
+  }
+}
+
+const handleMarkUnread = () => {
+  if (props.selectedCount > 0) {
+    emit('bulk-mark-unread')
+  } else {
+    emit('mark-unread')
+  }
+}
+
+const handleArchive = () => {
+  if (props.selectedCount > 0) {
+    emit('bulk-archive')
+  } else {
+    emit('archive')
+  }
+}
 
 const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
@@ -168,28 +217,40 @@ onMounted(() => {
 
 <template>
   <div class="space-y-2">
-    <!-- Bulk Actions -->
-    <div v-if="selectedCount > 0" class="rounded-lg border border-blue-300 bg-blue-100 px-3 py-2 flex items-center gap-3">
+    <!-- Item Actions (bulk or single) -->
+    <div v-if="hasTarget" class="rounded-lg border border-blue-300 bg-blue-100 px-3 py-2 flex items-center gap-3">
       <span class="text-sm font-medium text-black">
-        {{ selectedCount }} ausgewählt
+        {{ targetLabel }}
       </span>
       <button
+        v-if="showReadButton"
         type="button"
         class="btn btn-secondary text-xs py-1"
-        @click="emit('bulk-mark-read')"
+        @click="handleMarkRead"
       >
         <CheckIcon class="mr-1 h-3.5 w-3.5" />
         Als gelesen
       </button>
       <button
+        v-if="showUnreadButton"
         type="button"
         class="btn btn-secondary text-xs py-1"
-        @click="emit('bulk-mark-unread')"
+        @click="handleMarkUnread"
       >
         <EyeSlashIcon class="mr-1 h-3.5 w-3.5" />
         Als ungelesen
       </button>
       <button
+        type="button"
+        class="btn btn-secondary text-xs py-1"
+        @click="handleArchive"
+      >
+        <ArchiveBoxXMarkIcon v-if="focusedItemIsArchived && selectedCount === 0" class="mr-1 h-3.5 w-3.5" />
+        <ArchiveBoxIcon v-else class="mr-1 h-3.5 w-3.5" />
+        {{ selectedCount > 0 ? 'Archivieren' : archiveLabel }}
+      </button>
+      <button
+        v-if="selectedCount > 0"
         type="button"
         class="text-gray-500 hover:text-gray-700"
         @click="emit('clear-selection')"

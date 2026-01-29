@@ -17,20 +17,40 @@ class RelevanceFilter:
 
     Calls the classifier API on gpu1 to quickly determine relevance
     before expensive LLM processing.
+
+    Uses a singleton httpx.AsyncClient for connection pooling and efficiency.
     """
 
-    def __init__(self, base_url: str, threshold: float = 0.8, timeout: int = 30):
+    def __init__(self, base_url: str, threshold: float = 0.75, timeout: int = 30):
         """
         Initialize the relevance filter.
 
         Args:
             base_url: Classifier API URL (e.g., http://gpu1:8081)
-            threshold: Confidence threshold for filtering (default: 0.8)
+            threshold: Confidence threshold for filtering (default: 0.75)
             timeout: Request timeout in seconds
         """
         self.base_url = base_url.rstrip("/")
         self.threshold = threshold
         self.timeout = timeout
+        # Singleton HTTP client with connection pooling
+        # limits: max 100 connections, 20 per host (prevents exhaustion)
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the singleton HTTP client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
+        return self._client
+
+    async def close(self):
+        """Close the HTTP client. Call this during shutdown."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def classify(
         self,
@@ -47,17 +67,17 @@ class RelevanceFilter:
         Raises:
             httpx.RequestError: If the classifier service is unavailable
         """
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/classify",
-                json={
-                    "title": title,
-                    "content": content,
-                    "source": source,
-                },
-            )
-            response.raise_for_status()
-            return response.json()
+        client = await self._get_client()
+        response = await client.post(
+            f"{self.base_url}/classify",
+            json={
+                "title": title,
+                "content": content,
+                "source": source,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def should_process(
         self,
@@ -94,9 +114,9 @@ class RelevanceFilter:
     async def is_available(self) -> bool:
         """Check if the classifier service is available."""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(f"{self.base_url}/health")
-                return response.status_code == 200
+            client = await self._get_client()
+            response = await client.get(f"{self.base_url}/health", timeout=5.0)
+            return response.status_code == 200
         except Exception as e:
             logger.debug(f"Classifier not available: {e}")
             return False
@@ -104,10 +124,10 @@ class RelevanceFilter:
     async def get_health(self) -> Optional[dict]:
         """Get classifier health info."""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(f"{self.base_url}/health")
-                response.raise_for_status()
-                return response.json()
+            client = await self._get_client()
+            response = await client.get(f"{self.base_url}/health", timeout=5.0)
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
             logger.debug(f"Failed to get classifier health: {e}")
             return None
@@ -115,10 +135,10 @@ class RelevanceFilter:
     async def get_storage_stats(self) -> Optional[dict]:
         """Get storage statistics from classifier API."""
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(f"{self.base_url}/storage")
-                response.raise_for_status()
-                return response.json()
+            client = await self._get_client()
+            response = await client.get(f"{self.base_url}/storage", timeout=10.0)
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
             logger.warning(f"Failed to get storage stats: {e}")
             return None
@@ -143,19 +163,19 @@ class RelevanceFilter:
             True if indexed, False if already exists or error
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/index",
-                    json={
-                        "id": item_id,
-                        "title": title,
-                        "content": content,
-                        "metadata": metadata,
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result.get("indexed", 0) > 0
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/index",
+                json={
+                    "id": item_id,
+                    "title": title,
+                    "content": content,
+                    "metadata": metadata,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("indexed", 0) > 0
         except Exception as e:
             logger.warning(f"Failed to index item {item_id}: {e}")
             return False
@@ -171,14 +191,15 @@ class RelevanceFilter:
             Number of items indexed
         """
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(
-                    f"{self.base_url}/index/batch",
-                    json={"items": items},
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result.get("indexed", 0)
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/index/batch",
+                json={"items": items},
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("indexed", 0)
         except Exception as e:
             logger.warning(f"Failed to batch index items: {e}")
             return 0
@@ -201,18 +222,18 @@ class RelevanceFilter:
             List of results with id, title, score, metadata
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/search",
-                    json={
-                        "query": query,
-                        "n_results": n_results,
-                        "source": source,
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result.get("results", [])
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/search",
+                json={
+                    "query": query,
+                    "n_results": n_results,
+                    "source": source,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("results", [])
         except Exception as e:
             logger.warning(f"Search failed: {e}")
             return []
@@ -235,18 +256,18 @@ class RelevanceFilter:
             List of similar items with id, title, score, metadata
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/similar",
-                    json={
-                        "item_id": item_id,
-                        "n_results": n_results,
-                        "exclude_same_source": exclude_same_source,
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result.get("results", [])
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/similar",
+                json={
+                    "item_id": item_id,
+                    "n_results": n_results,
+                    "exclude_same_source": exclude_same_source,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("results", [])
         except Exception as e:
             logger.warning(f"Similar search failed: {e}")
             return []
@@ -255,7 +276,7 @@ class RelevanceFilter:
         self,
         title: str,
         content: str,
-        threshold: float = 0.80,
+        threshold: float = 0.75,
     ) -> list[dict]:
         """
         Find semantically similar items that may be duplicates.
@@ -267,27 +288,84 @@ class RelevanceFilter:
         Args:
             title: Item title
             content: Item content
-            threshold: Similarity threshold (default 0.92)
+            threshold: Similarity threshold (default 0.75)
 
         Returns:
             List of duplicate candidates with id, title, score, metadata
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/find-duplicates",
-                    json={
-                        "title": title,
-                        "content": content,
-                        "threshold": threshold,
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result.get("duplicates", [])
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/find-duplicates",
+                json={
+                    "title": title,
+                    "content": content,
+                    "threshold": threshold,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("duplicates", [])
         except Exception as e:
             logger.warning(f"Duplicate search failed: {e}")
             return []
+
+    async def get_all_indexed_ids(self) -> list[str]:
+        """
+        Get all item IDs currently indexed in the vector store.
+
+        Used for sync operations to find orphaned entries.
+
+        Returns:
+            List of all indexed item IDs as strings
+        """
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                f"{self.base_url}/ids",
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("ids", [])
+        except Exception as e:
+            logger.warning(f"Failed to get indexed IDs: {e}")
+            return []
+
+    async def delete_items(self, item_ids: list[str]) -> tuple[int, int]:
+        """
+        Delete items from both vector indexes (search and duplicate).
+
+        Call this when deleting items from PostgreSQL to keep indexes in sync.
+
+        Args:
+            item_ids: List of item IDs to delete (as strings)
+
+        Returns:
+            Tuple of (deleted_from_search, deleted_from_duplicate)
+        """
+        if not item_ids:
+            return 0, 0
+
+        try:
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/delete",
+                json={"ids": item_ids},
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            deleted_search = result.get("deleted_from_search", 0)
+            deleted_dup = result.get("deleted_from_duplicate", 0)
+            logger.info(
+                f"Deleted {deleted_search} from search index, "
+                f"{deleted_dup} from duplicate index"
+            )
+            return deleted_search, deleted_dup
+        except Exception as e:
+            logger.warning(f"Failed to delete items from vector indexes: {e}")
+            return 0, 0
 
 
 async def create_relevance_filter() -> Optional[RelevanceFilter]:

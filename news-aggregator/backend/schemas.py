@@ -194,6 +194,53 @@ class ItemListResponse(BaseModel):
     total_pages: int
 
 
+class BulkArchiveRequest(BaseModel):
+    """Request body for bulk archive operations."""
+
+    ids: list[int]
+    is_archived: bool = True  # True to archive, False to restore
+
+
+class BulkArchiveResponse(BaseModel):
+    """Response for bulk archive operations."""
+
+    archived: int  # Number of items archived/restored
+    item_ids: list[int]  # All affected item IDs (including duplicates)
+
+
+# === Topic grouping schemas ===
+
+
+class TopicItemBrief(BaseModel):
+    """Brief item info for topic grouping."""
+
+    id: int
+    title: str
+    url: str
+    priority: Priority
+    source_name: str | None = None
+    source_domain: str | None = None
+    published_at: datetime | None = None
+    summary: str | None = None
+    assigned_aks: list[str] = Field(default_factory=list)
+    is_read: bool = False
+
+
+class TopicGroup(BaseModel):
+    """A group of items sharing a topic."""
+
+    topic: str
+    items: list[TopicItemBrief]
+
+
+class TopicGroupsResponse(BaseModel):
+    """Response for topic-grouped items."""
+
+    topics: list[TopicGroup]
+    ungrouped_count: int = 0
+    ungrouped_items: list[TopicItemBrief] = Field(default_factory=list)
+
+
 # === Rule schemas ===
 
 

@@ -10,7 +10,7 @@ Manages gpu1 power state for LLM processing:
 Configuration via environment:
 - GPU1_WOL_ENABLED: Enable/disable WoL feature (default: true)
 - GPU1_MAC_ADDRESS: MAC address for WoL packets
-- GPU1_BROADCAST: Broadcast address for WoL (default: 192.168.0.255)
+- GPU1_BROADCAST: Broadcast address for WoL (default: 255.255.255.255)
 - GPU1_SSH_HOST: SSH host for shutdown command
 - GPU1_SSH_USER: SSH user for shutdown command
 - GPU1_SSH_KEY_PATH: Path to SSH private key
@@ -37,15 +37,16 @@ class GPU1PowerManager:
         self,
         mac_address: str,
         ollama_url: str,
-        broadcast: str = "192.168.0.255",
+        broadcast: str = "255.255.255.255",
         ssh_host: str = "192.168.0.141",
         ssh_user: str = "ligahessen",
         ssh_key_path: str = "/app/ssh/id_ed25519",
         auto_shutdown: bool = True,
         idle_timeout: int = 300,
         wake_timeout: int = 120,
-        active_hours_start: int = 8,
+        active_hours_start: int = 7,
         active_hours_end: int = 16,
+        active_weekdays_only: bool = True,
     ):
         """
         Initialize GPU1 power manager.
@@ -62,6 +63,7 @@ class GPU1PowerManager:
             wake_timeout: Max seconds to wait after WoL
             active_hours_start: Hour (0-23) when gpu1 usage is allowed
             active_hours_end: Hour (0-23) when gpu1 usage stops
+            active_weekdays_only: Only wake on weekdays (Mon-Fri)
         """
         self.mac_address = mac_address
         self.ollama_url = ollama_url.rstrip("/")
@@ -74,6 +76,7 @@ class GPU1PowerManager:
         self.wake_timeout = wake_timeout
         self.active_hours_start = active_hours_start
         self.active_hours_end = active_hours_end
+        self.active_weekdays_only = active_weekdays_only
 
         # State tracking
         self._was_sleeping = False
@@ -92,9 +95,14 @@ class GPU1PowerManager:
         Returns:
             True if gpu1 usage is allowed now, False otherwise
         """
-        current_hour = datetime.now().hour
+        now = datetime.now()
+        current_hour = now.hour
 
-        # Handle same-day range (e.g., 8-16)
+        # Check weekday restriction (Monday=0, Sunday=6)
+        if self.active_weekdays_only and now.weekday() >= 5:
+            return False
+
+        # Handle same-day range (e.g., 7-16)
         if self.active_hours_start < self.active_hours_end:
             return self.active_hours_start <= current_hour < self.active_hours_end
 
@@ -167,8 +175,8 @@ class GPU1PowerManager:
                 return True
 
             await asyncio.sleep(poll_interval)
-            logger.debug(
-                f"Still waiting for Ollama... ({time.time() - start:.0f}s elapsed)"
+            logger.info(
+                f"Still waiting for gpu1 Ollama... ({time.time() - start:.0f}s elapsed)"
             )
 
         logger.warning(f"Timeout after {timeout}s waiting for Ollama")
@@ -192,12 +200,20 @@ class GPU1PowerManager:
             logger.debug("gpu1 already available")
             return True
 
-        # gpu1 is not available - check if we're allowed to wake it
+        # gpu1 is not available - if we previously woke it, it was shut down externally
+        if self._was_sleeping:
+            logger.info("gpu1 went down (external shutdown), resetting wake state")
+            self.reset_state()
+
+        # Check if we're allowed to wake it
         if not self.is_within_active_hours():
-            current_hour = datetime.now().hour
+            now = datetime.now()
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            weekday_str = f" ({day_names[now.weekday()]})" if self.active_weekdays_only else ""
+            weekday_restriction = " Mon-Fri" if self.active_weekdays_only else ""
             logger.info(
                 f"gpu1 not available and outside active hours "
-                f"(current: {current_hour}:00, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00). "
+                f"(current: {now.hour}:00{weekday_str}, allowed: {self.active_hours_start}:00-{self.active_hours_end}:00{weekday_restriction}). "
                 f"Skipping WoL, items will be queued."
             )
             return False
@@ -270,6 +286,66 @@ class GPU1PowerManager:
             logger.error(f"Failed to shutdown gpu1: {e}")
             return False
 
+    async def has_other_users(self) -> bool:
+        """
+        Check if users other than ligahessen are logged into gpu1.
+
+        Returns:
+            True if other users are logged in, False if only ligahessen or no users
+        """
+        try:
+            cmd = [
+                "ssh",
+                "-i", self.ssh_key_path,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=10",
+                "-o", "BatchMode=yes",
+                f"{self.ssh_user}@{self.ssh_host}",
+                "who",
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+
+            if proc.returncode != 0:
+                logger.warning(f"Failed to check users on gpu1: {stderr.decode()}")
+                return True  # Assume users present on error (safe default)
+
+            # Parse who output - each line is a logged in user
+            # Format: username tty date time (ip)
+            # Ignore: ligahessen (our service user), sddm (display manager, always running)
+            ignore_users = {self.ssh_user, "sddm"}
+            lines = stdout.decode().strip().split('\n')
+            other_users = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                username = line.split()[0]
+                if username not in ignore_users:
+                    other_users.append(username)
+
+            if other_users:
+                unique_users = list(set(other_users))
+                logger.info(
+                    f"Users logged into gpu1: {', '.join(unique_users)} - skipping shutdown"
+                )
+                return True
+
+            return False
+
+        except asyncio.TimeoutError:
+            logger.warning("Timeout checking gpu1 users, assuming users present")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Error checking gpu1 users: {e}")
+            return True  # Assume users present on error (safe default)
+
     def record_activity(self):
         """Record that LLM processing activity occurred."""
         self._last_activity = time.time()
@@ -293,6 +369,7 @@ class GPU1PowerManager:
         - auto_shutdown is enabled
         - We woke gpu1 (was_sleeping is True)
         - Idle time exceeds idle_timeout
+        - No other users are logged in (only ligahessen or no users)
 
         Returns:
             True if shutdown was triggered, False otherwise
@@ -311,9 +388,20 @@ class GPU1PowerManager:
             )
             return False
 
+        # Check if gpu1 is still available - if not, it was shut down externally
+        if not await self.is_available():
+            logger.info("gpu1 no longer available (external shutdown), resetting state")
+            self.reset_state()
+            return False
+
+        # Check if other users are logged in before shutdown
+        if await self.has_other_users():
+            logger.debug("Skipping shutdown due to other users on gpu1")
+            return False
+
         logger.info(
             f"gpu1 idle for {idle_time:.0f}s (>{self.idle_timeout}s), "
-            "shutting down..."
+            "no other users logged in, shutting down..."
         )
 
         if await self.shutdown():
@@ -366,7 +454,7 @@ def get_power_manager() -> Optional[GPU1PowerManager]:
 
     _power_manager = GPU1PowerManager(
         mac_address=settings.gpu1_mac_address,
-        ollama_url=settings.ollama_base_url,
+        ollama_url=settings.gpu1_ollama_url,
         broadcast=settings.gpu1_broadcast,
         ssh_host=settings.gpu1_ssh_host,
         ssh_user=settings.gpu1_ssh_user,
@@ -376,12 +464,14 @@ def get_power_manager() -> Optional[GPU1PowerManager]:
         wake_timeout=settings.gpu1_wake_timeout,
         active_hours_start=settings.gpu1_active_hours_start,
         active_hours_end=settings.gpu1_active_hours_end,
+        active_weekdays_only=settings.gpu1_active_weekdays_only,
     )
 
+    weekdays_str = " (Mon-Fri only)" if settings.gpu1_active_weekdays_only else ""
     logger.info(
         f"GPU1 power manager initialized: "
         f"MAC={settings.gpu1_mac_address}, "
-        f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00, "
+        f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00{weekdays_str}, "
         f"broadcast={settings.gpu1_broadcast}, "
         f"auto_shutdown={settings.gpu1_auto_shutdown}"
     )

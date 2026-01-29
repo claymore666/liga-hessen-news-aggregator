@@ -4,17 +4,19 @@ Direct scraping of instagram.com with stealth mode.
 Works for public profiles without authentication.
 """
 
+import asyncio
 import logging
 import random
 import re
 from datetime import datetime, UTC
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
 from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
+from services.browser_pool import browser_pool
 
 logger = logging.getLogger(__name__)
 
@@ -109,17 +111,9 @@ class InstagramScraperConnector(BaseConnector):
 
         items = []
 
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
-                )
-
+        # Use shared browser pool instead of creating new Playwright instance
+        async with browser_pool.get_browser() as browser:
+            try:
                 context_args = {
                     "user_agent": user_agent,
                     "viewport": viewport,
@@ -150,12 +144,10 @@ class InstagramScraperConnector(BaseConnector):
                 page_content = await page.content()
                 if "Sorry, this page isn't available" in page_content:
                     logger.warning(f"Instagram profile not found: @{config.username}")
-                    await browser.close()
                     return []
 
                 if "This Account is Private" in page_content:
                     logger.warning(f"Instagram profile is private: @{config.username}")
-                    await browser.close()
                     return []
 
                 # Wait for posts to load
@@ -164,20 +156,23 @@ class InstagramScraperConnector(BaseConnector):
                     await page.wait_for_selector("article a[href*='/p/']", timeout=15000)
                 except PlaywrightTimeout:
                     logger.warning(f"No posts found for @{config.username}")
-                    await browser.close()
                     return []
 
                 # Extract posts
                 items = await self._extract_posts(page, config)
 
-                await browser.close()
-
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout scraping @{config.username}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error scraping @{config.username}: {e}")
-            raise
+            except PlaywrightTimeout as e:
+                logger.error(f"Timeout scraping @{config.username}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error scraping @{config.username}: {e}")
+                raise
+            finally:
+                # Close context (browser is closed by pool)
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
         logger.info(f"Extracted {len(items)} posts from @{config.username}")
         return items
@@ -329,34 +324,35 @@ class InstagramScraperConnector(BaseConnector):
     async def validate(self, config: InstagramScraperConfig) -> tuple[bool, str]:
         """Validate configuration by checking if profile exists."""
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+            async with browser_pool.get_browser() as browser:
                 context = await browser.new_context(
                     user_agent=random.choice(self.USER_AGENTS),
                 )
-                page = await context.new_page()
+                try:
+                    page = await context.new_page()
 
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                    stealth = Stealth()
+                    await stealth.apply_stealth_async(page)
 
-                url = f"https://www.instagram.com/{config.username}/"
-                await page.goto(url, timeout=20000)
-                await page.wait_for_timeout(2000)
+                    url = f"https://www.instagram.com/{config.username}/"
+                    await page.goto(url, timeout=20000)
+                    await page.wait_for_timeout(2000)
 
-                content = await page.content()
-                await browser.close()
+                    content = await page.content()
 
-                if "Sorry, this page isn't available" in content:
-                    return False, f"Profile @{config.username} not found"
+                    if "Sorry, this page isn't available" in content:
+                        return False, f"Profile @{config.username} not found"
 
-                if "This Account is Private" in content:
-                    return False, f"Profile @{config.username} is private"
+                    if "This Account is Private" in content:
+                        return False, f"Profile @{config.username} is private"
 
-                # Check for posts
-                if "/p/" in content:
-                    return True, f"Profile @{config.username} found with posts"
+                    # Check for posts
+                    if "/p/" in content:
+                        return True, f"Profile @{config.username} found with posts"
 
-                return True, f"Profile @{config.username} found (may have no posts)"
+                    return True, f"Profile @{config.username} found (may have no posts)"
+                finally:
+                    await context.close()
 
         except PlaywrightTimeout:
             return False, "Connection timeout - Instagram may be blocking"

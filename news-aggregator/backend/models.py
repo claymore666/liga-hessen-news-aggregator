@@ -422,3 +422,19 @@ class ItemProcessingLog(Base):
             postgresql_where=(priority_changed == True),  # noqa: E712
         ),
     )
+
+
+class MOTD(Base):
+    """Message of the Day for user notifications."""
+
+    __tablename__ = "motd"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)

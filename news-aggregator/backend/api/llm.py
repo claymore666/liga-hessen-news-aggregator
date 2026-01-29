@@ -113,12 +113,17 @@ async def list_ollama_models() -> OllamaModelsResponse:
 @router.get("/llm/settings", response_model=LLMSettingsResponse)
 async def get_llm_settings() -> LLMSettingsResponse:
     """Get current LLM configuration settings."""
-    provider = OllamaProvider(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-    )
-
-    ollama_available = await provider.is_available()
+    # Check Ollama availability via GPU1 power manager (uses correct URL)
+    from services.gpu1_power import get_power_manager
+    power_manager = get_power_manager()
+    if power_manager:
+        ollama_available = await power_manager.is_available()
+    else:
+        provider = OllamaProvider(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+        )
+        ollama_available = await provider.is_available()
 
     return LLMSettingsResponse(
         ollama_available=ollama_available,
@@ -409,12 +414,18 @@ async def get_llm_status(db: AsyncSession = Depends(get_db)) -> LLMStatusRespons
     # Check if effectively enabled
     enabled = await get_llm_enabled(db)
 
-    # Check Ollama availability
-    provider = OllamaProvider(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-    )
-    ollama_available = await provider.is_available()
+    # Check Ollama availability via GPU1 power manager (uses correct URL)
+    from services.gpu1_power import get_power_manager
+    power_manager = get_power_manager()
+    if power_manager:
+        ollama_available = await power_manager.is_available()
+    else:
+        # Fallback to direct check if power manager disabled
+        provider = OllamaProvider(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+        )
+        ollama_available = await provider.is_available()
 
     # Count unprocessed items
     unprocessed_count = await get_unprocessed_count(db)
@@ -568,7 +579,7 @@ async def get_worker_status() -> WorkerStatusResponse:
             },
         )
 
-    status = worker.get_status()
+    status = await worker.get_status()
     return WorkerStatusResponse(
         running=status["running"],
         paused=status["paused"],
@@ -642,7 +653,7 @@ async def get_classifier_worker_status() -> ClassifierWorkerStatusResponse:
             },
         )
 
-    status = worker.get_status()
+    status = await worker.get_status()
     return ClassifierWorkerStatusResponse(
         running=status["running"],
         paused=status["paused"],

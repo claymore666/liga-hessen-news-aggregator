@@ -51,7 +51,8 @@ class LLMWorker:
         self.backlog_batch_size = backlog_batch_size
 
         # Fresh items queue (in-memory, highest priority)
-        self._fresh_queue: asyncio.Queue[int] = asyncio.Queue()
+        # Bounded to prevent memory surge if LLM processing is slow
+        self._fresh_queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1000)
 
         # Worker state
         self._running = False
@@ -59,7 +60,7 @@ class LLMWorker:
         self._task: Optional[asyncio.Task] = None
         self._processor = None
 
-        # Statistics
+        # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
             "fresh_processed": 0,
             "backlog_processed": 0,
@@ -69,6 +70,8 @@ class LLMWorker:
             "total_processing_time": 0.0,  # Total seconds spent processing
             "items_timed": 0,  # Number of items with timing data
         }
+        self._stats_lock = asyncio.Lock()
+        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
 
     async def start(self):
         """Start the worker background task."""
@@ -78,6 +81,7 @@ class LLMWorker:
 
         self._running = True
         self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         logger.info("LLM worker started")
 
@@ -105,48 +109,67 @@ class LLMWorker:
         self._paused = False
         logger.info("LLM worker resumed")
 
-    async def enqueue_fresh(self, item_id: int):
+    async def enqueue_fresh(self, item_id: int) -> bool:
         """
         Enqueue a fresh item for immediate processing.
 
         Args:
             item_id: Database ID of the item to process
-        """
-        await self._fresh_queue.put(item_id)
-        logger.debug(f"Enqueued fresh item {item_id} (queue size: {self._fresh_queue.qsize()})")
 
-    def get_status(self) -> dict:
+        Returns:
+            True if enqueued, False if queue is full (item will be processed via backlog)
+        """
+        try:
+            self._fresh_queue.put_nowait(item_id)
+            logger.debug(f"Enqueued fresh item {item_id} (queue size: {self._fresh_queue.qsize()})")
+            return True
+        except asyncio.QueueFull:
+            logger.warning(f"Fresh item queue full, item {item_id} will be processed via backlog")
+            return False
+
+    async def get_status(self) -> dict:
         """Get worker status and statistics."""
+        async with self._stats_lock:
+            stats_copy = self._stats.copy()
         return {
             "running": self._running,
             "paused": self._paused,
+            "stopped_due_to_errors": self._stopped_due_to_errors,
             "fresh_queue_size": self._fresh_queue.qsize(),
-            "stats": self._stats.copy(),
+            "stats": stats_copy,
         }
 
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""
+        from services.gpu1_power import get_power_manager
+        from services.processor import create_processor_from_settings
+
+        # Always check if gpu1 is available (even if processor is cached)
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            if await power_mgr.is_available():
+                logger.debug("gpu1 available, proceeding with LLM processing")
+            else:
+                logger.info("gpu1 not available, attempting Wake-on-LAN...")
+                if await power_mgr.ensure_available():
+                    logger.info("gpu1 woken and ready for LLM processing")
+                    # Clear cached processor since gpu1 was asleep
+                    self._processor = None
+                else:
+                    logger.warning("Failed to wake gpu1, LLM processing unavailable")
+                    self._processor = None
+                    return None
+
         if self._processor is None:
-            from services.gpu1_power import get_power_manager
-            from services.processor import create_processor_from_settings
-
-            # Check if gpu1 needs waking
-            power_mgr = get_power_manager()
-            if power_mgr is not None:
-                if not await power_mgr.is_available():
-                    logger.info("gpu1 not available, attempting Wake-on-LAN...")
-                    if await power_mgr.ensure_available():
-                        logger.info("gpu1 woken and ready for LLM processing")
-                    else:
-                        logger.warning("Failed to wake gpu1, LLM processing unavailable")
-                        return None
-
             self._processor = await create_processor_from_settings()
         return self._processor
 
     async def _run(self):
         """Main worker loop."""
         logger.info("LLM worker loop started")
+
+        consecutive_errors = 0
+        max_consecutive_errors = 10
 
         while self._running:
             try:
@@ -158,12 +181,14 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
                     continue
@@ -179,9 +204,24 @@ class LLMWorker:
                 logger.info("LLM worker cancelled")
                 break
             except Exception as e:
-                logger.error(f"LLM worker error: {e}", exc_info=True)
-                self._stats["errors"] += 1
-                await asyncio.sleep(5.0)  # Back off on error
+                consecutive_errors += 1
+                logger.error(f"LLM worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(
+                        f"LLM worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
+                        "Manual restart required after fixing the issue."
+                    )
+                    self._stopped_due_to_errors = True
+                    self._running = False
+                    break
+
+                # Exponential backoff: 5s, 10s, 20s, 40s, ... up to 60s
+                backoff = min(60.0, 5.0 * (2 ** (consecutive_errors - 1)))
+                logger.info(f"Backing off for {backoff:.0f}s before retry")
+                await asyncio.sleep(backoff)
 
         logger.info("LLM worker loop ended")
 
@@ -239,11 +279,13 @@ class LLMWorker:
                 return 0
 
             processed = await self._process_items(item_ids, processor, is_fresh=True)
-            self._stats["fresh_processed"] += processed
+            async with self._stats_lock:
+                self._stats["fresh_processed"] += processed
 
         except Exception as e:
             logger.error(f"Error processing fresh items: {e}")
-            self._stats["errors"] += 1
+            async with self._stats_lock:
+                self._stats["errors"] += 1
 
         return processed
 
@@ -251,9 +293,22 @@ class LLMWorker:
         """
         Process items from the backlog (needs_llm_processing=True).
 
+        Backlog processing is opportunistic - it only runs when gpu1 is
+        already awake. We don't wake gpu1 for backlog items, only for
+        fresh items from fetch.
+
         Returns:
             Number of items processed
         """
+        from services.gpu1_power import get_power_manager
+
+        # Check if gpu1 is available WITHOUT waking it
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            if not await power_mgr.is_available():
+                logger.debug("gpu1 not available, skipping backlog (won't wake for backlog)")
+                return 0
+
         try:
             processor = await self._get_processor()
             if not processor:
@@ -270,7 +325,6 @@ class LLMWorker:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
             pre_filter = json_extract_path(Item.metadata_, "pre_filter")
-            assigned_aks = json_extract_path(Item.metadata_, "llm_analysis", "assigned_aks")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "edge_case", 2),
@@ -283,18 +337,10 @@ class LLMWorker:
                 .where(
                     # Must be classified first (pre_filter exists)
                     pre_filter.is_not(None),
-                    or_(
-                        # Standard backlog: needs processing and not certainly irrelevant
-                        and_(
-                            Item.needs_llm_processing == True,  # noqa: E712
-                            or_(retry_priority != "low", retry_priority.is_(None)),
-                        ),
-                        # Relevant items without AK assigned need reprocessing
-                        and_(
-                            Item.priority != "none",
-                            or_(assigned_aks.is_(None), assigned_aks == "[]"),
-                        ),
-                    )
+                    # Must need LLM processing
+                    Item.needs_llm_processing == True,  # noqa: E712
+                    # Skip certainly irrelevant items
+                    or_(retry_priority != "low", retry_priority.is_(None)),
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
@@ -310,10 +356,12 @@ class LLMWorker:
 
         try:
             processed = await self._process_items(item_ids, processor, is_fresh=False)
-            self._stats["backlog_processed"] += processed
+            async with self._stats_lock:
+                self._stats["backlog_processed"] += processed
         except Exception as e:
             logger.error(f"Error processing backlog items: {e}")
-            self._stats["errors"] += 1
+            async with self._stats_lock:
+                self._stats["errors"] += 1
             return 0
 
         return processed
@@ -327,6 +375,14 @@ class LLMWorker:
         """
         Process a batch of items through the LLM.
 
+        IMPORTANT: This method releases DB connections during LLM processing
+        to avoid monopolizing connections for extended periods (10-60 sec per item).
+
+        Pattern per item:
+        1. Quick read (acquire + release connection)
+        2. LLM processing (no connection held)
+        3. Quick write (acquire + release connection)
+
         Args:
             item_ids: List of item database IDs
             processor: ItemProcessor instance
@@ -335,23 +391,30 @@ class LLMWorker:
         Returns:
             Number of items successfully processed
         """
+        import time
+        from sqlalchemy import update as sql_update
+        from services.item_events import record_event, EVENT_LLM_PROCESSED
+
         processed = 0
         item_type = "fresh" if is_fresh else "backlog"
 
-        async with async_session_maker() as db:
-            for item_id in item_ids:
-                # Check for fresh items interrupting backlog
-                if not is_fresh and not self._fresh_queue.empty():
-                    logger.info(f"Fresh items arrived, pausing backlog after {processed} items")
-                    break
+        for item_id in item_ids:
+            # Check for fresh items interrupting backlog
+            if not is_fresh and not self._fresh_queue.empty():
+                logger.info(f"Fresh items arrived, pausing backlog after {processed} items")
+                break
 
-                # Check if paused
-                if self._paused:
-                    logger.info(f"Worker paused, stopping after {processed} items")
-                    break
+            # Check if paused
+            if self._paused:
+                logger.info(f"Worker paused, stopping after {processed} items")
+                break
 
-                try:
-                    # Load item with relationships
+            try:
+                # Phase 1: Quick read - extract data we need for LLM
+                # Connection is released after this block
+                item_data = None
+                candidate_data = None  # For edge-case duplicate confirmation
+                async with async_session_maker() as db:
                     result = await db.execute(
                         select(Item)
                         .where(Item.id == item_id)
@@ -367,105 +430,205 @@ class LLMWorker:
                     if not is_fresh and not item.needs_llm_processing:
                         continue
 
-                    # Run LLM analysis with timing
-                    import time
-                    start_time = time.time()
+                    # Extract all data needed for LLM processing
                     source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
-                    analysis = await processor.analyze(item, source_name=source_name)
-                    elapsed = time.time() - start_time
+                    item_data = {
+                        "id": item.id,
+                        "title": item.title,
+                        "content": item.content,
+                        "url": item.url,
+                        "source_name": source_name,
+                        "priority_score": item.priority_score or 0,
+                        "metadata_": dict(item.metadata_) if item.metadata_ else {},
+                        "assigned_aks": item.assigned_aks or [],
+                    }
+
+                    # Check for edge-case duplicate candidate needing LLM confirmation
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate")
+                    if dup_candidate:
+                        candidate_id = dup_candidate.get("candidate_id")
+                        if candidate_id:
+                            cand_result = await db.execute(
+                                select(Item).where(Item.id == candidate_id)
+                            )
+                            cand_item = cand_result.scalar_one_or_none()
+                            if cand_item:
+                                candidate_data = {
+                                    "id": cand_item.id,
+                                    "title": cand_item.title,
+                                    "content": cand_item.content,
+                                }
+                            else:
+                                logger.warning(f"Duplicate candidate {candidate_id} not found, skipping confirmation")
+
+                # Phase 2: LLM processing - NO connection held
+                # This can take 10-60 seconds per item
+                start_time = time.time()
+
+                # 2a. Check for edge-case duplicate confirmation first
+                duplicate_confirmed = None
+                duplicate_reasoning = None
+                if candidate_data:
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                    logger.info(
+                        f"Confirming duplicate: '{item_data['title'][:40]}...' vs "
+                        f"'{candidate_data['title'][:40]}...' (score: {dup_candidate.get('similarity_score', 0):.3f})"
+                    )
+                    duplicate_confirmed, duplicate_reasoning = await processor.confirm_duplicate(
+                        item_data, candidate_data
+                    )
+                    logger.info(
+                        f"Duplicate confirmation: {duplicate_confirmed} - {duplicate_reasoning}"
+                    )
+
+                # 2b. Main item analysis (with conversation messages for topic extraction)
+                analysis, conversation_messages = await processor.analyze_from_data_with_messages(item_data)
+
+                # 2c. Topic extraction via follow-up chat turn
+                topics = []
+                if analysis.get("relevant") is not False:
+                    try:
+                        topics = await processor.extract_topics(conversation_messages)
+                        if topics:
+                            logger.debug(f"Extracted topics for item {item_id}: {topics}")
+                    except Exception as topic_err:
+                        logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
+
+                elapsed = time.time() - start_time
+                async with self._stats_lock:
                     self._stats["total_processing_time"] += elapsed
                     self._stats["items_timed"] += 1
 
-                    # Update item with results
-                    if analysis.get("summary"):
-                        item.summary = analysis["summary"]
-                    if analysis.get("detailed_analysis"):
-                        item.detailed_analysis = analysis["detailed_analysis"]
+                # Compute values to update
+                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if analysis.get("relevant") is False:
+                    llm_priority = None
 
-                    # Use LLM priority directly (no remapping)
-                    llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-                    if analysis.get("relevant") is False:
-                        llm_priority = None
+                if llm_priority == "high":
+                    new_priority = Priority.HIGH
+                    new_score = max(item_data["priority_score"], 90)
+                elif llm_priority == "medium":
+                    new_priority = Priority.MEDIUM
+                    new_score = max(item_data["priority_score"], 70)
+                elif llm_priority == "low":
+                    new_priority = Priority.LOW
+                    new_score = max(item_data["priority_score"], 40)
+                else:
+                    new_priority = Priority.NONE
+                    new_score = min(item_data["priority_score"] or 100, 20)
 
-                    if llm_priority == "high":
-                        item.priority = Priority.HIGH
-                        item.priority_score = max(item.priority_score or 0, 90)
-                    elif llm_priority == "medium":
-                        item.priority = Priority.MEDIUM
-                        item.priority_score = max(item.priority_score or 0, 70)
-                    elif llm_priority == "low":
-                        item.priority = Priority.LOW
-                        item.priority_score = max(item.priority_score or 0, 40)
-                    else:
-                        item.priority = Priority.NONE
-                        item.priority_score = min(item.priority_score or 100, 20)
+                # Set assigned_aks: LLM takes precedence, classifier AK as fallback
+                llm_aks = analysis.get("assigned_aks", [])
+                assigned_aks = llm_aks
+                assigned_ak = llm_aks[0] if llm_aks else None
+                if not llm_aks and not item_data["assigned_aks"]:
+                    pre_filter = item_data["metadata_"].get("pre_filter", {})
+                    classifier_ak = pre_filter.get("ak_suggestion")
+                    if classifier_ak:
+                        assigned_aks = [classifier_ak]
+                        assigned_ak = classifier_ak
+                        logger.debug(f"Using classifier AK: {classifier_ak}")
 
-                    # Set assigned_aks: LLM takes precedence, classifier AK as fallback
-                    llm_aks = analysis.get("assigned_aks", [])
-                    if llm_aks:
-                        item.assigned_aks = llm_aks
-                        item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
-                    elif not item.assigned_aks:
-                        # Use classifier AK suggestion as fallback
-                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
-                        classifier_ak = pre_filter.get("ak_suggestion")
-                        if classifier_ak:
-                            item.assigned_aks = [classifier_ak]
-                            item.assigned_ak = classifier_ak  # Deprecated field
-                            logger.debug(f"Using classifier AK: {classifier_ak}")
+                # Prepare metadata update
+                new_metadata = dict(item_data["metadata_"])
+                new_metadata["llm_analysis"] = {
+                    "relevance_score": analysis.get("relevance_score", 0.5),
+                    "priority_suggestion": llm_priority,
+                    "assigned_aks": llm_aks,
+                    "assigned_ak": llm_aks[0] if llm_aks else None,
+                    "tags": analysis.get("tags", []),
+                    "topics": topics,
+                    "reasoning": analysis.get("reasoning"),
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "source": "llm_worker",
+                }
 
-                    # Store LLM analysis in metadata
-                    new_metadata = dict(item.metadata_) if item.metadata_ else {}
-                    new_metadata["llm_analysis"] = {
-                        "relevance_score": analysis.get("relevance_score", 0.5),
-                        "priority_suggestion": llm_priority,
-                        "assigned_aks": llm_aks,
-                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated, for backward compat
-                        "tags": analysis.get("tags", []),
-                        "reasoning": analysis.get("reasoning"),
-                        "processed_at": datetime.utcnow().isoformat(),
-                        "source": "llm_worker",
+                # Record duplicate confirmation result in metadata
+                confirmed_similar_to_id = None
+                if duplicate_confirmed is not None:
+                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                    new_metadata["duplicate_confirmation"] = {
+                        "confirmed": duplicate_confirmed,
+                        "reasoning": duplicate_reasoning,
+                        "candidate_id": dup_candidate.get("candidate_id"),
+                        "similarity_score": dup_candidate.get("similarity_score"),
+                        "confirmed_at": datetime.utcnow().isoformat(),
                     }
-                    item.metadata_ = new_metadata
+                    # Clear the candidate since we've processed it
+                    if "duplicate_candidate" in new_metadata:
+                        del new_metadata["duplicate_candidate"]
 
-                    # Clear retry flag
-                    item.needs_llm_processing = False
+                    if duplicate_confirmed:
+                        confirmed_similar_to_id = dup_candidate.get("candidate_id")
 
-                    # Commit after each item so count updates in real-time
+                # Phase 3: Quick write - update item in database
+                # Connection is released after this block
+                async with async_session_maker() as db:
+                    update_values = {
+                        "summary": analysis.get("summary"),
+                        "detailed_analysis": analysis.get("detailed_analysis"),
+                        "priority": new_priority,
+                        "priority_score": new_score,
+                        "assigned_aks": assigned_aks,
+                        "assigned_ak": assigned_ak,
+                        "metadata_": new_metadata,
+                        "needs_llm_processing": False,
+                    }
+
+                    # Set similar_to_id if duplicate was confirmed by LLM
+                    if confirmed_similar_to_id:
+                        update_values["similar_to_id"] = confirmed_similar_to_id
+
+                    # Remove None values to avoid overwriting with None
+                    update_values = {k: v for k, v in update_values.items() if v is not None or k in ("assigned_ak", "needs_llm_processing")}
+
+                    await db.execute(
+                        sql_update(Item)
+                        .where(Item.id == item_id)
+                        .values(**update_values)
+                    )
                     await db.commit()
 
-                    # Record LLM processing event with classifier agreement
-                    from services.item_events import record_event, EVENT_LLM_PROCESSED
-
-                    # Compute agreement with classifier
-                    agreement = await self._compute_classifier_agreement(
-                        db, item.id, llm_priority, llm_aks
-                    )
-
+                    # Record LLM processing event
                     await record_event(
                         db,
-                        item.id,
+                        item_id,
                         EVENT_LLM_PROCESSED,
                         data={
                             "priority": llm_priority,
                             "assigned_aks": llm_aks,
                             "relevance_score": analysis.get("relevance_score"),
                             "source": item_type,
-                            "agreement": agreement,
                         },
                     )
+
+                    # Record duplicate confirmation event if applicable
+                    if duplicate_confirmed is not None:
+                        from services.item_events import EVENT_DUPLICATE_DETECTED
+                        dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
+                        event_type = EVENT_DUPLICATE_DETECTED if duplicate_confirmed else "duplicate_rejected"
+                        await record_event(
+                            db,
+                            item_id,
+                            event_type,
+                            data={
+                                "candidate_id": dup_candidate.get("candidate_id"),
+                                "similarity_score": dup_candidate.get("similarity_score"),
+                                "llm_confirmed": duplicate_confirmed,
+                                "reasoning": duplicate_reasoning,
+                            },
+                        )
 
                     # Log LLM analysis for analytics
                     try:
                         from services.processing_logger import ProcessingLogger
 
                         plogger = ProcessingLogger(db)
-                        # Get priority before LLM (from pre_filter or previous value)
-                        pre_filter = (item.metadata_ or {}).get("pre_filter", {})
+                        pre_filter = item_data["metadata_"].get("pre_filter", {})
                         priority_input = pre_filter.get("priority_suggestion") or "unknown"
 
                         await plogger.log_llm_analysis(
-                            item_id=item.id,
+                            item_id=item_id,
                             analysis=analysis,
                             priority_input=priority_input,
                             priority_output=llm_priority,
@@ -474,110 +637,18 @@ class LLMWorker:
                     except Exception as log_err:
                         logger.warning(f"Failed to log LLM analysis for item {item_id}: {log_err}")
 
-                    processed += 1
+                processed += 1
+                async with self._stats_lock:
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 
-                    logger.info(f"LLM {item_type}: {item.title[:40]}... -> {llm_priority}")
+                logger.info(f"LLM {item_type}: {item_data['title'][:40]}... -> {llm_priority}")
 
-                except Exception as e:
-                    logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
+                async with self._stats_lock:
                     self._stats["errors"] += 1
 
         return processed
-
-    async def _compute_classifier_agreement(
-        self,
-        db,
-        item_id: int,
-        llm_priority: str | None,
-        llm_aks: list[str],
-    ) -> dict | None:
-        """
-        Compute agreement between classifier and LLM predictions.
-
-        Args:
-            db: Database session
-            item_id: Item ID to look up classifier event
-            llm_priority: LLM's priority prediction
-            llm_aks: LLM's AK predictions
-
-        Returns:
-            Agreement dict or None if no classifier event found
-        """
-        from models import ItemEvent
-
-        try:
-            # Fetch most recent classifier event for this item
-            result = await db.execute(
-                select(ItemEvent)
-                .where(ItemEvent.item_id == item_id)
-                .where(ItemEvent.event_type == "classifier_processed")
-                .order_by(ItemEvent.timestamp.desc())
-                .limit(1)
-            )
-            classifier_event = result.scalar_one_or_none()
-
-            if not classifier_event or not classifier_event.data:
-                return None
-
-            clf_data = classifier_event.data
-
-            # Get classifier predictions
-            clf_priority = clf_data.get("priority")
-            clf_aks = clf_data.get("aks", [])
-            # Fallback to single AK for older events
-            if not clf_aks and clf_data.get("ak_suggestion"):
-                clf_aks = [clf_data["ak_suggestion"]]
-
-            # Compute relevance agreement (relevant = priority != none)
-            clf_relevant = clf_priority not in (None, "none")
-            llm_relevant = llm_priority not in (None, "none")
-            relevance_match = clf_relevant == llm_relevant
-
-            # Compute priority agreement
-            priority_match = clf_priority == llm_priority
-
-            # Compute priority within one level
-            priority_order = {"high": 3, "medium": 2, "low": 1, "none": 0, None: 0}
-            clf_level = priority_order.get(clf_priority, 0)
-            llm_level = priority_order.get(llm_priority, 0)
-            priority_within_one = abs(clf_level - llm_level) <= 1
-
-            # Compute AK agreement
-            clf_ak_set = set(clf_aks) if clf_aks else set()
-            llm_ak_set = set(llm_aks) if llm_aks else set()
-            ak_exact_match = clf_ak_set == llm_ak_set
-            ak_partial_match = bool(clf_ak_set & llm_ak_set) if clf_ak_set and llm_ak_set else False
-
-            # Track what LLM changed
-            llm_superseded = []
-            if not priority_match:
-                llm_superseded.append("priority")
-            if not ak_exact_match:
-                llm_superseded.append("aks")
-
-            return {
-                "classifier_version": clf_data.get("version"),
-                "relevance_match": relevance_match,
-                "priority_match": priority_match,
-                "priority_within_one": priority_within_one,
-                "ak_exact_match": ak_exact_match,
-                "ak_partial_match": ak_partial_match,
-                "llm_superseded": llm_superseded,
-                "classifier": {
-                    "priority": clf_priority,
-                    "aks": clf_aks,
-                    "relevance_confidence": clf_data.get("relevance_confidence"),
-                },
-                "llm": {
-                    "priority": llm_priority,
-                    "aks": llm_aks,
-                },
-            }
-
-        except Exception as e:
-            logger.warning(f"Error computing classifier agreement for item {item_id}: {e}")
-            return None
 
 
 # Global worker instance

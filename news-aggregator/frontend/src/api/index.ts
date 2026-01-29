@@ -56,7 +56,36 @@ export const itemsApi = {
   bulkMarkRead: (ids: number[]) => api.post('/items/mark-all-read', { ids }),
   bulkMarkUnread: (ids: number[]) => api.post('/items/bulk-update', { ids, is_read: false }),
   archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`),
-  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`)
+  bulkArchive: (ids: number[], is_archived: boolean = true) =>
+    api.post<{ archived: number; item_ids: number[] }>('/items/bulk-archive', { ids, is_archived }),
+  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`),
+  byTopic: (params?: { since?: string; days?: number; min_group_size?: number }) =>
+    api.get<TopicGroupsResponse>('/items/by-topic', { params })
+}
+
+// Topic grouping types
+export interface TopicItemBrief {
+  id: number
+  title: string
+  url: string
+  priority: string
+  source_name: string | null
+  source_domain: string | null
+  published_at: string | null
+  summary: string | null
+  assigned_aks: string[]
+  is_read: boolean
+}
+
+export interface TopicGroup {
+  topic: string
+  items: TopicItemBrief[]
+}
+
+export interface TopicGroupsResponse {
+  topics: TopicGroup[]
+  ungrouped_count: number
+  ungrouped_items: TopicItemBrief[]
 }
 
 export const rulesApi = {
@@ -143,6 +172,7 @@ export const llmApi = {
 export interface WorkerStatus {
   running: boolean
   paused: boolean
+  stopped_due_to_errors?: boolean
   stats: Record<string, unknown>
 }
 
@@ -160,6 +190,8 @@ export interface ProcessingQueueStats {
   total: number
   by_retry_priority: Record<string, number>
   awaiting_classifier: number
+  awaiting_dedup: number
+  awaiting_vectordb: number
 }
 
 export interface ItemStats {
@@ -224,9 +256,88 @@ export interface StorageStats {
   total_size_human: string
 }
 
+// GPU1 Status Types
+export interface GPU1Status {
+  enabled: boolean
+  available: boolean
+  was_sleeping: boolean
+  wake_time: string | null
+  last_activity: number | null
+  idle_time: number | null
+  auto_shutdown: boolean
+  idle_timeout: number
+  pending_shutdown: boolean
+  active_hours_start: number
+  active_hours_end: number
+  within_active_hours: boolean
+  logged_in_users: string[]
+  mac_address: string
+  ssh_host: string
+}
+
+// Log Types
+export interface LogEntry {
+  timestamp: string
+  level: string
+  logger: string
+  message: string
+}
+
+export interface LogsResponse {
+  entries: LogEntry[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  source: string
+}
+
+export interface LogStats {
+  total: number
+  max_entries: number
+  by_level: Record<string, number>
+  by_logger: Record<string, number>
+}
+
+// Health Check Types
+export interface HealthCheckResponse {
+  status: string
+  instance_type: string
+  llm_enabled: boolean
+  scheduler_running: boolean
+  scheduler_jobs: Array<Record<string, unknown>>
+  llm_available: boolean
+  llm_provider: string | null
+  proxy_count: number
+  proxy_working: number
+  proxy_https_count: number
+  proxy_min_required: number
+  proxy_https_min_required: number
+  database_ok: boolean
+  database_info: {
+    type: string
+    host?: string
+    database?: string
+    path?: string
+  }
+  items_count: number
+  sources_count: number
+}
+
 export const adminApi = {
   // Stats
   getStats: () => api.get<SystemStatsResponse>('/admin/stats'),
+
+  // Health
+  getHealth: () => api.get<HealthCheckResponse>('/admin/health'),
+
+  // GPU1 Status
+  getGpu1Status: () => api.get<GPU1Status>('/admin/gpu1/status'),
+
+  // Logs
+  getLogs: (params?: { page?: number; page_size?: number; level?: string; logger?: string; search?: string }) =>
+    api.get<LogsResponse>('/admin/logs', { params }),
+  getLogStats: () => api.get<LogStats>('/admin/logs/stats'),
 
   // Scheduler controls
   startScheduler: () => api.post<WorkerControlResponse>('/admin/scheduler/start'),
@@ -251,4 +362,26 @@ export const adminApi = {
   previewCleanup: () => api.post<CleanupPreview>('/admin/housekeeping/preview'),
   executeCleanup: () => api.post<CleanupResult>('/admin/housekeeping/cleanup'),
   getStorage: () => api.get<StorageStats>('/admin/storage'),
+}
+
+// MOTD Types
+export interface MOTDResponse {
+  id: number | null
+  message: string | null
+  active: boolean
+  updated_at: string | null
+  expires_at: string | null
+}
+
+export interface MOTDCreate {
+  message: string
+  active?: boolean
+  expires_at?: string | null
+}
+
+export const motdApi = {
+  get: () => api.get<MOTDResponse>('/motd'),
+  set: (data: MOTDCreate) => api.post<{ success: boolean; message: string; motd: MOTDResponse }>('/motd/admin', data),
+  clear: () => api.delete<{ success: boolean; message: string }>('/motd/admin'),
+  history: (limit?: number) => api.get<MOTDResponse[]>('/motd/history', { params: { limit } }),
 }

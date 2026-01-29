@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel
-from schemas import DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief, TopicGroupsResponse, TopicGroup, TopicItemBrief
 
 
 class BulkUpdateRequest(BaseModel):
@@ -240,6 +240,128 @@ async def get_retry_queue_stats(
     }
 
 
+@router.get("/items/by-topic", response_model=TopicGroupsResponse)
+async def get_items_by_topic(
+    db: AsyncSession = Depends(get_db),
+    since: str | None = Query(None, description="ISO datetime cutoff (e.g. 2026-01-28T00:00:00)"),
+    days: int = Query(7, ge=1, le=90, description="Fallback: look back N days (used if since is not set)"),
+    min_group_size: int = Query(2, ge=2, le=10, description="Minimum items per topic group"),
+) -> TopicGroupsResponse:
+    """Get items grouped by LLM-extracted topic keywords.
+
+    Returns topic groups with at least min_group_size items, plus all
+    ungrouped items under a separate list.
+    """
+    from datetime import timedelta
+    from collections import defaultdict
+    from sqlalchemy import text as sql_text
+
+    if since:
+        parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        # Strip timezone for naive timestamp columns
+        since_dt = parsed.replace(tzinfo=None)
+    else:
+        since_dt = datetime.utcnow() - timedelta(days=days)
+
+    # Base filter for all relevant items in the period
+    base_where = """
+        i.published_at >= :since
+        AND i.similar_to_id IS NULL
+        AND i.is_archived = false
+        AND i.priority != 'none'
+    """
+
+    # Common SELECT fields for item brief
+    item_fields = """
+            i.id,
+            i.title,
+            i.url,
+            i.priority,
+            i.published_at,
+            i.summary,
+            s.name as source_name,
+            (i.metadata::jsonb)->>'source_domain' as source_domain,
+            i.assigned_aks,
+            i.is_read
+    """
+
+    # Query items with topics (unnested)
+    raw_query = sql_text(f"""
+        SELECT
+            topic,
+            {item_fields}
+        FROM items i
+        LEFT JOIN channels c ON i.channel_id = c.id
+        LEFT JOIN sources s ON c.source_id = s.id
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            (i.metadata::jsonb)->'llm_analysis'->'topics'
+        ) AS topic
+        WHERE {base_where}
+          AND jsonb_typeof((i.metadata::jsonb)->'llm_analysis'->'topics') = 'array'
+        ORDER BY topic, i.published_at DESC
+    """)
+
+    result = await db.execute(raw_query, {"since": since_dt})
+    rows = result.fetchall()
+
+    def _make_brief(row, offset=0) -> TopicItemBrief:
+        return TopicItemBrief(
+            id=row[0 + offset],
+            title=row[1 + offset],
+            url=row[2 + offset],
+            priority=row[3 + offset],
+            published_at=row[4 + offset],
+            summary=row[5 + offset],
+            source_name=row[6 + offset],
+            source_domain=row[7 + offset],
+            assigned_aks=row[8 + offset] or [],
+            is_read=row[9 + offset],
+        )
+
+    # Group by topic
+    topic_items: dict[str, list[TopicItemBrief]] = defaultdict(list)
+    seen_per_topic: dict[str, set[int]] = defaultdict(set)
+
+    for row in rows:
+        topic = row[0]
+        item_id = row[1]
+        if item_id not in seen_per_topic[topic]:
+            seen_per_topic[topic].add(item_id)
+            topic_items[topic].append(_make_brief(row, offset=1))
+
+    # Filter to groups with enough items
+    groups = []
+    grouped_item_ids: set[int] = set()
+    for topic, items in sorted(topic_items.items(), key=lambda x: -len(x[1])):
+        if len(items) >= min_group_size:
+            groups.append(TopicGroup(topic=topic, items=items))
+            for item in items:
+                grouped_item_ids.add(item.id)
+
+    # Query ALL items in period to find ungrouped ones
+    all_items_query = sql_text(f"""
+        SELECT {item_fields}
+        FROM items i
+        LEFT JOIN channels c ON i.channel_id = c.id
+        LEFT JOIN sources s ON c.source_id = s.id
+        WHERE {base_where}
+        ORDER BY i.published_at DESC
+    """)
+    all_result = await db.execute(all_items_query, {"since": since_dt})
+    all_rows = all_result.fetchall()
+
+    ungrouped_items = []
+    for row in all_rows:
+        if row[0] not in grouped_item_ids:
+            ungrouped_items.append(_make_brief(row, offset=0))
+
+    return TopicGroupsResponse(
+        topics=groups,
+        ungrouped_count=len(ungrouped_items),
+        ungrouped_items=ungrouped_items,
+    )
+
+
 @router.post("/items/retry-queue/process")
 async def trigger_retry_processing(
     background_tasks: BackgroundTasks,
@@ -447,6 +569,83 @@ async def toggle_archive(
     )
 
     return {"status": "ok", "is_archived": item.is_archived}
+
+
+@router.post("/items/bulk-archive", response_model=BulkArchiveResponse)
+async def bulk_archive(
+    request_body: BulkArchiveRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> BulkArchiveResponse:
+    """Bulk archive or restore items.
+
+    When archiving/restoring an item that has duplicates or is part of a duplicate group,
+    all related items (primary + duplicates) are archived/restored together.
+    """
+    if not request_body.ids:
+        return BulkArchiveResponse(archived=0, item_ids=[])
+
+    # Collect all item IDs to archive (including duplicates)
+    all_item_ids: set[int] = set()
+
+    # First pass: get all requested items and their related items
+    for item_id in request_body.ids:
+        all_item_ids.add(item_id)
+
+        # Get the item to check if it's a duplicate or has duplicates
+        query = select(Item).where(Item.id == item_id).options(
+            selectinload(Item.duplicates)
+        )
+        result = await db.execute(query)
+        item = result.scalar_one_or_none()
+
+        if item:
+            # If this item is a duplicate, also include its primary
+            if item.similar_to_id:
+                all_item_ids.add(item.similar_to_id)
+                # Get siblings (other duplicates of the same primary)
+                sibling_query = select(Item.id).where(Item.similar_to_id == item.similar_to_id)
+                sibling_result = await db.execute(sibling_query)
+                for (sibling_id,) in sibling_result.fetchall():
+                    all_item_ids.add(sibling_id)
+
+            # If this item has duplicates, include them all
+            if item.duplicates:
+                for dup in item.duplicates:
+                    all_item_ids.add(dup.id)
+
+    # Now fetch and update all items
+    query = select(Item).where(Item.id.in_(list(all_item_ids)))
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    archived_count = 0
+    for item in items:
+        if item.is_archived != request_body.is_archived:
+            item.is_archived = request_body.is_archived
+            archived_count += 1
+
+    # Record events for all archived items
+    if archived_count > 0:
+        from services.item_events import record_events_batch, EVENT_ARCHIVED
+        ip_address = get_client_ip(request)
+
+        events_data = [
+            {
+                "item_id": item.id,
+                "event_type": EVENT_ARCHIVED,
+                "data": {"is_archived": request_body.is_archived, "bulk_archive": True},
+                "ip_address": ip_address,
+            }
+            for item in items
+            if item.is_archived == request_body.is_archived  # Only items that changed
+        ]
+        record_events_batch(db, events_data)
+
+    return BulkArchiveResponse(
+        archived=archived_count,
+        item_ids=list(all_item_ids)
+    )
 
 
 @router.post("/items/{item_id}/reprocess")
@@ -856,20 +1055,22 @@ async def bulk_update_items(
             updated += 1
 
     if updated > 0:
-        # Record events for all updated items
-        from services.item_events import record_event, EVENT_READ, EVENT_USER_MODIFIED
+        # Record events in batch for all updated items (more efficient than sequential)
+        from services.item_events import record_events_batch, EVENT_READ, EVENT_USER_MODIFIED
         ip_address = get_client_ip(request)
 
-        for item in items:
-            if request_body.is_read is not None:
-                event_type = EVENT_READ if request_body.is_read else EVENT_USER_MODIFIED
-                await record_event(
-                    db,
-                    item.id,
-                    event_type,
-                    data={"is_read": request_body.is_read, "bulk_update": True},
-                    ip_address=ip_address,
-                )
+        if request_body.is_read is not None:
+            event_type = EVENT_READ if request_body.is_read else EVENT_USER_MODIFIED
+            events_data = [
+                {
+                    "item_id": item.id,
+                    "event_type": event_type,
+                    "data": {"is_read": request_body.is_read, "bulk_update": True},
+                    "ip_address": ip_address,
+                }
+                for item in items
+            ]
+            record_events_batch(db, events_data)
 
     return {"updated": updated}
 

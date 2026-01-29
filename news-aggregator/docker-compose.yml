@@ -1,3 +1,17 @@
+# =============================================================================
+# ENVIRONMENT: gpu1 (QA/Development)
+# =============================================================================
+# This compose file is for the gpu1 machine (local QA environment).
+# Workers and scheduler are DISABLED by default for manual testing.
+#
+# For production (docker-ai), use: docker-compose.prod.yml
+#
+# Environment files:
+#   - docker-compose.yml      -> gpu1 (QA) - workers disabled
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled
+#   - docker-compose.training.yml -> classifier training
+# =============================================================================
+
 # Network for LAN access (Wake-on-LAN)
 # Note: Verify the parent interface name with `ip link` on the host
 # Common names: eth0, ens18, enp0s3, etc.
@@ -39,15 +53,18 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-backend
     restart: unless-stopped
+    ulimits:
+      core: 0  # Disable core dumps to prevent disk exhaustion
+    pids_limit: 500  # Prevent runaway Chrome processes from X scraper
     environment:
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://192.168.0.141:11434
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=qwen3:14b-q8_0
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
       # Embedding classifier pre-filter (runs on gpu1)
-      - CLASSIFIER_URL=http://192.168.0.141:8082
+      - CLASSIFIER_URL=http://host.docker.internal:8082
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
       - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}  # Use classifier priority instead of LLM
@@ -55,15 +72,21 @@ services:
       # GPU1 Power Management (Wake-on-LAN)
       - GPU1_WOL_ENABLED=${GPU1_WOL_ENABLED:-true}
       - GPU1_MAC_ADDRESS=${GPU1_MAC_ADDRESS:-58:47:ca:7c:18:cc}
-      - GPU1_BROADCAST=${GPU1_BROADCAST:-192.168.0.255}
+      - GPU1_BROADCAST=${GPU1_BROADCAST:-255.255.255.255}
       - GPU1_SSH_HOST=${GPU1_SSH_HOST:-192.168.0.141}
       - GPU1_SSH_USER=${GPU1_SSH_USER:-ligahessen}
       - GPU1_SSH_KEY_PATH=/app/ssh/id_ed25519
       - GPU1_AUTO_SHUTDOWN=${GPU1_AUTO_SHUTDOWN:-true}
       - GPU1_IDLE_TIMEOUT=${GPU1_IDLE_TIMEOUT:-300}
       - GPU1_WAKE_TIMEOUT=${GPU1_WAKE_TIMEOUT:-120}
-      - GPU1_ACTIVE_HOURS_START=${GPU1_ACTIVE_HOURS_START:-8}
+      - GPU1_ACTIVE_HOURS_START=${GPU1_ACTIVE_HOURS_START:-7}
       - GPU1_ACTIVE_HOURS_END=${GPU1_ACTIVE_HOURS_END:-16}
+      - GPU1_ACTIVE_WEEKDAYS_ONLY=${GPU1_ACTIVE_WEEKDAYS_ONLY:-true}
+      # Worker/Scheduler control (can disable for testing)
+      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-false}
+      - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-false}
+      - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-false}
+      - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - backend-data:/app/data

@@ -65,6 +65,18 @@ class StorageStats(BaseModel):
     total_size_human: str
 
 
+class VectorSyncPreview(BaseModel):
+    """Preview of vector index sync operation."""
+    orphaned_ids: int = Field(description="IDs in vector index but not in database")
+    missing_ids: int = Field(description="IDs in database but not in vector index")
+
+
+class VectorSyncResult(BaseModel):
+    """Result of vector index sync operation."""
+    orphaned_deleted: int = Field(description="Orphaned IDs removed from vector index")
+    missing_indexed: int = Field(description="Missing IDs added to vector index")
+
+
 def _format_bytes(size_bytes: int) -> str:
     """Format bytes as human-readable string."""
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -116,7 +128,7 @@ async def get_items_to_delete(
     db: AsyncSession,
     config: dict,
     execute: bool = False,
-) -> tuple[int, dict[str, int], str | None]:
+) -> tuple[int, dict[str, int], str | None, list[int]]:
     """Get or delete items based on retention config.
 
     Args:
@@ -125,12 +137,14 @@ async def get_items_to_delete(
         execute: If True, delete the items; if False, just count them
 
     Returns:
-        Tuple of (total_count, by_priority_counts, oldest_date)
+        Tuple of (total_count, by_priority_counts, oldest_date, deleted_ids)
+        deleted_ids is only populated when execute=True
     """
     now = datetime.utcnow()
     by_priority: dict[str, int] = {}
     total = 0
     oldest_date: datetime | None = None
+    all_deleted_ids: list[int] = []
 
     exclude_starred = config.get("exclude_starred", True)
 
@@ -153,10 +167,19 @@ async def get_items_to_delete(
             conditions.append(Item.is_starred == False)  # noqa: E712
 
         if execute:
-            # Delete items
-            stmt = delete(Item).where(and_(*conditions))
-            result = await db.execute(stmt)
-            count = result.rowcount
+            # First, collect the IDs to delete (needed for vector index cleanup)
+            id_stmt = select(Item.id).where(and_(*conditions))
+            result = await db.execute(id_stmt)
+            ids_to_delete = [row[0] for row in result.fetchall()]
+
+            if ids_to_delete:
+                # Delete items
+                stmt = delete(Item).where(Item.id.in_(ids_to_delete))
+                await db.execute(stmt)
+                count = len(ids_to_delete)
+                all_deleted_ids.extend(ids_to_delete)
+            else:
+                count = 0
         else:
             # Count items
             count_stmt = select(func.count(Item.id)).where(and_(*conditions))
@@ -176,7 +199,7 @@ async def get_items_to_delete(
             by_priority[priority.value] = count
             total += count
 
-    return total, by_priority, oldest_date.isoformat() if oldest_date else None
+    return total, by_priority, oldest_date.isoformat() if oldest_date else None, all_deleted_ids
 
 
 @router.get("/admin/housekeeping", response_model=HousekeepingConfig)
@@ -205,7 +228,7 @@ async def preview_cleanup(
 ) -> CleanupPreview:
     """Preview items that would be deleted based on current retention settings."""
     config = await get_housekeeping_config(db)
-    total, by_priority, oldest_date = await get_items_to_delete(db, config, execute=False)
+    total, by_priority, oldest_date, _ = await get_items_to_delete(db, config, execute=False)
 
     return CleanupPreview(
         total=total,
@@ -218,9 +241,30 @@ async def preview_cleanup(
 async def execute_cleanup(
     db: AsyncSession = Depends(get_db),
 ) -> CleanupResult:
-    """Execute cleanup based on current retention settings."""
+    """Execute cleanup based on current retention settings.
+
+    Deletes items from both PostgreSQL and vector indexes (search + duplicate).
+    """
+    from services.relevance_filter import create_relevance_filter
+
     config = await get_housekeeping_config(db)
-    total, by_priority, _ = await get_items_to_delete(db, config, execute=True)
+    total, by_priority, _, deleted_ids = await get_items_to_delete(db, config, execute=True)
+
+    # Clean up vector indexes
+    if deleted_ids:
+        try:
+            relevance_filter = await create_relevance_filter()
+            if relevance_filter:
+                # Convert int IDs to strings for the classifier API
+                str_ids = [str(id) for id in deleted_ids]
+                deleted_search, deleted_dup = await relevance_filter.delete_items(str_ids)
+                logger.info(
+                    f"Vector index cleanup: {deleted_search} from search, "
+                    f"{deleted_dup} from duplicate index"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to clean up vector indexes: {e}")
+
     await db.commit()
 
     logger.info(f"Housekeeping cleanup completed: deleted {total} items ({by_priority})")
@@ -284,4 +328,78 @@ async def get_storage_stats(
         duplicate_index_items=duplicate_items,
         total_size_bytes=total_size,
         total_size_human=_format_bytes(total_size),
+    )
+
+
+@router.post("/admin/housekeeping/vector-sync/preview", response_model=VectorSyncPreview)
+async def preview_vector_sync(
+    db: AsyncSession = Depends(get_db),
+) -> VectorSyncPreview:
+    """Preview vector index sync - shows orphaned and missing IDs.
+
+    Orphaned: IDs in vector index that no longer exist in database (will be deleted)
+    Missing: IDs in database that are not in vector index (will be indexed)
+    """
+    from services.relevance_filter import create_relevance_filter
+
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        return VectorSyncPreview(orphaned_ids=0, missing_ids=0)
+
+    # Get all IDs from vector index
+    indexed_ids = await relevance_filter.get_all_indexed_ids()
+    indexed_set = set(indexed_ids)
+
+    # Get all IDs from database (only items that should be indexed)
+    result = await db.execute(select(Item.id))
+    db_ids = {str(row[0]) for row in result.fetchall()}
+
+    # Find orphaned (in vector but not in DB)
+    orphaned = indexed_set - db_ids
+
+    # Find missing (in DB but not in vector)
+    missing = db_ids - indexed_set
+
+    return VectorSyncPreview(
+        orphaned_ids=len(orphaned),
+        missing_ids=len(missing),
+    )
+
+
+@router.post("/admin/housekeeping/vector-sync", response_model=VectorSyncResult)
+async def execute_vector_sync(
+    db: AsyncSession = Depends(get_db),
+) -> VectorSyncResult:
+    """Sync vector index with database.
+
+    - Removes orphaned entries (IDs in vector index but not in database)
+    - Does NOT re-index missing items (too expensive, handled by classifier worker)
+    """
+    from services.relevance_filter import create_relevance_filter
+
+    relevance_filter = await create_relevance_filter()
+    if not relevance_filter:
+        return VectorSyncResult(orphaned_deleted=0, missing_indexed=0)
+
+    # Get all IDs from vector index
+    indexed_ids = await relevance_filter.get_all_indexed_ids()
+    indexed_set = set(indexed_ids)
+
+    # Get all IDs from database
+    result = await db.execute(select(Item.id))
+    db_ids = {str(row[0]) for row in result.fetchall()}
+
+    # Find orphaned (in vector but not in DB)
+    orphaned = list(indexed_set - db_ids)
+
+    # Delete orphaned entries
+    orphaned_deleted = 0
+    if orphaned:
+        deleted_search, deleted_dup = await relevance_filter.delete_items(orphaned)
+        orphaned_deleted = max(deleted_search, deleted_dup)
+        logger.info(f"Vector sync: deleted {orphaned_deleted} orphaned entries")
+
+    return VectorSyncResult(
+        orphaned_deleted=orphaned_deleted,
+        missing_indexed=0,  # Not implemented - too expensive
     )

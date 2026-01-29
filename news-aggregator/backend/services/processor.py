@@ -99,6 +99,81 @@ class ItemProcessor:
         """
         self.llm = llm_service
 
+    async def confirm_duplicate(
+        self,
+        item_data: dict,
+        candidate_data: dict,
+    ) -> tuple[bool, str]:
+        """
+        Ask LLM to confirm whether two articles are duplicates (same story).
+
+        Used for edge-case duplicates where semantic similarity is uncertain (0.60-0.75).
+
+        Args:
+            item_data: Dict with title, content of the new item
+            candidate_data: Dict with title, content of the potential duplicate
+
+        Returns:
+            Tuple of (is_duplicate: bool, reasoning: str)
+        """
+        prompt = f"""Vergleiche diese zwei Nachrichtenartikel und entscheide, ob sie über DASSELBE EREIGNIS berichten.
+
+ARTIKEL A:
+Titel: {item_data.get('title', '')[:200]}
+Inhalt: {item_data.get('content', '')[:1500]}
+
+ARTIKEL B:
+Titel: {candidate_data.get('title', '')[:200]}
+Inhalt: {candidate_data.get('content', '')[:1500]}
+
+GLEICHE Geschichte wenn:
+- Beide berichten über exakt dasselbe Ereignis (gleiche Personen, Orte, Entscheidungen)
+- Einer ist eine Kurzversion/Update des anderen
+- Unterschiedliche Quellen berichten über dieselbe Pressemitteilung/Nachricht
+
+UNTERSCHIEDLICHE Geschichten wenn:
+- Ähnliches Thema, aber verschiedene Ereignisse (z.B. zwei verschiedene Kita-Schließungen)
+- Gleiche Person, aber andere Handlung/Entscheidung
+- Hintergrundbericht vs. aktuelle Meldung zum selben Thema
+
+Antworte NUR mit JSON:
+{{"is_duplicate": true/false, "reasoning": "Kurze Begründung"}}"""
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                temperature=0.1,
+                max_tokens=200,
+            )
+            text = response.text.strip()
+            logger.debug(f"Duplicate confirmation raw response: {repr(text[:500])}")
+
+            # Remove markdown code blocks if present
+            if text.startswith("```"):
+                lines = text.split("\n")
+                lines = [line for line in lines if not line.strip().startswith("```")]
+                text = "\n".join(lines).strip()
+
+            # Handle qwen3 thinking mode: sometimes model returns empty content
+            # when it's "thinking" - the actual response is in the thinking field
+            if not text:
+                logger.warning("LLM returned empty content for duplicate confirmation")
+                return False, "LLM returned empty response"
+
+            # Parse JSON response
+            result = json.loads(text)
+            is_dup = result.get("is_duplicate", False)
+            reasoning = result.get("reasoning", "Keine Begründung")
+            return is_dup, reasoning
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse duplicate confirmation response: {e}, text: {text[:100]}")
+            # Default to not duplicate if parsing fails
+            return False, "Antwort konnte nicht verarbeitet werden"
+        except Exception as e:
+            logger.error(f"Duplicate confirmation failed: {e}")
+            return False, f"Fehler: {e}"
+
     async def summarize(self, item: Item) -> str | None:
         """Generate a summary for an item.
 
@@ -171,6 +246,83 @@ Datum: {date_str}"""
             logger.error(f"Analysis failed: {e}")
             return self._default_analysis()
 
+    async def analyze_from_data(self, item_data: dict[str, Any]) -> dict[str, Any]:
+        """Analyze item for relevance, priority, and working group assignment.
+
+        Like analyze(), but takes a dict instead of an Item ORM object.
+        This is used by the LLM worker to avoid holding DB connections during LLM calls.
+
+        Args:
+            item_data: Dict with keys: title, content, source_name, and optionally published_at
+
+        Returns:
+            Analysis result dict (same as analyze())
+        """
+        title = item_data.get("title", "")
+        content = item_data.get("content", "")[:6000]
+        source_name = item_data.get("source_name", "Unbekannt")
+        published_at = item_data.get("published_at")
+        date_str = published_at.strftime("%Y-%m-%d") if published_at else "Unbekannt"
+
+        prompt = f"""Titel: {title}
+Inhalt: {content}
+Quelle: {source_name}
+Datum: {date_str}"""
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=6000,
+            )
+            return self._parse_analysis_response(response)
+
+        except Exception as e:
+            logger.error(f"Analysis from data failed: {e}")
+            return self._default_analysis()
+
+    async def analyze_from_data_with_messages(self, item_data: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
+        """Analyze item and return both the result and the conversation messages.
+
+        Same as analyze_from_data() but also returns the messages list so
+        callers can continue the conversation (e.g. for topic extraction).
+
+        Returns:
+            Tuple of (analysis_result, messages_list)
+        """
+        title = item_data.get("title", "")
+        content = item_data.get("content", "")[:6000]
+        source_name = item_data.get("source_name", "Unbekannt")
+        published_at = item_data.get("published_at")
+        date_str = published_at.strftime("%Y-%m-%d") if published_at else "Unbekannt"
+
+        prompt = f"""Titel: {title}
+Inhalt: {content}
+Quelle: {source_name}
+Datum: {date_str}"""
+
+        messages = [
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=6000,
+            )
+            analysis = self._parse_analysis_response(response)
+            # Build full conversation for follow-up
+            conversation = messages + [{"role": "assistant", "content": response.text}]
+            return analysis, conversation
+
+        except Exception as e:
+            logger.error(f"Analysis from data (with messages) failed: {e}")
+            return self._default_analysis(), messages
+
     async def check_semantic_rule(self, item: Item, rule: Rule) -> bool:
         """Check if item matches a semantic (LLM-based) rule.
 
@@ -206,6 +358,72 @@ Antworte NUR mit JA oder NEIN."""
         except Exception as e:
             logger.error(f"Semantic rule check failed: {e}")
             return False
+
+    async def extract_topics(self, conversation_messages: list[dict]) -> list[str]:
+        """Extract topic keywords via a follow-up chat turn.
+
+        Takes the conversation from the initial analysis (system + user + assistant)
+        and appends a follow-up request for topic keywords.
+
+        Args:
+            conversation_messages: Messages from the analysis conversation
+
+        Returns:
+            List of 1-2 topic keyword strings
+        """
+        follow_up = {
+            "role": "user",
+            "content": (
+                "Gib GENAU EIN kurzes Themen-Label für diesen Artikel. "
+                "Das Label soll Artikel zum GLEICHEN konkreten Thema gruppieren. "
+                "Das Label MUSS 2-4 Wörter haben. KEINE Jahreszahlen.\n\n"
+                "VERBOTEN (ein Wort allein): Pflege, Migration, Digitalisierung, Gesundheit, "
+                "Fachkräftemangel, Integration, Inklusion, Sozialpolitik, Finanzierung, "
+                "Wohnen, Armut, Reform, Bildung, Asylpolitik, Pflegekosten, Senioren, "
+                "Pflegeausbildung, Pflegeberatung, Arbeitslosigkeit, Grundsicherung, "
+                "Barrierefreiheit, Ausbildung, Gesetzgebung, Förderung, Blutspende, Weiterbildung\n\n"
+                "GUTE Labels: Kita-Personalmangel Hessen, Pflegekosten-Eigenanteil Anstieg, "
+                "Bürgergeld-Sanktionsverschärfung, Krankenhausreform Bettenabbau, "
+                "Pflegekräfte-Tarifstreit Diakonie, Infrastruktur-Schutzgesetz\n"
+                "SCHLECHTE Labels: Pflege, Migration, Digitalisierung, Fachkräftemangel "
+                "(zu generisch), KRITIS-Dachgesetz (zu technisch/fachsprachlich)\n\n"
+                "Verwende allgemeinverständliche Begriffe. Keine Fachbegriffe oder Abkürzungen. "
+                "Eine Journalistin muss das Label sofort verstehen.\n\n"
+                "Antwort NUR als JSON: {\"topics\": [\"Label\"]}"
+            ),
+        }
+        messages = conversation_messages + [follow_up]
+
+        try:
+            response = await self.llm.chat(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=200,
+            )
+            text = response.text.strip()
+
+            # Remove markdown code blocks
+            if text.startswith("```"):
+                lines = text.split("\n")
+                lines = [line for line in lines if not line.strip().startswith("```")]
+                text = "\n".join(lines).strip()
+
+            if not text:
+                logger.warning("Empty response for topic extraction")
+                return []
+
+            result = json.loads(text)
+            topics = result.get("topics", [])
+            if isinstance(topics, list):
+                return [t for t in topics if isinstance(t, str) and t.strip()][:1]
+            return []
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse topic extraction response: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Topic extraction failed: {e}")
+            return []
 
     def calculate_keyword_score(self, item: Item) -> tuple[int, Priority]:
         """Calculate priority score based on keyword matches.

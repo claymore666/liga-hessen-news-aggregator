@@ -17,8 +17,9 @@ from typing import Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker, db_write_lock
+from database import async_session_maker
 from models import Channel, Item, Priority
+from services.pipeline import _strip_boilerplate
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +59,19 @@ class ClassifierWorker:
         self._task: Optional[asyncio.Task] = None
         self._classifier = None
 
-        # Statistics
+        # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
             "processed": 0,
             "priority_changed": 0,
+            "duplicates_found": 0,
+            "duplicates_checked": 0,
+            "vectordb_indexed": 0,
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
         }
+        self._stats_lock = asyncio.Lock()
+        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
 
     async def start(self):
         """Start the worker background task."""
@@ -75,6 +81,7 @@ class ClassifierWorker:
 
         self._running = True
         self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         logger.info("Classifier worker started")
 
@@ -90,6 +97,12 @@ class ClassifierWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+        # Close HTTP client in classifier to prevent resource leak
+        if self._classifier:
+            await self._classifier.close()
+            self._classifier = None
+
         logger.info("Classifier worker stopped")
 
     def pause(self):
@@ -102,12 +115,15 @@ class ClassifierWorker:
         self._paused = False
         logger.info("Classifier worker resumed")
 
-    def get_status(self) -> dict:
+    async def get_status(self) -> dict:
         """Get worker status and statistics."""
+        async with self._stats_lock:
+            stats_copy = self._stats.copy()
         return {
             "running": self._running,
             "paused": self._paused,
-            "stats": self._stats.copy(),
+            "stopped_due_to_errors": self._stopped_due_to_errors,
+            "stats": stats_copy,
         }
 
     async def _get_classifier(self):
@@ -121,6 +137,9 @@ class ClassifierWorker:
         """Main worker loop."""
         logger.info("Classifier worker loop started")
 
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+
         while self._running:
             try:
                 # Check if paused
@@ -128,24 +147,54 @@ class ClassifierWorker:
                     await asyncio.sleep(1.0)
                     continue
 
-                # Process unclassified items
+                # Priority 1: Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:
+                    consecutive_errors = 0  # Reset on success
                     # More items might be available
                     await asyncio.sleep(0.5)
                     continue
 
+                # Priority 2: Re-check duplicates for items that missed the check
+                duplicates_checked = await self._process_unchecked_duplicates()
+                if duplicates_checked > 0:
+                    consecutive_errors = 0  # Reset on success
+                    await asyncio.sleep(0.5)
+                    continue
+
+                # Priority 3: Re-index items that weren't indexed in vector store
+                indexed = await self._process_unindexed_items()
+                if indexed > 0:
+                    consecutive_errors = 0  # Reset on success
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # No work available, sleep
-                logger.debug(f"No unclassified items, sleeping {self.idle_sleep}s")
+                logger.debug(f"No unclassified items, unchecked duplicates, or unindexed items, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
             except asyncio.CancelledError:
                 logger.info("Classifier worker cancelled")
                 break
             except Exception as e:
-                logger.error(f"Classifier worker error: {e}", exc_info=True)
-                self._stats["errors"] += 1
-                await asyncio.sleep(10.0)  # Back off on error
+                consecutive_errors += 1
+                logger.error(f"Classifier worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(
+                        f"Classifier worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
+                        "Manual restart required after fixing the issue."
+                    )
+                    self._stopped_due_to_errors = True
+                    self._running = False
+                    break
+
+                # Exponential backoff: 10s, 20s, 40s, ... up to 120s
+                backoff = min(120.0, 10.0 * (2 ** (consecutive_errors - 1)))
+                logger.info(f"Backing off for {backoff:.0f}s before retry")
+                await asyncio.sleep(backoff)
 
         logger.info("Classifier worker loop ended")
 
@@ -227,12 +276,9 @@ class ClassifierWorker:
                 # Prepare updated metadata
                 new_metadata = dict(item_data["old_metadata"])
                 new_metadata["pre_filter"] = {
-                    "classifier_version": result.get("classifier_version"),
                     "relevance_confidence": confidence,
                     "ak_suggestion": result.get("ak"),
                     "ak_confidence": result.get("ak_confidence"),
-                    "aks": result.get("aks", []),
-                    "ak_confidences": result.get("ak_confidences", {}),
                     "priority_suggestion": result.get("priority"),
                     "priority_confidence": result.get("priority_confidence"),
                     "classified_at": datetime.utcnow().isoformat(),
@@ -266,74 +312,62 @@ class ClassifierWorker:
 
             except Exception as e:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
-                self._stats["errors"] += 1
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
 
-        # Phase 3: Apply updates to database (with lock to serialize writes)
+        # Phase 3: Apply updates to database
+        # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes
         if updates:
-            from services.item_events import record_event, EVENT_CLASSIFIER_PROCESSED
+            from services.item_events import record_events_batch, EVENT_CLASSIFIER_PROCESSED
 
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    async with db_write_lock:
-                        async with async_session_maker() as db:
-                            for upd in updates:
-                                await db.execute(
-                                    update(Item)
-                                    .where(Item.id == upd["id"])
-                                    .values(
-                                        priority=upd["priority"],
-                                        priority_score=upd["priority_score"],
-                                        metadata_=upd["metadata_"],
-                                        needs_llm_processing=upd["needs_llm_processing"],
-                                    )
-                                )
-                                # Record classifier event with expanded data for agreement tracking
-                                pre_filter = upd["metadata_"]["pre_filter"]
-                                await record_event(
-                                    db,
-                                    upd["id"],
-                                    EVENT_CLASSIFIER_PROCESSED,
-                                    data={
-                                        "version": pre_filter.get("classifier_version"),
-                                        "relevance_confidence": pre_filter["relevance_confidence"],
-                                        "priority": upd["priority"],
-                                        "priority_confidence": pre_filter.get("priority_confidence"),
-                                        "aks": pre_filter.get("aks", []),
-                                        "ak_confidences": pre_filter.get("ak_confidences", {}),
-                                        # Legacy fields for backward compatibility
-                                        "confidence": pre_filter["relevance_confidence"],
-                                        "ak_suggestion": pre_filter.get("ak_suggestion"),
-                                    },
-                                )
+            try:
+                async with async_session_maker() as db:
+                    # Batch update items (individual updates required due to different metadata per item)
+                    for upd in updates:
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == upd["id"])
+                            .values(
+                                priority=upd["priority"],
+                                priority_score=upd["priority_score"],
+                                metadata_=upd["metadata_"],
+                                needs_llm_processing=upd["needs_llm_processing"],
+                            )
+                        )
 
-                                # Log classifier processing for analytics
-                                try:
-                                    from services.processing_logger import ProcessingLogger
+                    # Batch record classifier events (more efficient than individual calls)
+                    events_data = [
+                        {
+                            "item_id": upd["id"],
+                            "event_type": EVENT_CLASSIFIER_PROCESSED,
+                            "data": {
+                                "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
+                                "priority": upd["priority"],
+                                "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
+                            },
+                        }
+                        for upd in updates
+                    ]
+                    record_events_batch(db, events_data)
 
-                                    plogger = ProcessingLogger(db)
-                                    await plogger.log_classifier_worker(
-                                        item_id=upd["id"],
-                                        result=upd["metadata_"]["pre_filter"],
-                                        priority_input=upd.get("old_priority", "unknown"),
-                                        priority_output=upd["priority"],
-                                    )
-                                except Exception as log_err:
-                                    logger.warning(f"Failed to log classifier processing for item {upd['id']}: {log_err}")
+                    # Batch log classifier processing for analytics
+                    try:
+                        from services.processing_logger import ProcessingLogger
 
-                            await db.commit()
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if "database is locked" in str(e) and attempt < max_retries - 1:
-                        logger.warning(f"Database locked, retrying ({attempt + 1}/{max_retries})...")
-                        await asyncio.sleep(1.0 * (attempt + 1))  # Exponential backoff
-                    else:
-                        logger.error(f"Failed to commit classifier updates: {e}")
-                        raise
+                        plogger = ProcessingLogger(db)
+                        await plogger.log_classifier_worker_batch(updates)
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log classifier processing batch: {log_err}")
 
-        self._stats["processed"] += processed
-        self._stats["priority_changed"] += priority_changed
-        self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to commit classifier updates: {e}")
+                raise
+
+        async with self._stats_lock:
+            self._stats["processed"] += processed
+            self._stats["priority_changed"] += priority_changed
+            self._stats["last_processed_at"] = datetime.utcnow().isoformat()
 
         if processed > 0:
             logger.info(f"Classified {processed} items ({priority_changed} priority changes)")
@@ -361,6 +395,281 @@ class ClassifierWorker:
         else:
             # Certainly irrelevant - none priority, skip LLM
             return Priority.NONE, 20, True
+
+    async def _process_unchecked_duplicates(self) -> int:
+        """
+        Re-check duplicates for items that were ingested without the check.
+
+        This catches items that were saved while the classifier API was down.
+        Only checks items from the last 7 days to limit scope.
+
+        Returns:
+            Number of items checked
+        """
+        from datetime import timedelta
+
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                logger.debug("Classifier unavailable for duplicate check")
+                return 0
+        except Exception as e:
+            logger.debug(f"Cannot create classifier for duplicate check: {e}")
+            return 0
+
+        # Find items without similar_to_id and without duplicate_checked flag
+        # Limit to recent items by default (configurable via DUPLICATE_CHECK_DAYS, 0 = no limit)
+        import os
+        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+
+        async with async_session_maker() as db:
+            from database import json_extract_path
+
+            conditions = [
+                Item.similar_to_id.is_(None),
+                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+            ]
+
+            if check_days > 0:
+                cutoff = datetime.utcnow() - timedelta(days=check_days)
+                conditions.append(Item.fetched_at >= cutoff)
+
+            query = (
+                select(Item)
+                .where(*conditions)
+                .order_by(Item.fetched_at.desc())
+                .limit(self.batch_size)
+            )
+
+            result = await db.execute(query)
+            items = result.scalars().all()
+
+            if not items:
+                return 0
+
+            # Extract data needed for duplicate check
+            items_to_check = []
+            for item in items:
+                items_to_check.append({
+                    "id": item.id,
+                    "title": item.title,
+                    "content": item.content or "",
+                    "old_metadata": dict(item.metadata_) if item.metadata_ else {},
+                })
+
+        logger.info(f"Checking {len(items_to_check)} items for duplicates")
+
+        # Check each item for duplicates
+        checked = 0
+        duplicates_found = 0
+        updates = []
+
+        for item_data in items_to_check:
+            if self._paused or not self._running:
+                break
+
+            try:
+                # Strip boilerplate before duplicate check to avoid false positives
+                clean_title = _strip_boilerplate(item_data["title"])
+                clean_content = _strip_boilerplate(item_data["content"])
+
+                # Find potential duplicates
+                duplicates = await classifier.find_duplicates(
+                    title=clean_title,
+                    content=clean_content,
+                    threshold=0.75,
+                )
+
+                # Prepare updated metadata
+                new_metadata = dict(item_data["old_metadata"])
+                new_metadata["duplicate_checked"] = True
+                new_metadata["duplicate_checked_at"] = datetime.utcnow().isoformat()
+
+                similar_to_id = None
+                if duplicates:
+                    # Find the best match that isn't the item itself and won't create circular reference
+                    for dup in duplicates:
+                        dup_id = int(dup["id"])
+                        if dup_id != item_data["id"]:
+                            # Only link to older items (lower ID) to prevent circular references
+                            # This ensures the oldest article in a cluster is always the primary
+                            if dup_id < item_data["id"]:
+                                similar_to_id = dup_id
+                                new_metadata["duplicate_score"] = dup.get("score")
+                                duplicates_found += 1
+                                logger.info(
+                                    f"Duplicate found: '{item_data['title'][:40]}...' "
+                                    f"similar to item {similar_to_id} (score: {dup.get('score', 0):.3f})"
+                                )
+                                break
+                            else:
+                                logger.debug(
+                                    f"Skipping newer duplicate {dup_id} for item {item_data['id']} "
+                                    f"(would create circular reference)"
+                                )
+
+                updates.append({
+                    "id": item_data["id"],
+                    "similar_to_id": similar_to_id,
+                    "metadata_": new_metadata,
+                })
+                checked += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to check duplicates for item {item_data['id']}: {e}")
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+
+        # Apply updates to database
+        if updates:
+            try:
+                async with async_session_maker() as db:
+                    # Verify that similar_to_ids exist in database (ChromaDB may have stale entries)
+                    similar_ids_to_check = [
+                        upd["similar_to_id"] for upd in updates
+                        if upd["similar_to_id"] is not None
+                    ]
+                    if similar_ids_to_check:
+                        result = await db.execute(
+                            select(Item.id).where(Item.id.in_(similar_ids_to_check))
+                        )
+                        existing_ids = set(row[0] for row in result.fetchall())
+
+                        # Clear similar_to_id for non-existent items
+                        for upd in updates:
+                            if upd["similar_to_id"] is not None and upd["similar_to_id"] not in existing_ids:
+                                logger.warning(
+                                    f"Skipping similar_to_id={upd['similar_to_id']} for item {upd['id']} - "
+                                    f"referenced item no longer exists (stale ChromaDB entry)"
+                                )
+                                upd["similar_to_id"] = None
+                                # Remove duplicate_score from metadata since no valid duplicate
+                                if "duplicate_score" in upd["metadata_"]:
+                                    del upd["metadata_"]["duplicate_score"]
+
+                    for upd in updates:
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == upd["id"])
+                            .values(
+                                similar_to_id=upd["similar_to_id"],
+                                metadata_=upd["metadata_"],
+                            )
+                        )
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to commit duplicate check updates: {e}")
+                raise
+
+        async with self._stats_lock:
+            self._stats["duplicates_checked"] += checked
+            self._stats["duplicates_found"] += duplicates_found
+
+        if checked > 0:
+            logger.info(f"Checked {checked} items for duplicates ({duplicates_found} found)")
+
+        return checked
+
+    async def _process_unindexed_items(self) -> int:
+        """
+        Re-index items that weren't added to the vector store during ingestion.
+
+        This catches items that were saved while the classifier API was down.
+
+        Returns:
+            Number of items indexed
+        """
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                logger.debug("Classifier unavailable for indexing")
+                return 0
+        except Exception as e:
+            logger.debug(f"Cannot create classifier for indexing: {e}")
+            return 0
+
+        # Find items without vectordb_indexed flag
+        async with async_session_maker() as db:
+            from database import json_extract_path
+            from sqlalchemy.orm import selectinload
+
+            query = (
+                select(Item)
+                .where(
+                    json_extract_path(Item.metadata_, "vectordb_indexed").is_(None),
+                )
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+                .order_by(Item.fetched_at.desc())
+                .limit(self.batch_size)
+            )
+
+            result = await db.execute(query)
+            items = result.scalars().all()
+
+            if not items:
+                return 0
+
+            # Prepare items for indexing (strip boilerplate for better embeddings)
+            items_to_index = []
+            item_ids = []
+            for item in items:
+                source_name = ""
+                if item.channel and item.channel.source:
+                    source_name = item.channel.source.name
+                items_to_index.append({
+                    "id": str(item.id),
+                    "title": _strip_boilerplate(item.title),
+                    "content": _strip_boilerplate(item.content or ""),
+                    "metadata": {
+                        "source": source_name,
+                        "priority": item.priority.value if hasattr(item.priority, 'value') else str(item.priority),
+                        "channel_id": str(item.channel_id) if item.channel_id else "",
+                    },
+                })
+                item_ids.append(item.id)
+
+        logger.info(f"Indexing {len(items_to_index)} items in vector store")
+
+        # Index items
+        try:
+            indexed = await classifier.index_items_batch(items_to_index)
+        except Exception as e:
+            logger.warning(f"Failed to index items: {e}")
+            async with self._stats_lock:
+                self._stats["errors"] += 1
+            return 0
+
+        # Update metadata for all items (even if indexed=0, the API succeeded)
+        if item_ids:
+            try:
+                async with async_session_maker() as db:
+                    for item_id in item_ids:
+                        # Get current metadata
+                        result = await db.execute(
+                            select(Item.metadata_).where(Item.id == item_id)
+                        )
+                        current_meta = result.scalar() or {}
+                        new_meta = dict(current_meta)
+                        new_meta["vectordb_indexed"] = True
+                        new_meta["vectordb_indexed_at"] = datetime.utcnow().isoformat()
+
+                        await db.execute(
+                            update(Item)
+                            .where(Item.id == item_id)
+                            .values(metadata_=new_meta)
+                        )
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to update vectordb_indexed flags: {e}")
+                raise
+
+        async with self._stats_lock:
+            self._stats["vectordb_indexed"] += len(item_ids)
+
+        if len(item_ids) > 0:
+            logger.info(f"Indexed {len(item_ids)} items in vector store")
+
+        return len(item_ids)
 
 
 # Global worker instance
@@ -417,5 +726,29 @@ async def get_unclassified_count() -> int:
             select(func.count(Item.id)).where(
                 json_extract_path(Item.metadata_, "pre_filter").is_(None)
             )
+        )
+        return result.scalar() or 0
+
+
+async def get_unchecked_duplicates_count() -> int:
+    """Get count of items that haven't been checked for duplicates."""
+    import os
+    from datetime import timedelta
+    from database import json_extract_path
+
+    check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+
+    conditions = [
+        Item.similar_to_id.is_(None),
+        json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+    ]
+
+    if check_days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=check_days)
+        conditions.append(Item.fetched_at >= cutoff)
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(func.count(Item.id)).where(*conditions)
         )
         return result.scalar() or 0

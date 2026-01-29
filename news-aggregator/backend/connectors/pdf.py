@@ -63,39 +63,42 @@ class PDFConnector(BaseConnector):
         pdf_bytes = io.BytesIO(response.content)
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
 
-        # Extract text from all pages
-        full_text = ""
-        for page in doc:
-            full_text += page.get_text()
+        try:
+            # Extract text from all pages
+            full_text = ""
+            for page in doc:
+                full_text += page.get_text()
 
-        # Get metadata
-        metadata = doc.metadata or {}
+            # Get metadata
+            metadata = doc.metadata or {}
+            page_count = len(doc)
 
-        # Use metadata title or first line as title
-        title = metadata.get("title", "").strip()
-        if not title:
-            first_line = full_text.split("\n")[0].strip()[:100]
-            title = first_line if first_line else "PDF Document"
+            # Use metadata title or first line as title
+            title = metadata.get("title", "").strip()
+            if not title:
+                first_line = full_text.split("\n")[0].strip()[:100]
+                title = first_line if first_line else "PDF Document"
 
-        # Generate unique ID from content hash
-        external_id = hashlib.md5(response.content).hexdigest()[:16]
+            # Generate unique ID from content hash
+            external_id = hashlib.md5(response.content).hexdigest()[:16]
 
-        # Get author
-        author = metadata.get("author")
+            # Get author
+            author = metadata.get("author")
 
-        # Try to parse creation date
-        published_at = None
-        if metadata.get("creationDate"):
-            try:
-                # PDF date format: D:YYYYMMDDHHmmSS
-                date_str = metadata["creationDate"]
-                if date_str.startswith("D:"):
-                    date_str = date_str[2:16]  # Extract YYYYMMDDHHmmSS
-                    published_at = datetime.strptime(date_str, "%Y%m%d%H%M%S")
-            except (ValueError, IndexError):
-                pass
+            # Try to parse creation date
+            published_at = None
+            if metadata.get("creationDate"):
+                try:
+                    # PDF date format: D:YYYYMMDDHHmmSS
+                    date_str = metadata["creationDate"]
+                    if date_str.startswith("D:"):
+                        date_str = date_str[2:16]  # Extract YYYYMMDDHHmmSS
+                        published_at = datetime.strptime(date_str, "%Y%m%d%H%M%S")
+                except (ValueError, IndexError):
+                    pass
 
-        doc.close()
+        finally:
+            doc.close()
 
         return [
             RawItem(
@@ -106,7 +109,7 @@ class PDFConnector(BaseConnector):
                 author=author,
                 published_at=published_at or datetime.now(),
                 metadata={
-                    "pages": len(doc) if doc else 0,
+                    "pages": page_count,
                     "pdf_metadata": {
                         k: v for k, v in metadata.items() if v
                     },

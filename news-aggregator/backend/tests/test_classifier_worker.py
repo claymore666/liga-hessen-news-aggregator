@@ -110,9 +110,10 @@ class TestClassifierWorkerPauseResume:
 class TestClassifierWorkerStatus:
     """Tests for status reporting."""
 
-    def test_get_status_initial(self, worker):
+    @pytest.mark.asyncio
+    async def test_get_status_initial(self, worker):
         """Should return initial status."""
-        status = worker.get_status()
+        status = await worker.get_status()
         assert status["running"] is False
         assert status["paused"] is False
         assert "stats" in status
@@ -122,14 +123,15 @@ class TestClassifierWorkerStatus:
         """Should reflect running state."""
         await worker.start()
         try:
-            status = worker.get_status()
+            status = await worker.get_status()
             assert status["running"] is True
         finally:
             await worker.stop()
 
-    def test_get_status_stats_copy(self, worker):
+    @pytest.mark.asyncio
+    async def test_get_status_stats_copy(self, worker):
         """Should return copy of stats."""
-        status = worker.get_status()
+        status = await worker.get_status()
         status["stats"]["errors"] = 999
         assert worker._stats["errors"] == 0
 

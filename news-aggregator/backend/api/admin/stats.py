@@ -42,6 +42,8 @@ class ProcessingQueueStats(BaseModel):
     total: int
     by_retry_priority: dict[str, int]
     awaiting_classifier: int
+    awaiting_dedup: int
+    awaiting_vectordb: int
 
 
 class ItemStats(BaseModel):
@@ -105,7 +107,7 @@ async def get_system_stats(
     # LLM Worker status
     llm_worker = get_llm_worker()
     if llm_worker:
-        llm_status = llm_worker.get_status()
+        llm_status = await llm_worker.get_status()
         llm_worker_status = WorkerStatus(
             running=llm_status["running"],
             paused=llm_status["paused"],
@@ -121,7 +123,7 @@ async def get_system_stats(
     # Classifier Worker status
     classifier_worker = get_classifier_worker()
     if classifier_worker:
-        clf_status = classifier_worker.get_status()
+        clf_status = await classifier_worker.get_status()
         classifier_worker_status = WorkerStatus(
             running=clf_status["running"],
             paused=clf_status["paused"],
@@ -156,10 +158,27 @@ async def get_system_stats(
         )
     ) or 0
 
+    # Items awaiting dedup check (no similar_to_id and no duplicate_checked flag)
+    awaiting_dedup = await db.scalar(
+        select(func.count(Item.id)).where(
+            Item.similar_to_id.is_(None),
+            json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+        )
+    ) or 0
+
+    # Items awaiting vectordb indexing
+    awaiting_vectordb = await db.scalar(
+        select(func.count(Item.id)).where(
+            json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
+        )
+    ) or 0
+
     processing_queue = ProcessingQueueStats(
         total=queue_total,
         by_retry_priority=by_retry_priority,
         awaiting_classifier=awaiting_classifier,
+        awaiting_dedup=awaiting_dedup,
+        awaiting_vectordb=awaiting_vectordb,
     )
 
     # Item stats

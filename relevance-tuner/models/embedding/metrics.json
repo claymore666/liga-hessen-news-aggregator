@@ -96,6 +96,17 @@
       "train_size": 3296,
       "test_size": 582,
       "model_fingerprint": "4309f2d4276c"
+    },
+    {
+      "model_fingerprint": "48d57fa6652a",
+      "relevance_accuracy": 0.8955,
+      "priority_accuracy": 0.561,
+      "priority_within_one": 0.9593,
+      "ak_accuracy": 0.6992,
+      "speed_items_per_sec": 126.8,
+      "timestamp": "2026-01-20T16:57:36.354482",
+      "train_size": 3519,
+      "test_size": 622
     }
   ],
   "jina-v3": [

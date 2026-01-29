@@ -2,6 +2,20 @@
 
 Complete guide for retraining the embedding classifier and (optionally) the LLM when training data changes.
 
+## Classifier-API Architecture
+
+The classifier-api has three components using two different embedding models:
+
+| Component | Model | Purpose | Trained? |
+|-----------|-------|---------|----------|
+| **EmbeddingClassifier** | nomic-v2 + sklearn RF | Relevance/Priority/AK classification | Yes (pkl file) |
+| **VectorStore** | nomic-v2 + ChromaDB | Semantic search | No (just stores embeddings) |
+| **DuplicateStore** | paraphrase-mpnet + ChromaDB | Duplicate/same-story detection | No (similarity search) |
+
+**This guide covers retraining the EmbeddingClassifier only.** The other components don't require training - they use raw embedding similarity.
+
+---
+
 ## Embedding Classifier Retraining (Primary)
 
 The embedding classifier is the primary classification system. Retrain when:
@@ -11,30 +25,61 @@ The embedding classifier is the primary classification system. Retrain when:
 
 ### Step 1: Export Training Data
 
+**Option A: From local database (gpu1)**
+
 ```bash
 cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
 source venv/bin/activate
 
-# Export from production database
+# Export from local database
 python scripts/export_training_data.py
+
+# With quality filters (recommended)
+python scripts/export_training_data.py --min-content-length 200
+```
+
+**Option B: From remote database (docker-ai)**
+
+```bash
+# Create SSH tunnel to docker-ai API
+ssh -L 9000:localhost:8000 docker-ai -N -f
+
+# Export via tunnel
+API_URL=http://localhost:9000/api python scripts/export_training_data.py --min-content-length 200
+
+# Close tunnel when done
+pkill -f "ssh -L 9000:localhost:8000"
 ```
 
 This creates `data/final/{train,validation,test}.jsonl` with current labeled data.
 
 ### Step 2: Train Classifier
 
+**CRITICAL**: Must set `EMBEDDING_BACKEND=nomic-v2` to use the correct embedding model!
+
 ```bash
-python train_embedding_classifier.py
+EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
 ```
 
-**Output**: `services/classifier-api/models/embedding_classifier_nomic-v2.pkl`
+**Output**: `models/embedding/embedding_classifier_nomic-v2.pkl`
+
+Metrics are logged to `models/embedding/metrics.json` with full history.
 
 ### Step 3: Deploy
 
+The model is volume-mounted, so no rebuild is needed - just copy the file:
+
 ```bash
-cd services/classifier-api
-docker compose down && docker compose build && docker compose up -d
+# Backup current model
+cp services/classifier-api/models/embedding_classifier_nomic-v2.pkl \
+   services/classifier-api/models/embedding_classifier_nomic-v2.pkl.backup-$(date +%Y%m%d)
+
+# Deploy new model
+cp models/embedding/embedding_classifier_nomic-v2.pkl services/classifier-api/models/
+cp models/embedding/metrics.json services/classifier-api/models/
 ```
+
+The container will pick up the new model on next classification request (hot reload).
 
 ### Step 4: Verify
 
@@ -46,6 +91,15 @@ curl -s http://localhost:8082/health | jq
 curl -s -X POST http://localhost:8082/classify \
   -H "Content-Type: application/json" \
   -d '{"title": "Hessen kürzt Kita-Mittel", "content": "Die Landesregierung..."}' | jq
+```
+
+### Rollback
+
+If the new model performs poorly:
+
+```bash
+cp services/classifier-api/models/embedding_classifier_nomic-v2.pkl.backup-YYYYMMDD \
+   services/classifier-api/models/embedding_classifier_nomic-v2.pkl
 ```
 
 ---
@@ -184,8 +238,11 @@ tail -f /tmp/full_retrain.log
 |-----------|-------|
 | Embedding model | nomic-ai/nomic-embed-text-v2-moe |
 | Dimension | 768 |
-| Classifier | Scikit-learn (Logistic Regression) |
-| Training examples | ~1680 |
+| Classifier | Random Forest (n=300, depth=30) |
+| Training examples | ~3500 |
+| Model location | `models/embedding/embedding_classifier_nomic-v2.pkl` |
+| Deployed location | `services/classifier-api/models/embedding_classifier_nomic-v2.pkl` |
+| Metrics history | `models/embedding/metrics.json` |
 
 ### LLM (if fine-tuning)
 
@@ -214,6 +271,16 @@ tail -f /tmp/full_retrain.log
 ### LLM Output Wrong Format
 - Check `SYSTEM_PROMPT` in `train_qwen3.py` matches `Modelfile`
 - Verify training data has correct format
+
+### Wrong Embedding Backend
+If you see incompatible embeddings or poor accuracy:
+```bash
+# Check which backend was used
+grep -i backend models/embedding/metrics.json | tail -1
+
+# Always use nomic-v2 for production
+EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
+```
 
 ---
 

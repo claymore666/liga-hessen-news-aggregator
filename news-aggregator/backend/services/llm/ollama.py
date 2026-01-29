@@ -66,6 +66,7 @@ class OllamaProvider(BaseLLMProvider):
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "think": False,  # Disable qwen3 thinking mode to ensure content is returned
             "options": {
                 "temperature": temperature,
             },
@@ -82,8 +83,14 @@ class OllamaProvider(BaseLLMProvider):
             response.raise_for_status()
             data = response.json()
 
+        content = data["message"]["content"]
+        # qwen3 models may use thinking mode where response is in 'thinking' field
+        # If content is empty but thinking exists, the model didn't produce output
+        if not content and data["message"].get("thinking"):
+            logger.warning(f"Ollama returned empty content with thinking mode active")
+
         return LLMResponse(
-            text=data["message"]["content"],
+            text=content,
             model=self.model,
             tokens_used=data.get("eval_count"),
             prompt_tokens=data.get("prompt_eval_count"),
@@ -92,6 +99,62 @@ class OllamaProvider(BaseLLMProvider):
                 "provider": self.provider_name,
                 "total_duration": data.get("total_duration"),
                 "load_duration": data.get("load_duration"),
+                "has_thinking": bool(data["message"].get("thinking")),
+            },
+        )
+
+    async def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Generate completion from a full messages list.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            LLMResponse with generated text
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": temperature,
+            },
+        }
+
+        if max_tokens:
+            payload["options"]["num_predict"] = max_tokens
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        content = data["message"]["content"]
+        if not content and data["message"].get("thinking"):
+            logger.warning("Ollama chat() returned empty content with thinking mode active")
+
+        return LLMResponse(
+            text=content,
+            model=self.model,
+            tokens_used=data.get("eval_count"),
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+            metadata={
+                "provider": self.provider_name,
+                "total_duration": data.get("total_duration"),
+                "load_duration": data.get("load_duration"),
+                "has_thinking": bool(data["message"].get("thinking")),
             },
         )
 

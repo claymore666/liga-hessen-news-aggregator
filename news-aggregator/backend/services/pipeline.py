@@ -22,6 +22,59 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# RSS boilerplate patterns that cause false positive similarity matches
+RSS_BOILERPLATE_PATTERNS = [
+    r"^RSS-Zusammenfassung:\s*",
+    r"\n\n--- Vollständiger Artikel von [^\n]+ ---\n\n",
+]
+
+# Semantic duplicate thresholds
+# Items >= THRESHOLD_CONFIRMED are automatically marked as duplicates
+# Items between THRESHOLD_MAYBE and THRESHOLD_CONFIRMED are marked for LLM review
+DUPLICATE_THRESHOLD_CONFIRMED = 0.75  # Auto-confirm as duplicate
+DUPLICATE_THRESHOLD_MAYBE = 0.60  # Mark for LLM review
+
+
+def _strip_boilerplate(text: str) -> str:
+    """Strip RSS boilerplate text that causes false positive similarity matches.
+
+    The boilerplate is useful for display but creates structural similarity
+    between unrelated articles when creating embeddings.
+    """
+    result = text
+    for pattern in RSS_BOILERPLATE_PATTERNS:
+        result = re.sub(pattern, "", result, flags=re.IGNORECASE)
+    return result.strip()
+
+
+def _titles_similar(title1: str, title2: str, threshold: float = 0.7) -> bool:
+    """Check if two titles are similar enough to be the same story.
+
+    Uses word overlap (Jaccard-like similarity) to detect duplicate headlines.
+    This catches cases like:
+    - "Vielen Kitas fehlen Fachkräfte - Mittelhessen"
+    - "Kinderbetreuung: Vielen Kitas fehlen Fachkräfte | DPA"
+
+    Args:
+        title1: First title (lowercase, cleaned)
+        title2: Second title (lowercase, cleaned)
+        threshold: Minimum word overlap ratio (default 0.7 = 70%)
+
+    Returns:
+        True if titles share enough words to be considered the same story
+    """
+    # Split into words, remove very short words (articles, etc.)
+    words1 = {w for w in title1.split() if len(w) > 2}
+    words2 = {w for w in title2.split() if len(w) > 2}
+
+    if not words1 or not words2:
+        return False
+
+    intersection = words1 & words2
+    # Use the smaller set as denominator to catch partial matches
+    smaller = min(len(words1), len(words2))
+    return len(intersection) / smaller >= threshold
+
 
 def _get_priority_value(priority) -> str:
     """Safely get priority value whether it's an enum or string."""
@@ -100,6 +153,9 @@ class Pipeline:
             List of newly created items.
         """
         new_items = []
+        # Track items for intra-batch deduplication (items arriving together can't
+        # find each other via ChromaDB since neither is indexed yet)
+        batch_titles: list[str] = []  # Cleaned titles for comparison
 
         for raw in raw_items:
             # Create item-specific logger for this processing run
@@ -128,45 +184,100 @@ class Pipeline:
 
             # 3a. Check for semantic duplicates (cross-channel)
             # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
+            # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
             similar_to_id = None
             duplicates = []
             similarity_score = None
+            duplicate_candidate = None  # For edge cases needing LLM review
             if self.relevance_filter and not self.training_mode:
                 try:
+                    # Strip boilerplate before embedding to avoid false positive similarity
+                    clean_title = _strip_boilerplate(normalized.title)
+                    clean_content = _strip_boilerplate(normalized.content)
+                    # Use lower threshold to catch "maybe duplicates" for LLM review
                     duplicates = await self.relevance_filter.find_duplicates(
-                        title=normalized.title,
-                        content=normalized.content,
-                        threshold=0.75,  # Paraphrase model threshold for same-story detection
+                        title=clean_title,
+                        content=clean_content,
+                        threshold=DUPLICATE_THRESHOLD_MAYBE,  # 0.60 - catches edge cases
                     )
                     if duplicates:
                         best_match = duplicates[0]
-                        similar_to_id = int(best_match["id"])
-                        similarity_score = best_match.get("score")
-                        logger.info(
-                            f"Semantic duplicate: '{normalized.title[:40]}...' "
-                            f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
-                            f"(score: {best_match.get('score', 0):.3f})"
-                        )
+                        match_score = best_match.get("score", 0)
+                        match_id = int(best_match["id"])
 
-                        # Record duplicate detection in audit trail of EXISTING item
+                        # Verify the candidate item still exists (vector index may be out of sync)
+                        from sqlalchemy import select
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
                         try:
-                            await record_event(
-                                self.db,
-                                similar_to_id,  # Existing item ID
-                                EVENT_DUPLICATE_DETECTED,
-                                data={
-                                    "duplicate_title": normalized.title,
-                                    "duplicate_source": channel.source.name if channel.source else None,
-                                    "duplicate_channel_id": channel.id,
-                                    "duplicate_url": normalized.url,
-                                    "similarity_score": best_match.get("score"),
-                                },
+                            existing = await self.db.scalar(
+                                select(Item.id).where(Item.id == match_id)
                             )
+                            if not existing:
+                                logger.warning(
+                                    f"Skipping duplicate: item {match_id} no longer exists "
+                                    "(vector index out of sync)"
+                                )
+                                match_id = None
+                                match_score = None
                         except Exception as e:
-                            logger.warning(f"Failed to record duplicate event: {e}")
+                            logger.warning(f"Failed to verify candidate item: {e}")
+                            match_id = None
+
+                        if match_id:
+                            if match_score >= DUPLICATE_THRESHOLD_CONFIRMED:
+                                # High confidence: auto-link as duplicate
+                                similar_to_id = match_id
+                                similarity_score = match_score
+                                logger.info(
+                                    f"Semantic duplicate (confirmed): '{normalized.title[:40]}...' "
+                                    f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
+                                    f"(score: {match_score:.3f})"
+                                )
+
+                                # Record duplicate detection in audit trail of EXISTING item
+                                try:
+                                    await record_event(
+                                        self.db,
+                                        similar_to_id,  # Existing item ID
+                                        EVENT_DUPLICATE_DETECTED,
+                                        data={
+                                            "duplicate_title": normalized.title,
+                                            "duplicate_source": channel.source.name if channel.source else None,
+                                            "duplicate_channel_id": channel.id,
+                                            "duplicate_url": normalized.url,
+                                            "similarity_score": match_score,
+                                        },
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to record duplicate event: {e}")
+                            else:
+                                # Edge case (0.60-0.75): mark for LLM review
+                                duplicate_candidate = {
+                                    "candidate_id": match_id,
+                                    "candidate_title": best_match.get("title", ""),
+                                    "similarity_score": match_score,
+                                }
+                                logger.info(
+                                    f"Maybe duplicate (LLM review needed): '{normalized.title[:40]}...' "
+                                    f"similar to item {match_id} '{best_match.get('title', '')[:40]}...' "
+                                    f"(score: {match_score:.3f})"
+                                )
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
+
+            # 3b. Check for intra-batch duplicates (items in same fetch can't find each other
+            # via ChromaDB since neither is indexed yet)
+            batch_similar_to_idx = None
+            if not similar_to_id and batch_titles and not self.training_mode:
+                clean_title = _strip_boilerplate(normalized.title).lower()
+                for idx, existing_title in enumerate(batch_titles):
+                    if _titles_similar(clean_title, existing_title):
+                        batch_similar_to_idx = idx
+                        logger.info(
+                            f"Intra-batch duplicate: '{normalized.title[:40]}...' "
+                            f"similar to batch item #{idx} (will link after flush)"
+                        )
+                        break
 
             # Log duplicate check result
             if item_logger:
@@ -181,6 +292,11 @@ class Pipeline:
                     logger.warning(f"Failed to log duplicate check: {e}")
 
             # 4. Create item
+            # Include duplicate_candidate in metadata for LLM review if edge case
+            item_metadata = dict(normalized.metadata) if normalized.metadata else {}
+            if duplicate_candidate:
+                item_metadata["duplicate_candidate"] = duplicate_candidate
+
             item = Item(
                 channel_id=channel.id,
                 external_id=normalized.external_id,
@@ -190,8 +306,10 @@ class Pipeline:
                 author=normalized.author,
                 published_at=normalized.published_at,
                 content_hash=content_hash,
-                metadata_=normalized.metadata,
-                similar_to_id=similar_to_id,  # Link to primary item if duplicate
+                metadata_=item_metadata,
+                similar_to_id=similar_to_id,  # Link to primary item if confirmed duplicate
+                # Mark for LLM processing if there's a duplicate candidate to review
+                needs_llm_processing=duplicate_candidate is not None,
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
@@ -308,11 +426,34 @@ class Pipeline:
             self.db.add(item)
             # Store logger reference for post-flush logging
             item._processing_logger = item_logger
+            # Store intra-batch duplicate reference (resolved to real ID after flush)
+            if batch_similar_to_idx is not None:
+                item._batch_similar_to_idx = batch_similar_to_idx
+            # Track this item's title for intra-batch dedup of subsequent items
+            batch_titles.append(_strip_boilerplate(normalized.title).lower())
             new_items.append(item)
 
         if new_items:
             await self.db.flush()
             logger.info(f"Created {len(new_items)} new items from channel {channel.id}")
+
+            # Resolve intra-batch duplicates now that items have IDs
+            intra_batch_count = 0
+            for item in new_items:
+                if hasattr(item, "_batch_similar_to_idx"):
+                    similar_idx = item._batch_similar_to_idx
+                    if 0 <= similar_idx < len(new_items):
+                        primary_item = new_items[similar_idx]
+                        item.similar_to_id = primary_item.id
+                        intra_batch_count += 1
+                        logger.info(
+                            f"Linked intra-batch duplicate: item {item.id} -> {primary_item.id} "
+                            f"('{item.title[:30]}...' -> '{primary_item.title[:30]}...')"
+                        )
+                    delattr(item, "_batch_similar_to_idx")
+
+            if intra_batch_count > 0:
+                logger.info(f"Resolved {intra_batch_count} intra-batch duplicates")
 
             # Record creation events
             from services.item_events import record_event, EVENT_CREATED
@@ -351,12 +492,14 @@ class Pipeline:
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
             if self.relevance_filter and not self.training_mode:
+                indexed_ids = []
                 try:
+                    # Strip boilerplate before indexing to improve duplicate detection quality
                     items_to_index = [
                         {
                             "id": str(item.id),
-                            "title": item.title,
-                            "content": item.content,
+                            "title": _strip_boilerplate(item.title),
+                            "content": _strip_boilerplate(item.content),
                             "metadata": {
                                 "source": channel.source.name if channel.source else "",
                                 "priority": _get_priority_value(item.priority) if item.priority else None,
@@ -368,8 +511,22 @@ class Pipeline:
                     indexed = await self.relevance_filter.index_items_batch(items_to_index)
                     if indexed > 0:
                         logger.info(f"Indexed {indexed} items in vector store")
+                        # Track which items were indexed (batch indexing is all-or-nothing)
+                        indexed_ids = [item.id for item in new_items]
                 except Exception as e:
                     logger.warning(f"Failed to index items in vector store: {e}")
+
+                # Update vectordb_indexed flag for successfully indexed items
+                if indexed_ids:
+                    try:
+                        for item in new_items:
+                            if item.id in indexed_ids:
+                                item.metadata_ = item.metadata_ or {}
+                                item.metadata_["vectordb_indexed"] = True
+                                item.metadata_["vectordb_indexed_at"] = datetime.utcnow().isoformat()
+                        await self.db.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to update vectordb_indexed flags: {e}")
 
             # 10. Enqueue fresh items to LLM worker for immediate processing
             if not self.training_mode:

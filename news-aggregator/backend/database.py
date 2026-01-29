@@ -3,7 +3,6 @@
 PostgreSQL-only database configuration.
 """
 
-import asyncio
 import json
 import os
 from collections.abc import AsyncGenerator
@@ -73,9 +72,15 @@ def json_array_overlaps(column: Any, values: list[str]) -> ColumnElement:
     return or_(*[json_array_contains(column, v) for v in values])
 
 
-# Global lock for serializing database writes in parallel fetch scenarios
-# This allows network I/O to run in parallel while database writes are serialized
-db_write_lock = asyncio.Lock()
+# DEPRECATED: db_write_lock removed as part of concurrency optimization
+# PostgreSQL handles concurrent writes via MVCC - no application-level locking needed
+# See: https://github.com/claymore666/liga-hessen-news-aggregator/issues/118
+#
+# The previous global asyncio.Lock() was serializing ALL database writes across
+# the entire application, defeating async parallelism. This was removed because:
+# 1. PostgreSQL MVCC handles concurrent writes properly
+# 2. The lock was causing connection starvation under load
+# 3. SQLAlchemy's session-per-request model already provides isolation
 
 # PostgreSQL connection pool settings
 engine = create_async_engine(

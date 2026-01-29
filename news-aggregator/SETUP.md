@@ -162,6 +162,8 @@ The backend container uses a macvlan network to send Wake-on-LAN packets:
 
 ### Deployment Commands
 
+#### docker-ai (Production) - Workers ENABLED
+
 ```bash
 # SSH to production
 ssh kamienc@192.168.0.124
@@ -172,8 +174,7 @@ cd /home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator
 # Pull latest changes
 git pull origin dev
 
-# Rebuild and restart (after code changes)
-docker compose -f docker-compose.prod.yml down
+# Rebuild and restart (workers enabled by default)
 docker compose -f docker-compose.prod.yml up -d --build
 
 # Quick restart (no rebuild)
@@ -186,6 +187,36 @@ docker logs -f liga-news-frontend
 # Check status
 docker ps | grep liga-news
 ```
+
+#### gpu1 (QA/Testing) - Workers DISABLED
+
+```bash
+# On gpu1 (192.168.0.141)
+cd /home/kamienc/claude.ai/ligahessen/news-aggregator
+
+# Pull latest changes
+git pull origin dev
+
+# Deploy with workers DISABLED for QA testing
+SCHEDULER_ENABLED=false LLM_WORKER_ENABLED=false CLASSIFIER_WORKER_ENABLED=false \
+  docker compose up -d --build
+
+# To enable workers temporarily for testing:
+SCHEDULER_ENABLED=true LLM_WORKER_ENABLED=true CLASSIFIER_WORKER_ENABLED=true \
+  docker compose up -d
+```
+
+#### Worker Control Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER_ENABLED` | `true` | Enable/disable background fetch scheduler |
+| `LLM_WORKER_ENABLED` | `true` | Enable/disable LLM processing worker |
+| `CLASSIFIER_WORKER_ENABLED` | `true` | Enable/disable ML classifier worker |
+
+**Default deployment configuration:**
+- **docker-ai (production)**: All workers ENABLED (default)
+- **gpu1 (QA/testing)**: All workers DISABLED to avoid interference with production
 
 ### Database Operations
 

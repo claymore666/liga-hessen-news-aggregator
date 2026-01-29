@@ -7,11 +7,12 @@ This package contains admin endpoints split by concern:
 - logs: Application log viewing
 - workers: Scheduler and worker control
 - housekeeping: Data retention and cleanup
+- gpu1: GPU1 power management status
 """
 
 from fastapi import APIRouter
 
-from . import health, housekeeping, items, logs, stats, workers
+from . import gpu1, health, housekeeping, items, logs, stats, workers
 
 # Re-export commonly used items from submodules
 from .housekeeping import (
@@ -29,9 +30,11 @@ router.include_router(stats.router)
 router.include_router(logs.router)
 router.include_router(workers.router)
 router.include_router(housekeeping.router)
+router.include_router(gpu1.router)
 
 __all__ = [
     "router",
+    "gpu1",
     "health",
     "housekeeping",
     "items",

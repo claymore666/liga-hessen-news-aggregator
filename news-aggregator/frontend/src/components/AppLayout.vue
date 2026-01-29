@@ -14,6 +14,7 @@ import {
   ChevronRightIcon
 } from '@heroicons/vue/24/outline'
 import { useUiStore } from '@/stores'
+import SystemAlerts from './SystemAlerts.vue'
 
 const route = useRoute()
 const uiStore = useUiStore()
@@ -145,6 +146,7 @@ const isActive = (path: string) => {
       </div>
 
       <main class="p-4 lg:p-6">
+        <SystemAlerts />
         <slot />
       </main>
     </div>

@@ -213,6 +213,37 @@ TimeoutError: Browser timeout
 - Try increasing timeout in config
 - Check Playwright browsers installed
 
+```
+BrowserType.launch: Failed to launch: Error: spawn ... EAGAIN
+```
+- **Cause**: Container PID limit exhausted (cgroup accounting)
+- Each Chromium browser spawns ~100 PIDs (main + zygote + GPU + network + renderer + audio)
+- With 4 concurrent browsers = ~400 PIDs during operation
+- **Fix**: Restart backend container to reset cgroup accounting
+  ```bash
+  docker compose -f docker-compose.prod.yml restart backend
+  ```
+- **Prevention**: `pids_limit: 1000` in docker-compose.prod.yml provides headroom
+
+```
+net::ERR_TUNNEL_CONNECTION_FAILED
+```
+- **Cause**: Proxy doesn't support HTTPS CONNECT tunneling
+- Most free HTTP proxies only support plain HTTP, not HTTPS tunneling
+- X.com requires HTTPS, so these proxies fail to establish the tunnel
+- **Solution**: The proxy manager now tests HTTPS tunnel capability and maintains a separate pool of HTTPS-capable proxies
+- X scraper requests HTTPS proxies via `checkout_proxy(prefer_https=True)`
+- Falls back to direct connection if no HTTPS proxies available
+- Check HTTPS proxy status: `curl http://localhost:8000/api/admin/proxies | jq '.https_count'`
+
+```
+Target page, context or browser has been closed
+```
+- **Cause**: Browser pool driver crashed or restarted during operation
+- Cascade failure: one crash affects all pending requests
+- Usually recovers automatically on next fetch cycle
+- If persistent, restart backend container
+
 #### Mastodon
 ```
 401 Unauthorized

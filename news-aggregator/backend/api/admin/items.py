@@ -36,6 +36,30 @@ class ClassifyResponse(BaseModel):
     message: str
 
 
+async def _cleanup_vector_indexes(item_ids: list[int]) -> None:
+    """Clean up items from vector indexes (search + duplicate).
+
+    Args:
+        item_ids: List of item IDs to delete from indexes
+    """
+    if not item_ids:
+        return
+
+    from services.relevance_filter import create_relevance_filter
+
+    try:
+        relevance_filter = await create_relevance_filter()
+        if relevance_filter:
+            str_ids = [str(id) for id in item_ids]
+            deleted_search, deleted_dup = await relevance_filter.delete_items(str_ids)
+            logger.info(
+                f"Vector index cleanup: {deleted_search} from search, "
+                f"{deleted_dup} from duplicate index"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to clean up vector indexes: {e}")
+
+
 @router.delete("/admin/items", response_model=DeleteItemsResponse)
 async def delete_all_items(
     db: AsyncSession = Depends(get_db),
@@ -43,13 +67,21 @@ async def delete_all_items(
     """Delete all items from the database.
 
     Use this to clear items before a fresh refetch with LLM analysis.
+    Also cleans up vector indexes.
     """
-    count = await db.scalar(select(func.count(Item.id)))
-    await db.execute(delete(Item))
+    # Collect all item IDs first
+    result = await db.execute(select(Item.id))
+    item_ids = [row[0] for row in result.fetchall()]
 
+    if item_ids:
+        # Clean up vector indexes before deleting from DB
+        await _cleanup_vector_indexes(item_ids)
+        await db.execute(delete(Item))
+
+    count = len(item_ids)
     logger.info(f"Deleted {count} items via admin API")
     return DeleteItemsResponse(
-        deleted_count=count or 0,
+        deleted_count=count,
         message=f"Deleted {count} items"
     )
 
@@ -61,17 +93,25 @@ async def delete_old_items(
 ) -> DeleteItemsResponse:
     """Delete items older than the specified number of days.
 
-    Starred items are preserved.
+    Starred items are preserved. Also cleans up vector indexes.
     """
     cutoff = datetime.utcnow() - timedelta(days=days)
 
-    stmt = delete(Item).where(
-        Item.fetched_at < cutoff,
-        Item.is_starred == False,  # noqa: E712
+    # Collect IDs first
+    result = await db.execute(
+        select(Item.id).where(
+            Item.fetched_at < cutoff,
+            Item.is_starred == False,  # noqa: E712
+        )
     )
-    result = await db.execute(stmt)
+    item_ids = [row[0] for row in result.fetchall()]
 
-    deleted = result.rowcount
+    if item_ids:
+        await _cleanup_vector_indexes(item_ids)
+        stmt = delete(Item).where(Item.id.in_(item_ids))
+        await db.execute(stmt)
+
+    deleted = len(item_ids)
     logger.info(f"Deleted {deleted} items older than {days} days")
     return DeleteItemsResponse(
         deleted_count=deleted,
@@ -86,7 +126,7 @@ async def delete_items_by_source(
 ) -> DeleteItemsResponse:
     """Delete all items from a specific source.
 
-    Starred items are preserved.
+    Starred items are preserved. Also cleans up vector indexes.
     """
     # Verify source exists
     source = await db.scalar(select(Source).where(Source.id == source_id))
@@ -104,14 +144,21 @@ async def delete_items_by_source(
             message=f"No channels found for source '{source.name}'",
         )
 
-    # Delete items belonging to those channels
-    stmt = delete(Item).where(
-        Item.channel_id.in_(channel_ids),
-        Item.is_starred == False,  # noqa: E712
+    # Collect item IDs first
+    result = await db.execute(
+        select(Item.id).where(
+            Item.channel_id.in_(channel_ids),
+            Item.is_starred == False,  # noqa: E712
+        )
     )
-    result = await db.execute(stmt)
+    item_ids = [row[0] for row in result.fetchall()]
 
-    deleted = result.rowcount
+    if item_ids:
+        await _cleanup_vector_indexes(item_ids)
+        stmt = delete(Item).where(Item.id.in_(item_ids))
+        await db.execute(stmt)
+
+    deleted = len(item_ids)
     logger.info(f"Deleted {deleted} items from source {source_id}")
     return DeleteItemsResponse(
         deleted_count=deleted,
@@ -125,15 +172,23 @@ async def delete_low_priority_items(
 ) -> DeleteItemsResponse:
     """Delete all LOW priority items.
 
-    Starred items are preserved.
+    Starred items are preserved. Also cleans up vector indexes.
     """
-    stmt = delete(Item).where(
-        Item.priority == Priority.NONE,
-        Item.is_starred == False,  # noqa: E712
+    # Collect IDs first
+    result = await db.execute(
+        select(Item.id).where(
+            Item.priority == Priority.NONE,
+            Item.is_starred == False,  # noqa: E712
+        )
     )
-    result = await db.execute(stmt)
+    item_ids = [row[0] for row in result.fetchall()]
 
-    deleted = result.rowcount
+    if item_ids:
+        await _cleanup_vector_indexes(item_ids)
+        stmt = delete(Item).where(Item.id.in_(item_ids))
+        await db.execute(stmt)
+
+    deleted = len(item_ids)
     logger.info(f"Deleted {deleted} low-priority items")
     return DeleteItemsResponse(
         deleted_count=deleted,

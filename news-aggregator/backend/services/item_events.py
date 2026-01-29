@@ -57,3 +57,34 @@ async def record_event(
     # Flushing inside a loop causes greenlet_spawn errors.
     logger.debug(f"Recorded event {event_type} for item {item_id}")
     return event
+
+
+def record_events_batch(
+    db: AsyncSession,
+    events_data: list[dict[str, Any]],
+) -> list[ItemEvent]:
+    """
+    Record multiple events in a batch (synchronous add_all).
+
+    Args:
+        db: Database session
+        events_data: List of dicts with keys: item_id, event_type, data (optional),
+                     ip_address (optional), session_id (optional)
+
+    Returns:
+        List of created ItemEvent objects
+    """
+    events = []
+    for ed in events_data:
+        event = ItemEvent(
+            item_id=ed["item_id"],
+            event_type=ed["event_type"],
+            data=ed.get("data"),
+            ip_address=ed.get("ip_address"),
+            session_id=ed.get("session_id"),
+        )
+        events.append(event)
+
+    db.add_all(events)
+    logger.debug(f"Recorded {len(events)} events in batch")
+    return events
