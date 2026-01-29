@@ -30,11 +30,10 @@ async def backfill():
         logger.error("LLM processor not available (is Ollama running?)")
         return
 
+    # Get candidate IDs first (light query)
     async with async_session_maker() as db:
-        # Find items from today with llm_analysis but no topics
         query = (
-            select(Item)
-            .options(selectinload(Item.channel).selectinload(Channel.source))
+            select(Item.id)
             .where(
                 Item.published_at >= sql_text("CURRENT_DATE - INTERVAL '30 days'"),
                 Item.similar_to_id.is_(None),
@@ -43,17 +42,31 @@ async def backfill():
             .order_by(Item.published_at.desc())
         )
         result = await db.execute(query)
-        items = result.scalars().all()
+        all_ids = [row[0] for row in result.fetchall()]
 
-        candidates = []
-        for item in items:
+    logger.info(f"Found {len(all_ids)} candidate items, filtering those needing topics...")
+
+    # Process one at a time, committing each to avoid losing work
+    processed = 0
+    skipped = 0
+    errors = 0
+
+    for item_id in all_ids:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(Item)
+                .where(Item.id == item_id)
+                .options(selectinload(Item.channel).selectinload(Channel.source))
+            )
+            item = result.scalar_one_or_none()
+            if not item:
+                continue
+
             llm = (item.metadata_ or {}).get("llm_analysis", {})
-            if llm and not llm.get("topics"):
-                candidates.append(item)
+            if not llm or llm.get("topics"):
+                skipped += 1
+                continue
 
-        logger.info(f"Found {len(candidates)} items to backfill topics for")
-
-        for item in candidates:
             source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
             date_str = item.published_at.strftime("%Y-%m-%d") if item.published_at else "Unbekannt"
 
@@ -62,16 +75,13 @@ Inhalt: {item.content[:6000]}
 Quelle: {source_name}
 Datum: {date_str}"""
 
-            # Reconstruct conversation: system + user + assistant (using existing summary as stand-in)
-            llm_analysis = item.metadata_.get("llm_analysis", {})
-            # Build a fake assistant response from stored analysis
             assistant_json = json.dumps({
                 "summary": item.summary or "",
                 "relevant": True,
-                "priority": llm_analysis.get("priority_suggestion"),
-                "assigned_aks": llm_analysis.get("assigned_aks", []),
-                "tags": llm_analysis.get("tags", []),
-                "reasoning": llm_analysis.get("reasoning", ""),
+                "priority": llm.get("priority_suggestion"),
+                "assigned_aks": llm.get("assigned_aks", []),
+                "tags": llm.get("tags", []),
+                "reasoning": llm.get("reasoning", ""),
             }, ensure_ascii=False)
 
             conversation = [
@@ -85,14 +95,17 @@ Datum: {date_str}"""
                 if topics:
                     item.metadata_["llm_analysis"]["topics"] = topics
                     flag_modified(item, "metadata_")
-                    logger.info(f"  [{item.id}] {item.title[:50]}... -> {topics}")
+                    await db.commit()
+                    processed += 1
+                    logger.info(f"  [{processed}] [{item.id}] {item.title[:50]}... -> {topics}")
                 else:
+                    skipped += 1
                     logger.warning(f"  [{item.id}] No topics returned")
             except Exception as e:
+                errors += 1
                 logger.error(f"  [{item.id}] Failed: {e}")
 
-        await db.commit()
-        logger.info("Backfill complete")
+    logger.info(f"Backfill complete: {processed} processed, {skipped} skipped, {errors} errors")
 
 
 if __name__ == "__main__":

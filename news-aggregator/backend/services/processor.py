@@ -375,11 +375,18 @@ Antworte NUR mit JA oder NEIN."""
             "role": "user",
             "content": (
                 "Gib 1-2 kurze Themen-Labels für diesen Artikel. "
-                "Die Labels sollen andere Artikel zum GLEICHEN Thema gruppieren. "
-                "2-3 Wörter, KEINE Jahreszahlen, KEINE Eigennamen von Personen.\n\n"
-                "GUTE Labels: Teilzeitdebatte, Kita-Personalmangel, Pflegekosten-Anstieg, Bürgergeld-Reform, Krankenhausreform\n"
-                "SCHLECHTE Labels: Pflege, Migration, Sozialpolitik (zu generisch), "
-                "Pflegeabteilung-JVA-Wittlich-2026 (zu spezifisch, kein anderer Artikel matcht)\n\n"
+                "Die Labels sollen Artikel zum GLEICHEN konkreten Thema gruppieren. "
+                "Jedes Label MUSS 2-4 Wörter haben. KEINE Jahreszahlen.\n\n"
+                "VERBOTEN (ein Wort allein): Pflege, Migration, Digitalisierung, Gesundheit, "
+                "Fachkräftemangel, Integration, Inklusion, Sozialpolitik, Finanzierung, "
+                "Wohnen, Armut, Reform, Bildung, Asylpolitik, Pflegekosten, Senioren, "
+                "Pflegeausbildung, Pflegeberatung, Arbeitslosigkeit, Grundsicherung, "
+                "Barrierefreiheit, Ausbildung, Gesetzgebung, Förderung, Blutspende, Weiterbildung\n\n"
+                "GUTE Labels: Kita-Personalmangel Hessen, Pflegekosten-Eigenanteil Anstieg, "
+                "Bürgergeld-Sanktionsverschärfung, Krankenhausreform Bettenabbau, "
+                "Pflegekräfte-Tarifstreit Diakonie\n"
+                "SCHLECHTE Labels: Pflege, Migration, Digitalisierung, Fachkräftemangel "
+                "(zu generisch - passt auf hunderte Artikel)\n\n"
                 "Antwort NUR als JSON: {\"topics\": [\"Label1\", \"Label2\"]}"
             ),
         }
