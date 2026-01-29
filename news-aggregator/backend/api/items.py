@@ -257,7 +257,9 @@ async def get_items_by_topic(
     from sqlalchemy import text as sql_text
 
     if since:
-        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        # Strip timezone for naive timestamp columns
+        since_dt = parsed.replace(tzinfo=None)
     else:
         since_dt = datetime.utcnow() - timedelta(days=days)
 
