@@ -605,13 +605,13 @@ class Pipeline:
         query = select(Item.id).where(
             Item.channel_id == channel_id,
             Item.external_id == external_id,
-        )
+        ).limit(1)
         result = await self.db.execute(query)
         if result.scalar_one_or_none() is not None:
             return True
 
         # Check by content hash (catches reposts/copies)
-        query = select(Item.id).where(Item.content_hash == content_hash)
+        query = select(Item.id).where(Item.content_hash == content_hash).limit(1)
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
 
