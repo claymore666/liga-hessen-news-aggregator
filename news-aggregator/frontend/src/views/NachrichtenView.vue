@@ -22,7 +22,7 @@ const uiStore = useUiStore()
 const gridColumns = computed(() => uiStore.messageListGridColumns)
 
 // View mode: 'date' (default) or 'topic'
-const viewMode = ref<'date' | 'topic'>('date')
+const viewMode = ref<'date' | 'topic'>('topic')
 const topicGroups = ref<TopicGroup[]>([])
 const topicUngroupedItems = ref<TopicItemBrief[]>([])
 const topicLoading = ref(false)
@@ -332,7 +332,7 @@ watch(
 )
 
 onMounted(async () => {
-  await Promise.all([loadItems(), sourcesStore.fetchSources()])
+  await Promise.all([loadItems(), loadTopics(), sourcesStore.fetchSources()])
 })
 </script>
 
