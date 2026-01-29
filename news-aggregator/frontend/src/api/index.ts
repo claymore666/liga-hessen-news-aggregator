@@ -58,7 +58,30 @@ export const itemsApi = {
   archive: (id: number) => api.post<{ status: string; is_archived: boolean }>(`/items/${id}/archive`),
   bulkArchive: (ids: number[], is_archived: boolean = true) =>
     api.post<{ archived: number; item_ids: number[] }>('/items/bulk-archive', { ids, is_archived }),
-  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`)
+  getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`),
+  byTopic: (params?: { days?: number; min_group_size?: number }) =>
+    api.get<TopicGroupsResponse>('/items/by-topic', { params })
+}
+
+// Topic grouping types
+export interface TopicItemBrief {
+  id: number
+  title: string
+  url: string
+  priority: string
+  source_name: string | null
+  published_at: string | null
+  summary: string | null
+}
+
+export interface TopicGroup {
+  topic: string
+  items: TopicItemBrief[]
+}
+
+export interface TopicGroupsResponse {
+  topics: TopicGroup[]
+  ungrouped_count: number
 }
 
 export const rulesApi = {

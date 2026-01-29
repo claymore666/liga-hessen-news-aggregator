@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel
-from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief
+from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief, TopicGroupsResponse, TopicGroup, TopicItemBrief
 
 
 class BulkUpdateRequest(BaseModel):
@@ -238,6 +238,95 @@ async def get_retry_queue_stats(
         "by_priority": by_priority,
         "order": ["high", "unknown", "edge_case", "low"],
     }
+
+
+@router.get("/items/by-topic", response_model=TopicGroupsResponse)
+async def get_items_by_topic(
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(7, ge=1, le=90, description="Look back N days"),
+    min_group_size: int = Query(2, ge=2, le=10, description="Minimum items per topic group"),
+) -> TopicGroupsResponse:
+    """Get items grouped by LLM-extracted topic keywords.
+
+    Only returns topic groups with at least min_group_size items.
+    Items that don't belong to any multi-item topic are counted as ungrouped.
+    """
+    from datetime import timedelta
+    from collections import defaultdict
+    from sqlalchemy import text as sql_text
+
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # Query items that have topics in metadata, using jsonb_array_elements_text
+    # to unnest the topics array and group by topic
+    raw_query = sql_text("""
+        SELECT
+            topic,
+            i.id,
+            i.title,
+            i.url,
+            i.priority,
+            i.published_at,
+            i.summary,
+            s.name as source_name
+        FROM items i
+        LEFT JOIN channels c ON i.channel_id = c.id
+        LEFT JOIN sources s ON c.source_id = s.id
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            (i.metadata::jsonb)->'llm_analysis'->'topics'
+        ) AS topic
+        WHERE i.published_at >= :since
+          AND i.similar_to_id IS NULL
+          AND i.is_archived = false
+          AND i.priority != 'none'
+          AND jsonb_typeof((i.metadata::jsonb)->'llm_analysis'->'topics') = 'array'
+        ORDER BY topic, i.published_at DESC
+    """)
+
+    result = await db.execute(raw_query, {"since": since})
+    rows = result.fetchall()
+
+    # Group by topic
+    topic_items: dict[str, list[TopicItemBrief]] = defaultdict(list)
+    seen_per_topic: dict[str, set[int]] = defaultdict(set)
+
+    for row in rows:
+        topic, item_id, title, url, priority, published_at, summary, source_name = row
+        if item_id not in seen_per_topic[topic]:
+            seen_per_topic[topic].add(item_id)
+            topic_items[topic].append(TopicItemBrief(
+                id=item_id,
+                title=title,
+                url=url,
+                priority=priority,
+                source_name=source_name,
+                published_at=published_at,
+                summary=summary,
+            ))
+
+    # Filter to groups with enough items
+    groups = []
+    grouped_item_ids: set[int] = set()
+    for topic, items in sorted(topic_items.items(), key=lambda x: -len(x[1])):
+        if len(items) >= min_group_size:
+            groups.append(TopicGroup(topic=topic, items=items))
+            for item in items:
+                grouped_item_ids.add(item.id)
+
+    # Count ungrouped items (items from the period that aren't in any group)
+    total_query = select(func.count()).where(
+        Item.published_at >= since,
+        Item.similar_to_id.is_(None),
+        Item.is_archived == False,  # noqa: E712
+        Item.priority != Priority.NONE,
+    )
+    total = await db.scalar(total_query) or 0
+    ungrouped_count = total - len(grouped_item_ids)
+
+    return TopicGroupsResponse(
+        topics=groups,
+        ungrouped_count=max(0, ungrouped_count),
+    )
 
 
 @router.post("/items/retry-queue/process")

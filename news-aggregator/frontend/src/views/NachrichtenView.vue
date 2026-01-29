@@ -2,11 +2,14 @@
 import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
-import { ArrowPathIcon } from '@heroicons/vue/24/outline'
+import { ArrowPathIcon, QueueListIcon, TagIcon } from '@heroicons/vue/24/outline'
 import FilterBar from '@/components/nachrichten/FilterBar.vue'
 import MessageList from '@/components/nachrichten/MessageList.vue'
+import TopicList from '@/components/nachrichten/TopicList.vue'
 import MessageDetail from '@/components/nachrichten/MessageDetail.vue'
 import FeedbackPanel from '@/components/nachrichten/FeedbackPanel.vue'
+import { itemsApi } from '@/api'
+import type { TopicGroup } from '@/api'
 import type { Priority } from '@/types'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 
@@ -17,6 +20,33 @@ const uiStore = useUiStore()
 
 // Grid columns: 1/3-2/3 when sidebar collapsed, fixed 400px otherwise
 const gridColumns = computed(() => uiStore.messageListGridColumns)
+
+// View mode: 'date' (default) or 'topic'
+const viewMode = ref<'date' | 'topic'>('date')
+const topicGroups = ref<TopicGroup[]>([])
+const topicUngroupedCount = ref(0)
+const topicLoading = ref(false)
+
+const loadTopics = async () => {
+  topicLoading.value = true
+  try {
+    const { data } = await itemsApi.byTopic({ days: 7 })
+    topicGroups.value = data.topics
+    topicUngroupedCount.value = data.ungrouped_count
+  } catch (e) {
+    console.error('Failed to load topics:', e)
+    topicGroups.value = []
+  } finally {
+    topicLoading.value = false
+  }
+}
+
+const switchViewMode = (mode: 'date' | 'topic') => {
+  viewMode.value = mode
+  if (mode === 'topic') {
+    loadTopics()
+  }
+}
 
 const page = ref(1)
 const pageSize = 50
@@ -296,18 +326,46 @@ onMounted(async () => {
     <!-- Header -->
     <div class="flex items-center justify-between mb-3">
       <h1 class="text-xl font-bold text-gray-900">Nachrichten</h1>
-      <button
-        type="button"
-        class="btn btn-primary text-sm"
-        :disabled="itemsStore.loading"
-        @click="loadItems"
-      >
-        <ArrowPathIcon
-          class="mr-1.5 h-4 w-4"
-          :class="{ 'animate-spin': itemsStore.loading }"
-        />
-        Aktualisieren
-      </button>
+      <div class="flex items-center gap-2">
+        <!-- View mode toggle -->
+        <div class="inline-flex rounded-md shadow-sm">
+          <button
+            type="button"
+            class="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-l-md border"
+            :class="viewMode === 'date'
+              ? 'bg-blue-600 text-white border-blue-600'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'"
+            @click="switchViewMode('date')"
+          >
+            <QueueListIcon class="h-3.5 w-3.5 mr-1" />
+            Datum
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-r-md border border-l-0"
+            :class="viewMode === 'topic'
+              ? 'bg-blue-600 text-white border-blue-600'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'"
+            @click="switchViewMode('topic')"
+          >
+            <TagIcon class="h-3.5 w-3.5 mr-1" />
+            Thema
+          </button>
+        </div>
+
+        <button
+          type="button"
+          class="btn btn-primary text-sm"
+          :disabled="itemsStore.loading"
+          @click="viewMode === 'topic' ? loadTopics() : loadItems()"
+        >
+          <ArrowPathIcon
+            class="mr-1.5 h-4 w-4"
+            :class="{ 'animate-spin': itemsStore.loading || topicLoading }"
+          />
+          Aktualisieren
+        </button>
+      </div>
     </div>
 
     <!-- Two-column layout (stacked on mobile, side-by-side on lg+) -->
@@ -335,11 +393,20 @@ onMounted(async () => {
         />
 
         <!-- Loading -->
-        <div v-if="itemsStore.loading && itemsStore.items.length === 0" class="flex items-center justify-center py-6 bg-blue-100 flex-1">
+        <div v-if="(viewMode === 'date' && itemsStore.loading && itemsStore.items.length === 0) || (viewMode === 'topic' && topicLoading)" class="flex items-center justify-center py-6 bg-blue-100 flex-1">
           <ArrowPathIcon class="h-6 w-6 animate-spin text-blue-500" />
         </div>
 
-        <!-- Message List -->
+        <!-- Topic List (topic view mode) -->
+        <TopicList
+          v-else-if="viewMode === 'topic'"
+          :topics="topicGroups"
+          :ungrouped-count="topicUngroupedCount"
+          :selected-id="selectedItemId"
+          @select="selectItem"
+        />
+
+        <!-- Message List (date view mode) -->
         <MessageList
           v-else
           :items="itemsStore.items"

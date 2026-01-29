@@ -120,6 +120,53 @@ class OpenRouterProvider(BaseLLMProvider):
             },
         )
 
+    async def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Generate completion from a full messages list."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.site_url:
+            headers["HTTP-Referer"] = self.site_url
+        if self.site_name:
+            headers["X-Title"] = self.site_name
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                OPENROUTER_API_URL,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        usage = data.get("usage", {})
+        return LLMResponse(
+            text=data["choices"][0]["message"]["content"],
+            model=data.get("model", self.model),
+            tokens_used=usage.get("total_tokens"),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            metadata={
+                "provider": self.provider_name,
+                "id": data.get("id"),
+                "finish_reason": data["choices"][0].get("finish_reason"),
+            },
+        )
+
     async def is_available(self) -> bool:
         """Check if OpenRouter is accessible.
 

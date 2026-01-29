@@ -481,8 +481,19 @@ class LLMWorker:
                         f"Duplicate confirmation: {duplicate_confirmed} - {duplicate_reasoning}"
                     )
 
-                # 2b. Main item analysis
-                analysis = await processor.analyze_from_data(item_data)
+                # 2b. Main item analysis (with conversation messages for topic extraction)
+                analysis, conversation_messages = await processor.analyze_from_data_with_messages(item_data)
+
+                # 2c. Topic extraction via follow-up chat turn
+                topics = []
+                if analysis.get("relevant") is not False:
+                    try:
+                        topics = await processor.extract_topics(conversation_messages)
+                        if topics:
+                            logger.debug(f"Extracted topics for item {item_id}: {topics}")
+                    except Exception as topic_err:
+                        logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
+
                 elapsed = time.time() - start_time
                 async with self._stats_lock:
                     self._stats["total_processing_time"] += elapsed
@@ -526,6 +537,7 @@ class LLMWorker:
                     "assigned_aks": llm_aks,
                     "assigned_ak": llm_aks[0] if llm_aks else None,
                     "tags": analysis.get("tags", []),
+                    "topics": topics,
                     "reasoning": analysis.get("reasoning"),
                     "processed_at": datetime.utcnow().isoformat(),
                     "source": "llm_worker",

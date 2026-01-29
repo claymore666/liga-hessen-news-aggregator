@@ -282,6 +282,47 @@ Datum: {date_str}"""
             logger.error(f"Analysis from data failed: {e}")
             return self._default_analysis()
 
+    async def analyze_from_data_with_messages(self, item_data: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
+        """Analyze item and return both the result and the conversation messages.
+
+        Same as analyze_from_data() but also returns the messages list so
+        callers can continue the conversation (e.g. for topic extraction).
+
+        Returns:
+            Tuple of (analysis_result, messages_list)
+        """
+        title = item_data.get("title", "")
+        content = item_data.get("content", "")[:6000]
+        source_name = item_data.get("source_name", "Unbekannt")
+        published_at = item_data.get("published_at")
+        date_str = published_at.strftime("%Y-%m-%d") if published_at else "Unbekannt"
+
+        prompt = f"""Titel: {title}
+Inhalt: {content}
+Quelle: {source_name}
+Datum: {date_str}"""
+
+        messages = [
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = await self.llm.complete(
+                prompt,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=6000,
+            )
+            analysis = self._parse_analysis_response(response)
+            # Build full conversation for follow-up
+            conversation = messages + [{"role": "assistant", "content": response.text}]
+            return analysis, conversation
+
+        except Exception as e:
+            logger.error(f"Analysis from data (with messages) failed: {e}")
+            return self._default_analysis(), messages
+
     async def check_semantic_rule(self, item: Item, rule: Rule) -> bool:
         """Check if item matches a semantic (LLM-based) rule.
 
@@ -317,6 +358,59 @@ Antworte NUR mit JA oder NEIN."""
         except Exception as e:
             logger.error(f"Semantic rule check failed: {e}")
             return False
+
+    async def extract_topics(self, conversation_messages: list[dict]) -> list[str]:
+        """Extract topic keywords via a follow-up chat turn.
+
+        Takes the conversation from the initial analysis (system + user + assistant)
+        and appends a follow-up request for topic keywords.
+
+        Args:
+            conversation_messages: Messages from the analysis conversation
+
+        Returns:
+            List of 1-2 topic keyword strings
+        """
+        follow_up = {
+            "role": "user",
+            "content": (
+                "Based on the article you just analyzed, assign 1-2 specific topic keywords "
+                "for grouping similar articles. Be specific (e.g. 'Kita-Finanzierung Hessen' "
+                "not 'Kita'). Return JSON: {\"topics\": [\"topic1\", \"topic2\"]}"
+            ),
+        }
+        messages = conversation_messages + [follow_up]
+
+        try:
+            response = await self.llm.chat(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=200,
+            )
+            text = response.text.strip()
+
+            # Remove markdown code blocks
+            if text.startswith("```"):
+                lines = text.split("\n")
+                lines = [line for line in lines if not line.strip().startswith("```")]
+                text = "\n".join(lines).strip()
+
+            if not text:
+                logger.warning("Empty response for topic extraction")
+                return []
+
+            result = json.loads(text)
+            topics = result.get("topics", [])
+            if isinstance(topics, list):
+                return [t for t in topics if isinstance(t, str) and t.strip()][:2]
+            return []
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse topic extraction response: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Topic extraction failed: {e}")
+            return []
 
     def calculate_keyword_score(self, item: Item) -> tuple[int, Priority]:
         """Calculate priority score based on keyword matches.

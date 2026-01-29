@@ -208,6 +208,35 @@ class BulkArchiveResponse(BaseModel):
     item_ids: list[int]  # All affected item IDs (including duplicates)
 
 
+# === Topic grouping schemas ===
+
+
+class TopicItemBrief(BaseModel):
+    """Brief item info for topic grouping."""
+
+    id: int
+    title: str
+    url: str
+    priority: Priority
+    source_name: str | None = None
+    published_at: datetime | None = None
+    summary: str | None = None
+
+
+class TopicGroup(BaseModel):
+    """A group of items sharing a topic."""
+
+    topic: str
+    items: list[TopicItemBrief]
+
+
+class TopicGroupsResponse(BaseModel):
+    """Response for topic-grouped items."""
+
+    topics: list[TopicGroup]
+    ungrouped_count: int = 0
+
+
 # === Rule schemas ===
 
 
