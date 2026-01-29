@@ -235,6 +235,7 @@ class TopicGroupsResponse(BaseModel):
 
     topics: list[TopicGroup]
     ungrouped_count: int = 0
+    ungrouped_items: list[TopicItemBrief] = Field(default_factory=list)
 
 
 # === Rule schemas ===

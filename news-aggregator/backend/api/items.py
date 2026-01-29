@@ -243,23 +243,34 @@ async def get_retry_queue_stats(
 @router.get("/items/by-topic", response_model=TopicGroupsResponse)
 async def get_items_by_topic(
     db: AsyncSession = Depends(get_db),
-    days: int = Query(7, ge=1, le=90, description="Look back N days"),
+    since: str | None = Query(None, description="ISO datetime cutoff (e.g. 2026-01-28T00:00:00)"),
+    days: int = Query(7, ge=1, le=90, description="Fallback: look back N days (used if since is not set)"),
     min_group_size: int = Query(2, ge=2, le=10, description="Minimum items per topic group"),
 ) -> TopicGroupsResponse:
     """Get items grouped by LLM-extracted topic keywords.
 
-    Only returns topic groups with at least min_group_size items.
-    Items that don't belong to any multi-item topic are counted as ungrouped.
+    Returns topic groups with at least min_group_size items, plus all
+    ungrouped items under a separate list.
     """
     from datetime import timedelta
     from collections import defaultdict
     from sqlalchemy import text as sql_text
 
-    since = datetime.utcnow() - timedelta(days=days)
+    if since:
+        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    else:
+        since_dt = datetime.utcnow() - timedelta(days=days)
 
-    # Query items that have topics in metadata, using jsonb_array_elements_text
-    # to unnest the topics array and group by topic
-    raw_query = sql_text("""
+    # Base filter for all relevant items in the period
+    base_where = """
+        i.published_at >= :since
+        AND i.similar_to_id IS NULL
+        AND i.is_archived = false
+        AND i.priority != 'none'
+    """
+
+    # Query items with topics (unnested)
+    raw_query = sql_text(f"""
         SELECT
             topic,
             i.id,
@@ -275,15 +286,12 @@ async def get_items_by_topic(
         CROSS JOIN LATERAL jsonb_array_elements_text(
             (i.metadata::jsonb)->'llm_analysis'->'topics'
         ) AS topic
-        WHERE i.published_at >= :since
-          AND i.similar_to_id IS NULL
-          AND i.is_archived = false
-          AND i.priority != 'none'
+        WHERE {base_where}
           AND jsonb_typeof((i.metadata::jsonb)->'llm_analysis'->'topics') = 'array'
         ORDER BY topic, i.published_at DESC
     """)
 
-    result = await db.execute(raw_query, {"since": since})
+    result = await db.execute(raw_query, {"since": since_dt})
     rows = result.fetchall()
 
     # Group by topic
@@ -313,19 +321,36 @@ async def get_items_by_topic(
             for item in items:
                 grouped_item_ids.add(item.id)
 
-    # Count ungrouped items (items from the period that aren't in any group)
-    total_query = select(func.count()).where(
-        Item.published_at >= since,
-        Item.similar_to_id.is_(None),
-        Item.is_archived == False,  # noqa: E712
-        Item.priority != Priority.NONE,
-    )
-    total = await db.scalar(total_query) or 0
-    ungrouped_count = total - len(grouped_item_ids)
+    # Query ALL items in period to find ungrouped ones
+    all_items_query = sql_text(f"""
+        SELECT i.id, i.title, i.url, i.priority, i.published_at, i.summary, s.name as source_name
+        FROM items i
+        LEFT JOIN channels c ON i.channel_id = c.id
+        LEFT JOIN sources s ON c.source_id = s.id
+        WHERE {base_where}
+        ORDER BY i.published_at DESC
+    """)
+    all_result = await db.execute(all_items_query, {"since": since_dt})
+    all_rows = all_result.fetchall()
+
+    ungrouped_items = []
+    for row in all_rows:
+        item_id, title, url, priority, published_at, summary, source_name = row
+        if item_id not in grouped_item_ids:
+            ungrouped_items.append(TopicItemBrief(
+                id=item_id,
+                title=title,
+                url=url,
+                priority=priority,
+                source_name=source_name,
+                published_at=published_at,
+                summary=summary,
+            ))
 
     return TopicGroupsResponse(
         topics=groups,
-        ungrouped_count=max(0, ungrouped_count),
+        ungrouped_count=len(ungrouped_items),
+        ungrouped_items=ungrouped_items,
     )
 
 

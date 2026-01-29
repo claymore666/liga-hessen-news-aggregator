@@ -59,7 +59,7 @@ export const itemsApi = {
   bulkArchive: (ids: number[], is_archived: boolean = true) =>
     api.post<{ archived: number; item_ids: number[] }>('/items/bulk-archive', { ids, is_archived }),
   getHistory: (id: number) => api.get<ItemEvent[]>(`/items/${id}/history`),
-  byTopic: (params?: { days?: number; min_group_size?: number }) =>
+  byTopic: (params?: { since?: string; days?: number; min_group_size?: number }) =>
     api.get<TopicGroupsResponse>('/items/by-topic', { params })
 }
 
@@ -82,6 +82,7 @@ export interface TopicGroup {
 export interface TopicGroupsResponse {
   topics: TopicGroup[]
   ungrouped_count: number
+  ungrouped_items: TopicItemBrief[]
 }
 
 export const rulesApi = {
