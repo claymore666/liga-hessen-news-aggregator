@@ -374,9 +374,9 @@ Antworte NUR mit JA oder NEIN."""
         follow_up = {
             "role": "user",
             "content": (
-                "Gib 1-2 kurze Themen-Labels für diesen Artikel. "
-                "Die Labels sollen Artikel zum GLEICHEN konkreten Thema gruppieren. "
-                "Jedes Label MUSS 2-4 Wörter haben. KEINE Jahreszahlen.\n\n"
+                "Gib GENAU EIN kurzes Themen-Label für diesen Artikel. "
+                "Das Label soll Artikel zum GLEICHEN konkreten Thema gruppieren. "
+                "Das Label MUSS 2-4 Wörter haben. KEINE Jahreszahlen.\n\n"
                 "VERBOTEN (ein Wort allein): Pflege, Migration, Digitalisierung, Gesundheit, "
                 "Fachkräftemangel, Integration, Inklusion, Sozialpolitik, Finanzierung, "
                 "Wohnen, Armut, Reform, Bildung, Asylpolitik, Pflegekosten, Senioren, "
@@ -387,7 +387,7 @@ Antworte NUR mit JA oder NEIN."""
                 "Pflegekräfte-Tarifstreit Diakonie\n"
                 "SCHLECHTE Labels: Pflege, Migration, Digitalisierung, Fachkräftemangel "
                 "(zu generisch - passt auf hunderte Artikel)\n\n"
-                "Antwort NUR als JSON: {\"topics\": [\"Label1\", \"Label2\"]}"
+                "Antwort NUR als JSON: {\"topics\": [\"Label\"]}"
             ),
         }
         messages = conversation_messages + [follow_up]
@@ -413,7 +413,7 @@ Antworte NUR mit JA oder NEIN."""
             result = json.loads(text)
             topics = result.get("topics", [])
             if isinstance(topics, list):
-                return [t for t in topics if isinstance(t, str) and t.strip()][:2]
+                return [t for t in topics if isinstance(t, str) and t.strip()][:1]
             return []
 
         except json.JSONDecodeError as e:
