@@ -1,5 +1,6 @@
 """API endpoints for dashboard statistics."""
 
+import asyncio
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -22,71 +23,57 @@ async def get_stats(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    # Item counts
-    total_items = await db.scalar(select(func.count(Item.id))) or 0
-    # Relevant items = everything except NONE priority
-    relevant_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority != Priority.NONE)
-    ) or 0
-    unread_items = await db.scalar(
-        select(func.count(Item.id)).where(
+    # Run all independent queries concurrently
+    (
+        total_items,
+        relevant_items,
+        unread_items,
+        starred_items,
+        high_items,
+        medium_items_count,
+        sources_count,
+        enabled_sources,
+        channels_count,
+        enabled_channels,
+        rules_count,
+        items_today,
+        items_this_week,
+        low_items,
+        none_items,
+        last_fetch,
+    ) = await asyncio.gather(
+        db.scalar(select(func.count(Item.id))),
+        db.scalar(select(func.count(Item.id)).where(Item.priority != Priority.NONE)),
+        db.scalar(select(func.count(Item.id)).where(
             Item.is_read == False,  # noqa: E712
-            Item.priority != Priority.NONE  # Only count unread relevant items
-        )
-    ) or 0
-    starred_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
-    ) or 0
-    # High priority items
-    high_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.HIGH)
-    ) or 0
-    # Medium priority items
-    medium_items_count = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)
-    ) or 0
-
-    # Source (organization) counts
-    sources_count = await db.scalar(select(func.count(Source.id))) or 0
-    enabled_sources = await db.scalar(
-        select(func.count(Source.id)).where(Source.enabled == True)  # noqa: E712
-    ) or 0
-
-    # Channel counts
-    channels_count = await db.scalar(select(func.count(Channel.id))) or 0
-    enabled_channels = await db.scalar(
-        select(func.count(Channel.id))
-        .join(Source)
-        .where(
+            Item.priority != Priority.NONE,
+        )),
+        db.scalar(select(func.count(Item.id)).where(Item.is_starred == True)),  # noqa: E712
+        db.scalar(select(func.count(Item.id)).where(Item.priority == Priority.HIGH)),
+        db.scalar(select(func.count(Item.id)).where(Item.priority == Priority.MEDIUM)),
+        db.scalar(select(func.count(Source.id))),
+        db.scalar(select(func.count(Source.id)).where(Source.enabled == True)),  # noqa: E712
+        db.scalar(select(func.count(Channel.id))),
+        db.scalar(select(func.count(Channel.id)).join(Source).where(
             Channel.enabled == True,  # noqa: E712
             Source.enabled == True,  # noqa: E712
-        )
-    ) or 0
-
-    # Rule count
-    rules_count = await db.scalar(select(func.count(Rule.id))) or 0
-
-    # Time-based counts
-    items_today = await db.scalar(
-        select(func.count(Item.id)).where(Item.fetched_at >= today_start)
-    ) or 0
-    items_this_week = await db.scalar(
-        select(func.count(Item.id)).where(Item.fetched_at >= week_start)
-    ) or 0
-
-    # Low priority count for frontend
-    low_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.LOW)
-    ) or 0
-    # None priority count (not relevant)
-    none_items = await db.scalar(
-        select(func.count(Item.id)).where(Item.priority == Priority.NONE)
-    ) or 0
-
-    # Last fetch time (from channels now)
-    last_fetch = await db.scalar(
-        select(func.max(Channel.last_fetch_at)).where(Channel.last_fetch_at.isnot(None))
+        )),
+        db.scalar(select(func.count(Rule.id))),
+        db.scalar(select(func.count(Item.id)).where(Item.fetched_at >= today_start)),
+        db.scalar(select(func.count(Item.id)).where(Item.fetched_at >= week_start)),
+        db.scalar(select(func.count(Item.id)).where(Item.priority == Priority.LOW)),
+        db.scalar(select(func.count(Item.id)).where(Item.priority == Priority.NONE)),
+        db.scalar(select(func.max(Channel.last_fetch_at)).where(Channel.last_fetch_at.isnot(None))),
     )
+
+    total_items = total_items or 0
+    relevant_items = relevant_items or 0
+    unread_items = unread_items or 0
+    starred_items = starred_items or 0
+    high_items = high_items or 0
+    medium_items_count = medium_items_count or 0
+    low_items = low_items or 0
+    none_items = none_items or 0
 
     return StatsResponse(
         total_items=total_items,
@@ -95,13 +82,13 @@ async def get_stats(
         starred_items=starred_items,
         high_items=high_items,
         medium_items=medium_items_count,
-        sources_count=sources_count,
-        channels_count=channels_count,
-        enabled_sources=enabled_sources,
-        enabled_channels=enabled_channels,
-        rules_count=rules_count,
-        items_today=items_today,
-        items_this_week=items_this_week,
+        sources_count=sources_count or 0,
+        channels_count=channels_count or 0,
+        enabled_sources=enabled_sources or 0,
+        enabled_channels=enabled_channels or 0,
+        rules_count=rules_count or 0,
+        items_today=items_today or 0,
+        items_this_week=items_this_week or 0,
         items_by_priority={
             "high": high_items,
             "medium": medium_items_count,
