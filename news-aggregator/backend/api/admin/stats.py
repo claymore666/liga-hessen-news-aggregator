@@ -136,69 +136,57 @@ async def get_system_stats(
             stats={"processed": 0, "errors": 0},
         )
 
-    # Run all independent DB queries concurrently
-    import asyncio
-
+    # Processing queue stats — combine into fewer queries
     retry_priority = json_extract_path(Item.metadata_, "retry_priority")
 
-    (
-        queue_total,
-        retry_result,
-        awaiting_classifier,
-        awaiting_dedup,
-        awaiting_vectordb,
-        items_total,
-        priority_result,
-        unread_count,
-        starred_count,
-    ) = await asyncio.gather(
-        db.scalar(
-            select(func.count(Item.id)).where(Item.needs_llm_processing == True)  # noqa: E712
-        ),
-        db.execute(
-            select(retry_priority.label("rp"), func.count(Item.id))
-            .where(Item.needs_llm_processing == True)  # noqa: E712
-            .group_by("rp")
-        ),
-        db.scalar(
-            select(func.count(Item.id)).where(
-                json_extract_path(Item.metadata_, "pre_filter").is_(None)
-            )
-        ),
-        db.scalar(
-            select(func.count(Item.id)).where(
-                Item.similar_to_id.is_(None),
-                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
-            )
-        ),
-        db.scalar(
-            select(func.count(Item.id)).where(
-                json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
-            )
-        ),
-        db.scalar(select(func.count(Item.id))),
-        db.execute(
-            select(Item.priority, func.count(Item.id))
-            .group_by(Item.priority)
-        ),
-        db.scalar(
-            select(func.count(Item.id)).where(Item.is_read == False)  # noqa: E712
-        ),
-        db.scalar(
-            select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
-        ),
-    )
+    queue_total = await db.scalar(
+        select(func.count(Item.id)).where(Item.needs_llm_processing == True)  # noqa: E712
+    ) or 0
 
+    retry_result = await db.execute(
+        select(retry_priority.label("rp"), func.count(Item.id))
+        .where(Item.needs_llm_processing == True)  # noqa: E712
+        .group_by("rp")
+    )
     by_retry_priority = {row[0] or "unknown": row[1] for row in retry_result.fetchall()}
 
+    # Combine awaiting counts into single query
+    queue_row = (await db.execute(
+        select(
+            func.count(Item.id).filter(
+                json_extract_path(Item.metadata_, "pre_filter").is_(None)
+            ).label("awaiting_classifier"),
+            func.count(Item.id).filter(
+                Item.similar_to_id.is_(None),
+                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+            ).label("awaiting_dedup"),
+            func.count(Item.id).filter(
+                json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
+            ).label("awaiting_vectordb"),
+        )
+    )).one()
+
     processing_queue = ProcessingQueueStats(
-        total=queue_total or 0,
+        total=queue_total,
         by_retry_priority=by_retry_priority,
-        awaiting_classifier=awaiting_classifier or 0,
-        awaiting_dedup=awaiting_dedup or 0,
-        awaiting_vectordb=awaiting_vectordb or 0,
+        awaiting_classifier=queue_row.awaiting_classifier,
+        awaiting_dedup=queue_row.awaiting_dedup,
+        awaiting_vectordb=queue_row.awaiting_vectordb,
     )
 
+    # Item stats — single query for all counts
+    item_row = (await db.execute(
+        select(
+            func.count(Item.id).label("total"),
+            func.count(Item.id).filter(Item.is_read == False).label("unread"),  # noqa: E712
+            func.count(Item.id).filter(Item.is_starred == True).label("starred"),  # noqa: E712
+        )
+    )).one()
+
+    priority_result = await db.execute(
+        select(Item.priority, func.count(Item.id))
+        .group_by(Item.priority)
+    )
     by_priority = {}
     for row in priority_result.fetchall():
         priority_val = row[0]
@@ -211,10 +199,10 @@ async def get_system_stats(
         by_priority[key] = row[1]
 
     item_stats = ItemStats(
-        total=items_total or 0,
+        total=item_row.total,
         by_priority=by_priority,
-        unread=unread_count or 0,
-        starred=starred_count or 0,
+        unread=item_row.unread,
+        starred=item_row.starred,
     )
 
     return SystemStatsResponse(
