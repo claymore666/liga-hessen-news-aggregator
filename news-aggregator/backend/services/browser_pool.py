@@ -18,6 +18,7 @@ Usage:
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -32,16 +33,15 @@ class BrowserPool:
 
     Instead of each scraper creating its own Playwright driver (node process),
     this pool maintains a single driver and creates/recycles browsers from it.
+
+    Restart logic uses a generation counter to prevent concurrent callers from
+    triggering redundant restarts, and a cooldown to avoid restart storms.
     """
 
-    def __init__(self, max_browsers: int = 8, error_threshold: int = 10):
-        """
-        Initialize the browser pool.
+    RESTART_COOLDOWN = 30.0  # seconds between restart attempts
+    MAX_RESTART_FAILURES = 3  # consecutive failures before giving up until cooldown
 
-        Args:
-            max_browsers: Maximum number of concurrent browsers
-            error_threshold: Number of consecutive errors before restarting driver
-        """
+    def __init__(self, max_browsers: int = 8, error_threshold: int = 10):
         self._playwright: Optional[Playwright] = None
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_browsers)
@@ -50,6 +50,9 @@ class BrowserPool:
         self._error_count = 0
         self._error_threshold = error_threshold
         self._success_count = 0
+        self._generation = 0  # incremented on each restart
+        self._last_restart_attempt = 0.0
+        self._consecutive_restart_failures = 0
 
     async def _ensure_initialized(self) -> Playwright:
         """Ensure Playwright is initialized, creating it if needed."""
@@ -57,7 +60,6 @@ class BrowserPool:
             return self._playwright
 
         async with self._lock:
-            # Double-check after acquiring lock
             if self._playwright is not None:
                 return self._playwright
 
@@ -67,7 +69,10 @@ class BrowserPool:
             logger.info("Initializing shared Playwright instance...")
             self._playwright = await async_playwright().start()
             self._initialized = True
-            logger.info("Playwright instance ready")
+            self._generation += 1
+            self._error_count = 0
+            self._consecutive_restart_failures = 0
+            logger.info("Playwright instance ready (generation %d)", self._generation)
             return self._playwright
 
     @asynccontextmanager
@@ -76,40 +81,24 @@ class BrowserPool:
         headless: bool = True,
         args: Optional[list[str]] = None,
     ):
-        """
-        Get a browser from the pool.
-
-        This is a context manager that:
-        1. Waits for a slot in the semaphore
-        2. Launches a browser from the shared Playwright instance
-        3. Yields the browser for use
-        4. Closes the browser when done
-
-        Args:
-            headless: Whether to run in headless mode
-            args: Additional browser launch arguments
-
-        Yields:
-            Browser instance
-        """
         if self._shutting_down:
             raise RuntimeError("Browser pool is shutting down")
 
         browser: Optional[Browser] = None
 
-        # Wait for a slot
         async with self._semaphore:
+            # Capture generation before we start so we can detect stale errors
+            gen_before = self._generation
+
             try:
                 playwright = await self._ensure_initialized()
 
-                # Default args for stealth
                 launch_args = args or [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                 ]
 
-                # Launch browser with timeout
                 browser = await asyncio.wait_for(
                     playwright.chromium.launch(
                         headless=headless,
@@ -120,43 +109,82 @@ class BrowserPool:
 
                 yield browser
 
-                # Success - reset error count
+                # Success — reset error count
                 self._error_count = 0
                 self._success_count += 1
 
             except asyncio.TimeoutError:
                 logger.error("Browser launch timeout")
-                await self._handle_error()
+                await self._handle_error(gen_before)
                 raise
             except Exception as e:
-                logger.error(f"Browser error: {e}")
-                await self._handle_error()
+                logger.error("Browser error: %s", e)
+                await self._handle_error(gen_before)
                 raise
             finally:
                 if browser:
                     try:
                         await browser.close()
                     except Exception as e:
-                        logger.debug(f"Error closing browser: {e}")
+                        logger.debug("Error closing browser: %s", e)
 
-    async def _handle_error(self):
-        """Handle browser error - restart driver if too many consecutive errors."""
+    async def _handle_error(self, error_generation: int):
+        """Handle browser error. Only trigger restart if still on the same generation."""
+        # If a restart already happened since our request started, skip
+        if error_generation != self._generation:
+            return
+
         self._error_count += 1
         if self._error_count >= self._error_threshold:
-            logger.warning(
-                f"Browser error threshold reached ({self._error_count} errors), "
-                "restarting Playwright driver..."
-            )
-            await self._restart_driver()
+            await self._restart_driver(error_generation)
 
-    async def _restart_driver(self):
-        """Restart the Playwright driver."""
+    async def _restart_driver(self, trigger_generation: int):
+        """
+        Restart the Playwright driver.
+
+        Uses generation tracking to ensure only one restart per failure episode,
+        and a cooldown to prevent restart storms.
+        """
         async with self._lock:
+            # Another caller already restarted — nothing to do
+            if self._generation != trigger_generation:
+                return
+
+            # Cooldown: don't restart too frequently
+            now = time.monotonic()
+            elapsed = now - self._last_restart_attempt
+            if elapsed < self.RESTART_COOLDOWN and self._consecutive_restart_failures > 0:
+                logger.debug(
+                    "Restart cooldown active (%.0fs remaining), skipping",
+                    self.RESTART_COOLDOWN - elapsed,
+                )
+                return
+
+            # Give up after too many consecutive failures until cooldown expires
+            if self._consecutive_restart_failures >= self.MAX_RESTART_FAILURES:
+                if elapsed < self.RESTART_COOLDOWN:
+                    return
+                # Cooldown expired, allow retry
+                logger.info(
+                    "Cooldown expired after %d consecutive restart failures, retrying",
+                    self._consecutive_restart_failures,
+                )
+                self._consecutive_restart_failures = 0
+
+            self._last_restart_attempt = now
+
+            logger.warning(
+                "Restarting Playwright driver (generation %d, %d errors)...",
+                self._generation,
+                self._error_count,
+            )
+
+            # Stop existing driver
             if self._playwright:
                 try:
                     await self._playwright.stop()
                 except Exception as e:
-                    logger.debug(f"Error stopping Playwright during restart: {e}")
+                    logger.debug("Error stopping Playwright during restart: %s", e)
                 self._playwright = None
                 self._initialized = False
 
@@ -164,10 +192,21 @@ class BrowserPool:
             try:
                 self._playwright = await async_playwright().start()
                 self._initialized = True
+                self._generation += 1
                 self._error_count = 0
-                logger.info("Playwright driver restarted successfully")
+                self._consecutive_restart_failures = 0
+                logger.info(
+                    "Playwright driver restarted successfully (generation %d)",
+                    self._generation,
+                )
             except Exception as e:
-                logger.error(f"Failed to restart Playwright driver: {e}")
+                self._consecutive_restart_failures += 1
+                logger.error(
+                    "Failed to restart Playwright driver (attempt %d/%d): %s",
+                    self._consecutive_restart_failures,
+                    self.MAX_RESTART_FAILURES,
+                    e,
+                )
 
     async def shutdown(self):
         """Shutdown the browser pool and cleanup resources."""
@@ -179,7 +218,7 @@ class BrowserPool:
                 try:
                     await self._playwright.stop()
                 except Exception as e:
-                    logger.warning(f"Error stopping Playwright: {e}")
+                    logger.warning("Error stopping Playwright: %s", e)
                 finally:
                     self._playwright = None
                     self._initialized = False
@@ -187,27 +226,17 @@ class BrowserPool:
 
     @property
     def is_initialized(self) -> bool:
-        """Check if the pool is initialized."""
         return self._initialized
 
     async def health_check(self) -> dict:
-        """
-        Get health status of the browser pool.
-
-        Returns:
-            Dict with status information
-        """
         return {
             "initialized": self._initialized,
             "shutting_down": self._shutting_down,
-            "available_slots": self._semaphore._value,
-            "max_browsers": self._semaphore._value + (
-                self._semaphore._value - self._semaphore._value
-            ),
+            "generation": self._generation,
+            "error_count": self._error_count,
+            "consecutive_restart_failures": self._consecutive_restart_failures,
         }
 
 
 # Singleton instance
-# Keep concurrency low to avoid overwhelming the shared Playwright driver
-# When one browser crashes, it can cascade to affect others
 browser_pool = BrowserPool(max_browsers=4)
