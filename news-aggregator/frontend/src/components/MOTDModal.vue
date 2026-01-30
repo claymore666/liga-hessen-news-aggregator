@@ -85,6 +85,37 @@ onMounted(() => {
   checkMOTD()
 })
 
+/**
+ * Format MOTD message for display.
+ * Splits numbered items like "(1) ... (2) ... (3) ..." into a list,
+ * with the text before the first number as a heading.
+ */
+const formattedMessage = computed(() => {
+  const raw = motd.value?.message
+  if (!raw) return ''
+
+  // Split on (1), (2), (3), etc.
+  const parts = raw.split(/\(\d+\)\s*/)
+  if (parts.length <= 1) {
+    // No numbered items — just convert newlines
+    return raw.replace(/\n/g, '<br>')
+  }
+
+  const intro = parts[0].trim()
+  const items = parts.slice(1).filter(s => s.trim())
+
+  let html = ''
+  if (intro) {
+    html += `<p class="mb-3 font-medium">${intro.replace(/\n/g, '<br>')}</p>`
+  }
+  html += '<ul class="space-y-2 list-none pl-0">'
+  items.forEach(item => {
+    html += `<li class="flex gap-2 items-start"><span class="mt-0.5 shrink-0 w-1.5 h-1.5 rounded-full bg-blue-500"></span><span>${item.trim().replace(/\n/g, '<br>')}</span></li>`
+  })
+  html += '</ul>'
+  return html
+})
+
 // Format date for display
 const formattedDate = computed(() => {
   if (!motd.value?.updated_at) return ''
@@ -145,7 +176,7 @@ const formattedDate = computed(() => {
             <div class="px-6 py-5">
               <div
                 class="prose prose-sm max-w-none text-gray-700"
-                v-html="motd?.message?.replace(/\n/g, '<br>')"
+                v-html="formattedMessage"
               />
             </div>
 

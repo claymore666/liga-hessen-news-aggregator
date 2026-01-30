@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html as html_module
 import logging
 import re
 from dataclasses import dataclass, field
@@ -563,25 +564,16 @@ class Pipeline:
         # Normalize whitespace
         content = re.sub(r"\s+", " ", content).strip()
 
-        # Fix common encoding issues
-        content = content.replace("&amp;", "&")
-        content = content.replace("&lt;", "<")
-        content = content.replace("&gt;", ">")
-        content = content.replace("&quot;", '"')
-        content = content.replace("&#39;", "'")
+        # Decode all HTML entities (numeric, hex, and named)
+        content = html_module.unescape(content)
 
         # Strip HTML tags from title, remove control chars, normalize whitespace
         title = re.sub(r"<[^>]+>", "", raw.title)
         title = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", title)
         title = re.sub(r"\s+", " ", title).strip()
 
-        # Fix HTML entities in title
-        title = title.replace("&amp;", "&")
-        title = title.replace("&lt;", "<")
-        title = title.replace("&gt;", ">")
-        title = title.replace("&quot;", '"')
-        title = title.replace("&#39;", "'")
-        title = title.replace("&nbsp;", " ")
+        # Decode all HTML entities in title
+        title = html_module.unescape(title)
 
         return RawItem(
             external_id=raw.external_id,
@@ -605,13 +597,13 @@ class Pipeline:
         query = select(Item.id).where(
             Item.channel_id == channel_id,
             Item.external_id == external_id,
-        )
+        ).limit(1)
         result = await self.db.execute(query)
         if result.scalar_one_or_none() is not None:
             return True
 
         # Check by content hash (catches reposts/copies)
-        query = select(Item.id).where(Item.content_hash == content_hash)
+        query = select(Item.id).where(Item.content_hash == content_hash).limit(1)
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
 

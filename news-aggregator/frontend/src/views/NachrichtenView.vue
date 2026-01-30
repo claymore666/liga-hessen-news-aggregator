@@ -72,6 +72,7 @@ const startReadTimer = (id: number) => {
     const item = itemsStore.items.find(i => i.id === id)
     if (item && !item.is_read && selectedItemId.value === id) {
       await itemsStore.markAsRead(id)
+      updateTopicItemReadState(id, true)
     }
   }, 3000)
 }
@@ -262,13 +263,24 @@ const handleAksChange = async (aks: string[]) => {
   }
 }
 
+const updateTopicItemReadState = (id: number, isRead: boolean) => {
+  for (const group of topicGroups.value) {
+    const item = group.items.find(i => i.id === id)
+    if (item) { item.is_read = isRead; return }
+  }
+  const item = topicUngroupedItems.value.find(i => i.id === id)
+  if (item) item.is_read = isRead
+}
+
 const handleToggleRead = async () => {
   if (selectedItem.value) {
-    if (selectedItem.value.is_read) {
-      await itemsStore.markAsUnread(selectedItem.value.id)
-    } else {
+    const newState = !selectedItem.value.is_read
+    if (newState) {
       await itemsStore.markAsRead(selectedItem.value.id)
+    } else {
+      await itemsStore.markAsUnread(selectedItem.value.id)
     }
+    updateTopicItemReadState(selectedItem.value.id, newState)
   }
 }
 

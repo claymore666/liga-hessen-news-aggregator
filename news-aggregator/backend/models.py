@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSON, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 
@@ -204,11 +204,11 @@ class Item(Base):
     is_starred: Mapped[bool] = mapped_column(default=False)
     is_archived: Mapped[bool] = mapped_column(default=False)
     assigned_ak: Mapped[str | None] = mapped_column(String(10), nullable=True)  # Deprecated, use assigned_aks
-    assigned_aks: Mapped[list[str]] = mapped_column(JSON, default=list)  # Array of AK codes
+    assigned_aks: Mapped[list[str]] = mapped_column(JSONB, default=list)  # Array of AK codes
     is_manually_reviewed: Mapped[bool] = mapped_column(default=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
     # LLM processing status - True if item needs (re)processing due to GPU unavailability
     needs_llm_processing: Mapped[bool] = mapped_column(default=False, index=True)
     # Semantic duplicate grouping - points to the "primary" item this is a duplicate of

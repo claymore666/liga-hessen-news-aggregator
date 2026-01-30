@@ -5,7 +5,7 @@ import re
 import ssl
 from datetime import datetime
 from time import mktime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -126,6 +126,14 @@ class RSSConnector(BaseConnector):
                 link = urljoin(str(config.url), link)
                 logger.debug(f"Resolved relative URL to: {link}")
 
+            # Resolve Google redirect URLs to actual source
+            if link and ("google.com/url" in link or "google.de/url" in link):
+                parsed_link = urlparse(link)
+                params = parse_qs(parsed_link.query)
+                if "url" in params:
+                    link = params["url"][0]
+                    logger.debug(f"Resolved Google redirect to: {link}")
+
             # Get author
             author = entry.get("author")
             if not author and hasattr(entry, "authors") and entry.authors:
@@ -183,6 +191,12 @@ class RSSConnector(BaseConnector):
             }
             if article_source_domain:
                 item_metadata["source_domain"] = article_source_domain
+            elif link:
+                # Fall back to domain from URL (important for Google Alerts
+                # where article extraction may fail)
+                domain = urlparse(link).netloc.lower().replace("www.", "")
+                if domain and "google." not in domain:
+                    item_metadata["source_domain"] = domain
 
             items.append(
                 RawItem(

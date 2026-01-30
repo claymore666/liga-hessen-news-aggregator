@@ -130,13 +130,13 @@ Individual news items.
 | priority | Enum | high/medium/low/none |
 | priority_score | Integer | 0-100 score |
 | assigned_ak | String(50) | Legacy single AK |
-| assigned_aks | JSON | Array of AK codes |
+| assigned_aks | JSONB | Array of AK codes |
 | is_read | Boolean | Read status |
 | is_starred | Boolean | Starred status |
 | is_archived | Boolean | Archived status |
 | needs_llm_processing | Boolean | LLM queue flag |
 | similar_to_id | Integer | FK to duplicate item |
-| metadata_ | JSON | Additional metadata |
+| metadata_ | JSONB | Additional metadata (GIN indexed) |
 | created_at | DateTime | Creation timestamp |
 | updated_at | DateTime | Last update |
 
@@ -149,6 +149,16 @@ Individual news items.
 - `ix_items_is_read`
 - `ix_items_needs_llm_processing`
 - `ix_items_similar_to_id`
+- `ix_items_feed` — composite `(published_at DESC, priority)` partial index WHERE `similar_to_id IS NULL AND is_archived = false` (main feed query)
+- `ix_items_fetched_at` — `fetched_at DESC` (time-based stats, worker queries)
+- `ix_items_title_trgm` — GIN trigram on `title` (ILIKE text search, requires `pg_trgm`)
+- `ix_items_content_trgm` — GIN trigram on `content` (ILIKE text search, requires `pg_trgm`)
+- `ix_items_needs_llm_queue` — partial `(fetched_at DESC)` WHERE `needs_llm_processing = true` (LLM worker queue)
+- `ix_items_unread_priority` — partial `(priority)` WHERE `is_read = false` (dashboard unread count)
+- `ix_items_starred` — partial `(id)` WHERE `is_starred = true`
+- `ix_items_is_archived` — partial WHERE `is_archived = false`
+- `ix_items_metadata_gin` — GIN `jsonb_path_ops` on `metadata` (fast JSON path lookups)
+- `ix_items_assigned_aks_gin` — GIN `jsonb_path_ops` on `assigned_aks`
 
 ### rules
 Keyword and semantic matching rules.
@@ -270,6 +280,34 @@ FROM channels c
 LEFT JOIN items i ON c.id = i.channel_id
 GROUP BY c.id;
 ```
+
+## Performance Optimizations
+
+### JSONB Columns (2026-01-30)
+
+The `items.metadata` and `items.assigned_aks` columns use PostgreSQL `JSONB` (not `JSON`). This enables:
+- GIN indexing for fast `@>`, `?`, `?|` operator queries
+- Faster JSON operations (binary storage, no re-parsing)
+- Index-backed lookups for `pre_filter IS NULL`, `duplicate_checked IS NULL`, etc.
+
+### Partial Indexes
+
+Several indexes are partial (filtered), keeping them small and fast:
+- **Feed index**: Only non-archived, non-duplicate items — covers the main news listing query
+- **LLM queue**: Only items needing processing — the worker polls this frequently
+- **Unread/starred/archived**: Only matching rows — dashboard counters use these
+
+### Trigram Text Search
+
+The `pg_trgm` extension enables GIN trigram indexes on `title` and `content` columns for fast `ILIKE` pattern matching without full-text search infrastructure.
+
+### Auto-Migration
+
+New indexes are created automatically on startup in `main.py:run_migrations()` using `CREATE INDEX CONCURRENTLY IF NOT EXISTS` with `AUTOCOMMIT` isolation. This is idempotent and safe to run on every deploy.
+
+### Multi-Worker Limitation
+
+The backend runs as a single uvicorn process because the scheduler, LLM worker, and classifier worker track status in-process memory. Running multiple gunicorn workers (tested 2026-01-30) causes the frontend to see "stopped" status when requests hit non-leader workers. Multi-worker support requires moving status tracking to the database or Redis.
 
 ## Migrations
 
