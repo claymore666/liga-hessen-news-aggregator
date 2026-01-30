@@ -151,7 +151,7 @@ async def get_system_stats(
     by_retry_priority = {row[0] or "unknown": row[1] for row in retry_result.fetchall()}
 
     # Awaiting counts — only scan recent items (older items are fully processed)
-    recent_cutoff = datetime.utcnow() - timedelta(days=7)
+    recent_cutoff = datetime.utcnow() - timedelta(days=2)
     queue_row = (await db.execute(
         select(
             func.count(Item.id).filter(
