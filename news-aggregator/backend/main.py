@@ -1,6 +1,7 @@
 """Main FastAPI application entry point."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -22,6 +23,37 @@ from services.classifier_worker import (
     start_classifier_worker,
     stop_classifier_worker,
 )
+
+LEADER_LOCK_FILE = "/tmp/liga-worker-leader"
+
+# Clean up stale lock file from previous runs (before forking)
+try:
+    os.unlink(LEADER_LOCK_FILE)
+except FileNotFoundError:
+    pass
+
+
+def _try_become_leader() -> bool:
+    """Try to become the worker leader using a lock file.
+
+    Only the leader process runs background workers (scheduler, LLM, classifier).
+    All processes serve API requests.
+    """
+    try:
+        fd = os.open(LEADER_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
+def _release_leader() -> None:
+    """Release the leader lock file."""
+    try:
+        os.unlink(LEADER_LOCK_FILE)
+    except FileNotFoundError:
+        pass
 
 
 async def run_migrations() -> None:
@@ -134,6 +166,59 @@ async def run_migrations() -> None:
             """))
             logging.info("Migration: Classifier reclassify migration marked complete")
 
+    # --- Index migrations (run outside transaction for CONCURRENTLY support) ---
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+
+        # Convert metadata column from JSON to JSONB if needed
+        result = await conn.execute(text(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = 'items' AND column_name = 'metadata'"
+        ))
+        row = result.first()
+        if row and row[0] == 'json':
+            logging.info("Migration: Converting items.metadata from JSON to JSONB")
+            await conn.execute(text(
+                "ALTER TABLE items ALTER COLUMN metadata TYPE JSONB USING metadata::jsonb"
+            ))
+            logging.info("Migration: items.metadata converted to JSONB")
+
+        # Enable pg_trgm extension for trigram indexes
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+
+        # Create indexes (CONCURRENTLY requires AUTOCOMMIT)
+        indexes = [
+            ("ix_items_feed",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_feed "
+             "ON items (published_at DESC, priority) "
+             "WHERE similar_to_id IS NULL AND is_archived = false"),
+            ("ix_items_fetched_at",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_fetched_at "
+             "ON items (fetched_at DESC)"),
+            ("ix_items_title_trgm",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_title_trgm "
+             "ON items USING GIN (title gin_trgm_ops)"),
+            ("ix_items_needs_llm_queue",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_needs_llm_queue "
+             "ON items (fetched_at DESC) WHERE needs_llm_processing = true"),
+            ("ix_items_unread_priority",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_unread_priority "
+             "ON items (priority) WHERE is_read = false"),
+            ("ix_items_starred",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_starred "
+             "ON items (id) WHERE is_starred = true"),
+            ("ix_items_metadata_gin",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_items_metadata_gin "
+             "ON items USING GIN (metadata jsonb_path_ops)"),
+        ]
+
+        for name, sql in indexes:
+            try:
+                await conn.execute(text(sql))
+            except Exception as e:
+                # Index may already exist or be building concurrently
+                logging.warning(f"Index {name}: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -142,59 +227,67 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from api.admin.logs import setup_memory_logging
     setup_memory_logging()
 
-    # Startup
+    # Determine if this worker should run background tasks
+    is_leader = _try_become_leader()
+    if is_leader:
+        logging.info(f"Worker {os.getpid()}: elected as leader, will run background tasks")
+    else:
+        logging.info(f"Worker {os.getpid()}: API-only mode (another worker is leader)")
+
+    # Startup - all workers init DB, only leader runs migrations
     await init_db()
-    await run_migrations()
+    if is_leader:
+        await run_migrations()
 
-    # Start scheduler if enabled
-    if settings.scheduler_enabled:
-        start_scheduler()
-        logging.info("Scheduler enabled and started")
-    else:
-        logging.info("Scheduler disabled via SCHEDULER_ENABLED=false")
+    # Only the leader runs background workers
+    if is_leader:
+        if settings.scheduler_enabled:
+            start_scheduler()
+            logging.info("Scheduler enabled and started")
+        else:
+            logging.info("Scheduler disabled via SCHEDULER_ENABLED=false")
 
-    proxy_manager.start_background_search()
+        proxy_manager.start_background_search()
 
-    # Start LLM worker for continuous processing (if enabled)
-    # Worker processes fresh items immediately, backlog when idle
-    if settings.llm_worker_enabled:
-        await start_worker(
-            batch_size=10,          # Fresh items per batch
-            idle_sleep=30.0,        # Seconds to sleep when no work
-            backlog_batch_size=50,  # Backlog items per query
-        )
-        logging.info("LLM worker enabled and started")
-    else:
-        logging.info("LLM worker disabled via LLM_WORKER_ENABLED=false")
+        if settings.llm_worker_enabled:
+            await start_worker(
+                batch_size=10,
+                idle_sleep=30.0,
+                backlog_batch_size=50,
+            )
+            logging.info("LLM worker enabled and started")
+        else:
+            logging.info("LLM worker disabled via LLM_WORKER_ENABLED=false")
 
-    # Start classifier worker for processing unclassified items (if enabled)
-    # Worker classifies items without pre_filter metadata
-    if settings.classifier_worker_enabled:
-        await start_classifier_worker(
-            batch_size=50,          # Items per batch
-            idle_sleep=60.0,        # Seconds to sleep when idle
-        )
-        logging.info("Classifier worker enabled and started")
-    else:
-        logging.info("Classifier worker disabled via CLASSIFIER_WORKER_ENABLED=false")
+        if settings.classifier_worker_enabled:
+            await start_classifier_worker(
+                batch_size=50,
+                idle_sleep=60.0,
+            )
+            logging.info("Classifier worker enabled and started")
+        else:
+            logging.info("Classifier worker disabled via CLASSIFIER_WORKER_ENABLED=false")
 
     yield
 
-    # Shutdown (in reverse order of startup)
-    logging.info("Shutting down...")
-    if settings.scheduler_enabled:
-        stop_scheduler()
-    if settings.classifier_worker_enabled:
-        await stop_classifier_worker()
-    if settings.llm_worker_enabled:
-        await stop_worker()
-    await proxy_manager.stop_background_search()
+    # Shutdown - only leader stops background workers
+    if is_leader:
+        logging.info("Leader shutting down background workers...")
+        if settings.scheduler_enabled:
+            stop_scheduler()
+        if settings.classifier_worker_enabled:
+            await stop_classifier_worker()
+        if settings.llm_worker_enabled:
+            await stop_worker()
+        await proxy_manager.stop_background_search()
 
-    # Shutdown browser pool (cleanup Playwright driver)
-    from services.browser_pool import browser_pool
-    await browser_pool.shutdown()
+        from services.browser_pool import browser_pool
+        await browser_pool.shutdown()
 
-    logging.info("Shutdown complete")
+        _release_leader()
+        logging.info("Leader shutdown complete")
+    else:
+        logging.info(f"Worker {os.getpid()} shutdown complete")
 
 
 API_DESCRIPTION = """
