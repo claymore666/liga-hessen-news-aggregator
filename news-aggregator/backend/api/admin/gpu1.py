@@ -65,15 +65,11 @@ async def get_gpu1_status() -> GPU1Status:
             ssh_host="",
         )
 
-    # Check current availability
-    available = await power_mgr.is_available()
+    import asyncio
 
-    # Get logged in users (only if available)
-    logged_in_users: list[str] = []
-    if available:
+    async def check_logged_in_users() -> list[str]:
+        """Get logged-in users via SSH."""
         try:
-            import asyncio
-
             cmd = [
                 "ssh",
                 "-i", power_mgr.ssh_key_path,
@@ -93,18 +89,27 @@ async def get_gpu1_status() -> GPU1Status:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
 
             if proc.returncode == 0:
-                # Parse who output, filter out service users
                 ignore_users = {power_mgr.ssh_user, "sddm"}
+                users = []
                 for line in stdout.decode().strip().split('\n'):
                     if line.strip():
                         username = line.split()[0]
                         if username not in ignore_users:
-                            logged_in_users.append(username)
-                # Deduplicate
-                logged_in_users = list(set(logged_in_users))
-
+                            users.append(username)
+                return list(set(users))
         except Exception as e:
             logger.debug(f"Failed to get logged-in users: {e}")
+        return []
+
+    # Run availability check and SSH user check concurrently
+    available, logged_in_users = await asyncio.gather(
+        power_mgr.is_available(),
+        check_logged_in_users(),
+    )
+
+    # If gpu1 is not available, discard SSH results (may be stale)
+    if not available:
+        logged_in_users = []
 
     # Calculate pending shutdown
     idle_time = power_mgr.get_idle_time()

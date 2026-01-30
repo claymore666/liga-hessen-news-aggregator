@@ -136,59 +136,69 @@ async def get_system_stats(
             stats={"processed": 0, "errors": 0},
         )
 
-    # Processing queue stats
-    retry_priority = json_extract_path(Item.metadata_, "retry_priority")
-    queue_total = await db.scalar(
-        select(func.count(Item.id)).where(Item.needs_llm_processing == True)  # noqa: E712
-    ) or 0
+    # Run all independent DB queries concurrently
+    import asyncio
 
-    # Count by retry_priority
-    retry_counts_query = (
-        select(retry_priority.label("rp"), func.count(Item.id))
-        .where(Item.needs_llm_processing == True)  # noqa: E712
-        .group_by("rp")
+    retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+
+    (
+        queue_total,
+        retry_result,
+        awaiting_classifier,
+        awaiting_dedup,
+        awaiting_vectordb,
+        items_total,
+        priority_result,
+        unread_count,
+        starred_count,
+    ) = await asyncio.gather(
+        db.scalar(
+            select(func.count(Item.id)).where(Item.needs_llm_processing == True)  # noqa: E712
+        ),
+        db.execute(
+            select(retry_priority.label("rp"), func.count(Item.id))
+            .where(Item.needs_llm_processing == True)  # noqa: E712
+            .group_by("rp")
+        ),
+        db.scalar(
+            select(func.count(Item.id)).where(
+                json_extract_path(Item.metadata_, "pre_filter").is_(None)
+            )
+        ),
+        db.scalar(
+            select(func.count(Item.id)).where(
+                Item.similar_to_id.is_(None),
+                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+            )
+        ),
+        db.scalar(
+            select(func.count(Item.id)).where(
+                json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
+            )
+        ),
+        db.scalar(select(func.count(Item.id))),
+        db.execute(
+            select(Item.priority, func.count(Item.id))
+            .group_by(Item.priority)
+        ),
+        db.scalar(
+            select(func.count(Item.id)).where(Item.is_read == False)  # noqa: E712
+        ),
+        db.scalar(
+            select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
+        ),
     )
-    retry_result = await db.execute(retry_counts_query)
+
     by_retry_priority = {row[0] or "unknown": row[1] for row in retry_result.fetchall()}
 
-    # Items awaiting classifier
-    awaiting_classifier = await db.scalar(
-        select(func.count(Item.id)).where(
-            json_extract_path(Item.metadata_, "pre_filter").is_(None)
-        )
-    ) or 0
-
-    # Items awaiting dedup check (no similar_to_id and no duplicate_checked flag)
-    awaiting_dedup = await db.scalar(
-        select(func.count(Item.id)).where(
-            Item.similar_to_id.is_(None),
-            json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
-        )
-    ) or 0
-
-    # Items awaiting vectordb indexing
-    awaiting_vectordb = await db.scalar(
-        select(func.count(Item.id)).where(
-            json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
-        )
-    ) or 0
-
     processing_queue = ProcessingQueueStats(
-        total=queue_total,
+        total=queue_total or 0,
         by_retry_priority=by_retry_priority,
-        awaiting_classifier=awaiting_classifier,
-        awaiting_dedup=awaiting_dedup,
-        awaiting_vectordb=awaiting_vectordb,
+        awaiting_classifier=awaiting_classifier or 0,
+        awaiting_dedup=awaiting_dedup or 0,
+        awaiting_vectordb=awaiting_vectordb or 0,
     )
 
-    # Item stats
-    items_total = await db.scalar(select(func.count(Item.id))) or 0
-
-    priority_counts_query = (
-        select(Item.priority, func.count(Item.id))
-        .group_by(Item.priority)
-    )
-    priority_result = await db.execute(priority_counts_query)
     by_priority = {}
     for row in priority_result.fetchall():
         priority_val = row[0]
@@ -200,19 +210,11 @@ async def get_system_stats(
             key = str(priority_val)
         by_priority[key] = row[1]
 
-    unread_count = await db.scalar(
-        select(func.count(Item.id)).where(Item.is_read == False)  # noqa: E712
-    ) or 0
-
-    starred_count = await db.scalar(
-        select(func.count(Item.id)).where(Item.is_starred == True)  # noqa: E712
-    ) or 0
-
     item_stats = ItemStats(
-        total=items_total,
+        total=items_total or 0,
         by_priority=by_priority,
-        unread=unread_count,
-        starred=starred_count,
+        unread=unread_count or 0,
+        starred=starred_count or 0,
     )
 
     return SystemStatsResponse(
