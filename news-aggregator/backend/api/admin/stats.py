@@ -1,7 +1,7 @@
 """Admin endpoints for statistics."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -150,7 +150,8 @@ async def get_system_stats(
     )
     by_retry_priority = {row[0] or "unknown": row[1] for row in retry_result.fetchall()}
 
-    # Combine awaiting counts into single query
+    # Awaiting counts — only scan recent items (older items are fully processed)
+    recent_cutoff = datetime.utcnow() - timedelta(days=7)
     queue_row = (await db.execute(
         select(
             func.count(Item.id).filter(
@@ -163,7 +164,7 @@ async def get_system_stats(
             func.count(Item.id).filter(
                 json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
             ).label("awaiting_vectordb"),
-        )
+        ).where(Item.fetched_at >= recent_cutoff)
     )).one()
 
     processing_queue = ProcessingQueueStats(
