@@ -664,7 +664,8 @@ class ClassifierWorker:
                 self._stats["errors"] += 1
             return 0
 
-        # Update metadata for all items (even if indexed=0, the API succeeded)
+        # Mark items as indexed — the API call succeeded, items are either
+        # newly added or already existed in ChromaDB (both are valid states)
         if item_ids:
             try:
                 async with async_session_maker() as db:

@@ -19,9 +19,12 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
       # Model file (can be updated without rebuild)
       - ./models:/app/models
-      # Vector store persistent data
+      # Vector store persistent data (search index)
       - vectordb-data:/app/data/vectordb
+      # Duplicate store persistent data (duplicate detection index)
+      - duplicatedb-data:/app/data/duplicatedb
     restart: unless-stopped
+    stop_grace_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -31,3 +34,5 @@ services:
 volumes:
   vectordb-data:
     name: liga-classifier-vectordb
+  duplicatedb-data:
+    name: liga-classifier-duplicatedb
