@@ -359,37 +359,39 @@ Antworte NUR mit JA oder NEIN."""
             logger.error(f"Semantic rule check failed: {e}")
             return False
 
-    async def extract_topics(self, conversation_messages: list[dict]) -> list[str]:
-        """Extract topic keywords via a follow-up chat turn.
+    async def extract_topics(self, conversation_messages: list[dict]) -> tuple[str, str | None]:
+        """Extract a single topic from the fixed taxonomy via a follow-up chat turn.
 
         Takes the conversation from the initial analysis (system + user + assistant)
-        and appends a follow-up request for topic keywords.
+        and appends a follow-up request to classify into the taxonomy.
 
         Args:
             conversation_messages: Messages from the analysis conversation
 
         Returns:
-            List of 1-2 topic keyword strings
+            Tuple of (topic, topic_suggestion).
+            topic is always a valid taxonomy entry or "Sonstiges".
+            topic_suggestion is only set when topic is "Sonstiges".
         """
+        from .topic_taxonomy import TOPIC_TAXONOMY, SONSTIGES, validate_topic
+
+        taxonomy_list = "\n".join(f"- {t}" for t in TOPIC_TAXONOMY)
+
         follow_up = {
             "role": "user",
             "content": (
-                "Gib GENAU EIN kurzes Themen-Label für diesen Artikel. "
-                "Das Label soll Artikel zum GLEICHEN konkreten Thema gruppieren. "
-                "Das Label MUSS 2-4 Wörter haben. KEINE Jahreszahlen.\n\n"
-                "VERBOTEN (ein Wort allein): Pflege, Migration, Digitalisierung, Gesundheit, "
-                "Fachkräftemangel, Integration, Inklusion, Sozialpolitik, Finanzierung, "
-                "Wohnen, Armut, Reform, Bildung, Asylpolitik, Pflegekosten, Senioren, "
-                "Pflegeausbildung, Pflegeberatung, Arbeitslosigkeit, Grundsicherung, "
-                "Barrierefreiheit, Ausbildung, Gesetzgebung, Förderung, Blutspende, Weiterbildung\n\n"
-                "GUTE Labels: Kita-Personalmangel Hessen, Pflegekosten-Eigenanteil Anstieg, "
-                "Bürgergeld-Sanktionsverschärfung, Krankenhausreform Bettenabbau, "
-                "Pflegekräfte-Tarifstreit Diakonie, Infrastruktur-Schutzgesetz\n"
-                "SCHLECHTE Labels: Pflege, Migration, Digitalisierung, Fachkräftemangel "
-                "(zu generisch), KRITIS-Dachgesetz (zu technisch/fachsprachlich)\n\n"
-                "Verwende allgemeinverständliche Begriffe. Keine Fachbegriffe oder Abkürzungen. "
-                "Eine Journalistin muss das Label sofort verstehen.\n\n"
-                "Antwort NUR als JSON: {\"topics\": [\"Label\"]}"
+                "Ordne diesen Artikel GENAU EINEM Thema aus der folgenden Liste zu.\n\n"
+                f"THEMENLISTE:\n{taxonomy_list}\n- Sonstiges\n\n"
+                "REGELN:\n"
+                "- Wähle das Thema, das am besten beschreibt, WARUM der Artikel für die "
+                "Wohlfahrtspflege relevant ist — nicht worum es allgemein geht.\n"
+                "- KEINE Parteinamen, Organisationsnamen oder Ortsnamen als Thema.\n"
+                "- Nur Sonstiges wählen, wenn wirklich KEIN Thema passt. "
+                "Dann zusätzlich einen Vorschlag angeben.\n\n"
+                "Antwort NUR als JSON:\n"
+                "{\"topic\": \"Thema aus Liste\"}\n"
+                "oder bei Sonstiges:\n"
+                "{\"topic\": \"Sonstiges\", \"topic_suggestion\": \"Dein Vorschlag\"}"
             ),
         }
         messages = conversation_messages + [follow_up]
@@ -397,8 +399,8 @@ Antworte NUR mit JA oder NEIN."""
         try:
             response = await self.llm.chat(
                 messages=messages,
-                temperature=0.3,
-                max_tokens=200,
+                temperature=0.2,
+                max_tokens=150,
             )
             text = response.text.strip()
 
@@ -410,20 +412,26 @@ Antworte NUR mit JA oder NEIN."""
 
             if not text:
                 logger.warning("Empty response for topic extraction")
-                return []
+                return SONSTIGES, None
 
             result = json.loads(text)
-            topics = result.get("topics", [])
-            if isinstance(topics, list):
-                return [t for t in topics if isinstance(t, str) and t.strip()][:1]
-            return []
+            raw_topic = result.get("topic", "")
+            raw_suggestion = result.get("topic_suggestion")
+
+            topic, suggestion = validate_topic(raw_topic)
+
+            # If model returned Sonstiges with a suggestion, use that
+            if topic == SONSTIGES and raw_suggestion:
+                suggestion = str(raw_suggestion).strip() or suggestion
+
+            return topic, suggestion
 
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse topic extraction response: {e}")
-            return []
+            return SONSTIGES, None
         except Exception as e:
             logger.error(f"Topic extraction failed: {e}")
-            return []
+            return SONSTIGES, None
 
     def calculate_keyword_score(self, item: Item) -> tuple[int, Priority]:
         """Calculate priority score based on keyword matches.

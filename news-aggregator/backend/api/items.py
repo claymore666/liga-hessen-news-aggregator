@@ -285,19 +285,17 @@ async def get_items_by_topic(
             i.is_read
     """
 
-    # Query items with topics (unnested)
+    # Query items with topic from llm_analysis.topic field
     raw_query = sql_text(f"""
         SELECT
-            topic,
+            (i.metadata::jsonb)->'llm_analysis'->>'topic' AS topic,
             {item_fields}
         FROM items i
         LEFT JOIN channels c ON i.channel_id = c.id
         LEFT JOIN sources s ON c.source_id = s.id
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            (i.metadata::jsonb)->'llm_analysis'->'topics'
-        ) AS topic
         WHERE {base_where}
-          AND jsonb_typeof((i.metadata::jsonb)->'llm_analysis'->'topics') = 'array'
+          AND (i.metadata::jsonb)->'llm_analysis'->>'topic' IS NOT NULL
+          AND (i.metadata::jsonb)->'llm_analysis'->>'topic' != 'Sonstiges'
         ORDER BY topic, i.published_at DESC
     """)
 
