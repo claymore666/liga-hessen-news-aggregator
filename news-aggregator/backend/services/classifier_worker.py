@@ -139,6 +139,7 @@ class ClassifierWorker:
 
         consecutive_errors = 0
         max_consecutive_errors = 10
+        last_sync_check_date = None
 
         while self._running:
             try:
@@ -168,6 +169,12 @@ class ClassifierWorker:
                     consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
+
+                # Daily sync check: verify DB and ChromaDB are in sync
+                today = datetime.utcnow().date()
+                if last_sync_check_date != today and datetime.utcnow().hour >= 0:
+                    last_sync_check_date = today
+                    await self._check_vectordb_sync()
 
                 # No work available, sleep
                 logger.debug(f"No unclassified items, unchecked duplicates, or unindexed items, sleeping {self.idle_sleep}s")
@@ -696,6 +703,54 @@ class ClassifierWorker:
             logger.info(f"Indexed {len(item_ids)} items in vector store")
 
         return len(item_ids)
+
+    async def _check_vectordb_sync(self) -> None:
+        """Daily check: compare DB indexed count with ChromaDB item count.
+
+        Logs an error if the counts are significantly out of sync,
+        and resets vectordb_indexed flags for items missing from ChromaDB.
+        """
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                return
+
+            # Get ChromaDB item count from health endpoint
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{classifier.base_url}/health")
+                health = resp.json()
+
+            chromadb_count = health.get("duplicate_index_items", 0)
+
+            # Get DB indexed count
+            async with async_session_maker() as db:
+                from database import json_extract_path
+                db_count = await db.scalar(
+                    select(func.count()).select_from(Item).where(
+                        json_extract_path(Item.metadata_, "vectordb_indexed").isnot(None),
+                    )
+                )
+
+            diff = (db_count or 0) - chromadb_count
+            if abs(diff) > 50:
+                logger.error(
+                    f"VECTORDB SYNC CHECK: DB says {db_count} items indexed, "
+                    f"ChromaDB has {chromadb_count} items. "
+                    f"Difference: {diff} items. "
+                    f"Run /sync-duplicate-store or reset vectordb_indexed flags."
+                )
+            elif diff > 0:
+                logger.warning(
+                    f"VectorDB sync: {diff} items in DB but not in ChromaDB "
+                    f"(DB: {db_count}, ChromaDB: {chromadb_count})"
+                )
+            else:
+                logger.info(
+                    f"VectorDB sync check OK: DB={db_count}, ChromaDB={chromadb_count}"
+                )
+        except Exception as e:
+            logger.warning(f"VectorDB sync check failed: {e}")
 
 
 # Global worker instance
