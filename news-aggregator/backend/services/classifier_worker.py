@@ -453,6 +453,8 @@ class ClassifierWorker:
                 items_to_check.append({
                     "id": item.id,
                     "title": item.title,
+                    "url": item.url,
+                    "channel_id": item.channel_id,
                     "content": item.content or "",
                     "old_metadata": dict(item.metadata_) if item.metadata_ else {},
                 })
@@ -469,24 +471,47 @@ class ClassifierWorker:
                 break
 
             try:
-                # Strip boilerplate before duplicate check to avoid false positives
-                clean_title = _strip_boilerplate(item_data["title"])
-                clean_content = _strip_boilerplate(item_data["content"])
-
-                # Find potential duplicates
-                duplicates = await classifier.find_duplicates(
-                    title=clean_title,
-                    content=clean_content,
-                    threshold=0.75,
-                )
-
                 # Prepare updated metadata
                 new_metadata = dict(item_data["old_metadata"])
                 new_metadata["duplicate_checked"] = True
                 new_metadata["duplicate_checked_at"] = datetime.utcnow().isoformat()
 
                 similar_to_id = None
-                if duplicates:
+                duplicates = []
+
+                # 1. URL-based duplicate check (exact same article from different channel)
+                if item_data.get("url"):
+                    async with async_session_maker() as url_db:
+                        url_match = await url_db.scalar(
+                            select(Item.id).where(
+                                Item.url == item_data["url"],
+                                Item.id < item_data["id"],
+                                Item.channel_id != item_data["channel_id"],
+                            ).order_by(Item.id).limit(1)
+                        )
+                        if url_match:
+                            similar_to_id = url_match
+                            new_metadata["duplicate_method"] = "url_match"
+                            duplicates_found += 1
+                            logger.info(
+                                f"URL duplicate: '{item_data['title'][:40]}...' "
+                                f"same URL as item {similar_to_id}"
+                            )
+
+                # 2. Semantic duplicate check (same topic, different article)
+                if not similar_to_id:
+                    # Strip boilerplate before duplicate check to avoid false positives
+                    clean_title = _strip_boilerplate(item_data["title"])
+                    clean_content = _strip_boilerplate(item_data["content"])
+
+                    # Find potential duplicates
+                    duplicates = await classifier.find_duplicates(
+                        title=clean_title,
+                        content=clean_content,
+                        threshold=0.75,
+                    )
+
+                if not similar_to_id and duplicates:
                     # Find the best match that isn't the item itself and won't create circular reference
                     for dup in duplicates:
                         dup_id = int(dup["id"])
