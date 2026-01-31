@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, unquote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,43 @@ RSS_BOILERPLATE_PATTERNS = [
 # Items between THRESHOLD_MAYBE and THRESHOLD_CONFIRMED are marked for LLM review
 DUPLICATE_THRESHOLD_CONFIRMED = 0.75  # Auto-confirm as duplicate
 DUPLICATE_THRESHOLD_MAYBE = 0.60  # Mark for LLM review
+
+
+# Tracking parameters to strip for URL normalization
+_URL_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+    "fbclid", "gclid", "ref", "source", "xtor", "wtmc",
+    "rct", "sa", "ct", "cd", "ved", "usg",  # Google redirect params
+    "outputType",  # AMP params
+}
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize URL for duplicate comparison.
+
+    Strips tracking parameters, fragments, trailing slashes, www prefix,
+    and decodes percent-encoding to produce a canonical form.
+    """
+    url = unquote(url)
+    parsed = urlparse(url)
+
+    # Normalize host: lowercase, strip www.
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    # Strip tracking parameters
+    if parsed.query:
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        filtered = {k: v for k, v in params.items() if k.lower() not in _URL_TRACKING_PARAMS}
+        query = urlencode(filtered, doseq=True) if filtered else ""
+    else:
+        query = ""
+
+    # Strip fragment, normalize path (strip trailing slash)
+    path = parsed.path.rstrip("/") or "/"
+
+    return urlunparse((parsed.scheme, host, path, "", query, ""))
 
 
 def _strip_boilerplate(text: str) -> str:
@@ -183,14 +221,64 @@ class Pipeline:
                 logger.debug(f"Skipping duplicate: {normalized.title[:50]}")
                 continue
 
-            # 3a. Check for semantic duplicates (cross-channel)
-            # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
-            # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
+            # 3a. Check for URL-based duplicates (cross-channel, same article)
+            # Google Alerts often deliver the same article to multiple feeds
             similar_to_id = None
             duplicates = []
             similarity_score = None
             duplicate_candidate = None  # For edge cases needing LLM review
-            if self.relevance_filter and not self.training_mode:
+            if not self.training_mode and normalized.url:
+                try:
+                    from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
+
+                    # Exact URL match across all channels
+                    url_match = await self.db.scalar(
+                        select(Item.id).where(
+                            Item.url == normalized.url,
+                            Item.channel_id != channel.id,
+                        ).order_by(Item.id).limit(1)
+                    )
+
+                    # If no exact match, try normalized URL (strips tracking params, www, etc.)
+                    if not url_match:
+                        norm_url = _normalize_url(normalized.url)
+                        # Only check if normalization changed the URL
+                        if norm_url != normalized.url:
+                            url_match = await self.db.scalar(
+                                select(Item.id).where(
+                                    Item.url == norm_url,
+                                    Item.channel_id != channel.id,
+                                ).order_by(Item.id).limit(1)
+                            )
+
+                    if url_match:
+                        similar_to_id = url_match
+                        logger.info(
+                            f"URL duplicate: '{normalized.title[:40]}...' "
+                            f"same URL as item {similar_to_id}"
+                        )
+                        try:
+                            await record_event(
+                                self.db,
+                                similar_to_id,
+                                EVENT_DUPLICATE_DETECTED,
+                                data={
+                                    "duplicate_title": normalized.title,
+                                    "duplicate_source": channel.source.name if channel.source else None,
+                                    "duplicate_channel_id": channel.id,
+                                    "duplicate_url": normalized.url,
+                                    "method": "url_match",
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to record URL duplicate event: {e}")
+                except Exception as e:
+                    logger.warning(f"URL duplicate check failed, continuing: {e}")
+
+            # 3b. Check for semantic duplicates (cross-channel, different articles on same topic)
+            # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
+            # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
+            if not similar_to_id and self.relevance_filter and not self.training_mode:
                 try:
                     # Strip boilerplate before embedding to avoid false positive similarity
                     clean_title = _strip_boilerplate(normalized.title)
@@ -266,7 +354,7 @@ class Pipeline:
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
 
-            # 3b. Check for intra-batch duplicates (items in same fetch can't find each other
+            # 3c. Check for intra-batch duplicates (items in same fetch can't find each other
             # via ChromaDB since neither is indexed yet)
             batch_similar_to_idx = None
             if not similar_to_id and batch_titles and not self.training_mode:
