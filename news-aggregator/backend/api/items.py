@@ -353,6 +353,53 @@ async def get_items_by_topic(
         if row[0] not in grouped_item_ids:
             ungrouped_items.append(_make_brief(row, offset=0))
 
+    # Collect all item IDs to fetch their duplicates
+    all_item_ids = grouped_item_ids.copy()
+    for item in ungrouped_items:
+        all_item_ids.add(item.id)
+
+    # Fetch duplicates for all items in one query
+    if all_item_ids:
+        dup_query = sql_text("""
+            SELECT
+                i.similar_to_id,
+                i.id,
+                i.title,
+                i.url,
+                i.priority,
+                s.name as source_name,
+                i.published_at
+            FROM items i
+            LEFT JOIN channels c ON i.channel_id = c.id
+            LEFT JOIN sources s ON c.source_id = s.id
+            WHERE i.similar_to_id = ANY(:ids)
+              AND i.is_archived = false
+            ORDER BY i.similar_to_id, i.published_at DESC
+        """)
+        dup_result = await db.execute(dup_query, {"ids": list(all_item_ids)})
+        dup_rows = dup_result.fetchall()
+
+        # Build lookup: parent_id -> list of DuplicateBrief
+        dup_map: dict[int, list[DuplicateBrief]] = defaultdict(list)
+        for row in dup_rows:
+            parent_id = row[0]
+            source_brief = SourceBrief(id=0, name=row[5]) if row[5] else None
+            dup_map[parent_id].append(DuplicateBrief(
+                id=row[1],
+                title=row[2],
+                url=row[3],
+                priority=row[4],
+                source=source_brief,
+                published_at=row[6],
+            ))
+
+        # Attach duplicates to items
+        for group in groups:
+            for item in group.items:
+                item.duplicates = dup_map.get(item.id, [])
+        for item in ungrouped_items:
+            item.duplicates = dup_map.get(item.id, [])
+
     return TopicGroupsResponse(
         topics=groups,
         ungrouped_count=len(ungrouped_items),

@@ -64,6 +64,15 @@ export const itemsApi = {
 }
 
 // Topic grouping types
+export interface TopicDuplicateBrief {
+  id: number
+  title: string
+  url: string
+  priority: string
+  source: { id: number; name: string } | null
+  published_at: string
+}
+
 export interface TopicItemBrief {
   id: number
   title: string
@@ -75,6 +84,7 @@ export interface TopicItemBrief {
   summary: string | null
   assigned_aks: string[]
   is_read: boolean
+  duplicates: TopicDuplicateBrief[]
 }
 
 export interface TopicGroup {

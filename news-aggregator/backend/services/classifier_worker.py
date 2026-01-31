@@ -156,16 +156,17 @@ class ClassifierWorker:
                     await asyncio.sleep(0.5)
                     continue
 
-                # Priority 2: Re-check duplicates for items that missed the check
-                duplicates_checked = await self._process_unchecked_duplicates()
-                if duplicates_checked > 0:
+                # Priority 2: Index items in vector store (before duplicate check
+                # so that items from the same batch are findable as duplicates)
+                indexed = await self._process_unindexed_items()
+                if indexed > 0:
                     consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
 
-                # Priority 3: Re-index items that weren't indexed in vector store
-                indexed = await self._process_unindexed_items()
-                if indexed > 0:
+                # Priority 3: Re-check duplicates for items that missed the check
+                duplicates_checked = await self._process_unchecked_duplicates()
+                if duplicates_checked > 0:
                     consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
@@ -177,7 +178,7 @@ class ClassifierWorker:
                     await self._check_vectordb_sync()
 
                 # No work available, sleep
-                logger.debug(f"No unclassified items, unchecked duplicates, or unindexed items, sleeping {self.idle_sleep}s")
+                logger.debug(f"No unclassified items, unindexed items, or unchecked duplicates, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
             except asyncio.CancelledError:
