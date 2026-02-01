@@ -99,10 +99,13 @@ async def get_system_stats(
 
     # Scheduler status - read from DB, fall back to local
     sched_state = await read_state("scheduler")
+    sched_stats = await read_stats("scheduler")
     scheduler_running = sched_state.get("running", False) or scheduler.running
+    # Local scheduler has live jobs; non-leader reads from DB
+    jobs = get_job_status() if scheduler.running else sched_stats.get("jobs", [])
     scheduler_status = SchedulerStatus(
         running=scheduler_running,
-        jobs=get_job_status() if scheduler.running else [],
+        jobs=jobs,
     )
 
     # LLM Worker status from DB

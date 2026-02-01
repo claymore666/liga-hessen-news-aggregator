@@ -744,6 +744,15 @@ async def cleanup_old_events() -> int:
         return deleted
 
 
+async def _sync_scheduler_stats() -> None:
+    """Sync scheduler job list to DB so non-leader workers can read it."""
+    from services.worker_status import write_stats
+    jobs = get_job_status()
+    # Exclude the sync job itself from the list
+    jobs = [j for j in jobs if j["id"] != "sync_scheduler_stats"]
+    await write_stats("scheduler", {"jobs": jobs})
+
+
 def start_scheduler() -> None:
     """Start the background scheduler."""
     from services.proxy_manager import proxy_manager
@@ -792,15 +801,25 @@ def start_scheduler() -> None:
     # which runs continuously and processes items with priority ordering.
     # The old 5-minute interval job has been removed for efficiency.
 
+    # Add job to sync scheduler stats (jobs list) to DB for non-leader workers
+    scheduler.add_job(
+        _sync_scheduler_stats,
+        trigger=IntervalTrigger(seconds=30),
+        id="sync_scheduler_stats",
+        name="Sync scheduler stats to DB",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info("Scheduler started")
 
-    # Write state to DB (fire-and-forget via event loop)
+    # Write state and initial jobs to DB (fire-and-forget via event loop)
     import asyncio
     try:
         loop = asyncio.get_running_loop()
         from services.worker_status import write_state
         loop.create_task(write_state("scheduler", running=True))
+        loop.create_task(_sync_scheduler_stats())
     except RuntimeError:
         pass
 
