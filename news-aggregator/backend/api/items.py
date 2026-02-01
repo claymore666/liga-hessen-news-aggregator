@@ -1,7 +1,7 @@
 """API endpoints for news items."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import case, func, select
@@ -68,6 +68,7 @@ async def list_items(
     is_read: bool | None = None,
     is_starred: bool | None = None,
     is_archived: bool | None = Query(None, description="Filter by archive status (default: exclude archived)"),
+    days: int | None = Query(None, description="Filter to last N days by fetched_at"),
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
@@ -120,6 +121,9 @@ async def list_items(
     else:
         # By default, exclude archived items
         query = query.where(Item.is_archived == False)  # noqa: E712
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        query = query.where(Item.fetched_at >= cutoff)
     if since is not None:
         # Strip timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE compatibility
         since_naive = since.replace(tzinfo=None) if since.tzinfo else since

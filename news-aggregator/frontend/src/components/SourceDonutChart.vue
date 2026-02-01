@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Doughnut } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -11,6 +11,10 @@ import axios from 'axios'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
+const props = defineProps<{
+  days: number
+}>()
+
 interface DataItem {
   name: string
   count: number
@@ -20,7 +24,6 @@ interface DataItem {
 const items = ref<DataItem[]>([])
 const loading = ref(false)
 const selectedPriority = ref<string | null>(null)
-const selectedRange = ref<string>('all')
 const resolveGa = ref<string | null>(null)
 const chartKey = ref(0)
 
@@ -29,14 +32,6 @@ const priorities = [
   { key: 'high', label: 'H' },
   { key: 'medium', label: 'M' },
   { key: 'low', label: 'L' },
-]
-
-const ranges = [
-  { key: '1d', label: '1T', days: 1 },
-  { key: '3d', label: '3T', days: 3 },
-  { key: '1w', label: '1W', days: 7 },
-  { key: '1m', label: '1M', days: 30 },
-  { key: 'all', label: 'Alle', days: null },
 ]
 
 const gaOptions = [
@@ -64,9 +59,7 @@ const googleShades = [
 async function fetchData() {
   loading.value = true
   try {
-    const rangeDays = ranges.find(r => r.key === selectedRange.value)?.days
-    const params: Record<string, any> = {}
-    if (rangeDays !== null && rangeDays !== undefined) params.days = rangeDays
+    const params: Record<string, any> = { days: props.days }
     if (selectedPriority.value) params.priority = selectedPriority.value
     if (resolveGa.value) params.resolve_ga = resolveGa.value
 
@@ -148,17 +141,12 @@ function selectPriority(key: string | null) {
   fetchData()
 }
 
-function selectRange(key: string) {
-  selectedRange.value = key
-  fetchData()
-}
-
 function selectGa(key: string | null) {
   resolveGa.value = key
   fetchData()
 }
 
-onMounted(fetchData)
+watch(() => props.days, fetchData, { immediate: true })
 </script>
 
 <template>
@@ -180,7 +168,7 @@ onMounted(fetchData)
       </div>
     </div>
 
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center mb-4">
       <div class="flex gap-1">
         <button
           v-for="g in gaOptions"
@@ -193,19 +181,6 @@ onMounted(fetchData)
           @click="selectGa(g.key)"
         >
           {{ g.label }}
-        </button>
-      </div>
-      <div class="flex gap-1">
-        <button
-          v-for="r in ranges"
-          :key="r.key"
-          class="px-2 py-1 text-xs rounded font-medium transition-colors"
-          :class="selectedRange === r.key
-            ? 'bg-blue-600 text-white'
-            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
-          @click="selectRange(r.key)"
-        >
-          {{ r.label }}
         </button>
       </div>
     </div>

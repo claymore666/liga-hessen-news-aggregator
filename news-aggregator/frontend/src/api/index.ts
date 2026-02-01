@@ -108,7 +108,7 @@ export const rulesApi = {
 }
 
 export const statsApi = {
-  get: () => api.get<Stats>('/stats'),
+  get: (params?: { days?: number }) => api.get<Stats>('/stats', { params }),
   byPriority: () => api.get<Record<string, number>>('/stats/by-priority'),
   bySource: (sourceId?: number) =>
     api.get<SourceStats[]>('/stats/by-source', { params: sourceId ? { source_id: sourceId } : undefined }),

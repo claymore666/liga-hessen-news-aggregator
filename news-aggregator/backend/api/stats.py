@@ -17,27 +17,35 @@ router = APIRouter()
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(
     db: AsyncSession = Depends(get_db),
+    days: int | None = Query(None, description="Filter item counts to last N days (by fetched_at)"),
 ) -> StatsResponse:
     """Get dashboard statistics."""
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
+    # Optional time filter for item counts
+    time_filter = []
+    if days is not None:
+        cutoff = now - timedelta(days=days)
+        time_filter.append(Item.fetched_at >= cutoff)
+
     # Combine all item counts into a single query
-    item_stats_row = (await db.execute(
-        select(
-            func.count(Item.id).label("total"),
-            func.count(Item.id).filter(Item.priority != Priority.NONE).label("relevant"),
-            func.count(Item.id).filter(Item.is_read == False, Item.priority != Priority.NONE).label("unread"),  # noqa: E712
-            func.count(Item.id).filter(Item.is_starred == True).label("starred"),  # noqa: E712
-            func.count(Item.id).filter(Item.priority == Priority.HIGH).label("high"),
-            func.count(Item.id).filter(Item.priority == Priority.MEDIUM).label("medium"),
-            func.count(Item.id).filter(Item.priority == Priority.LOW).label("low"),
-            func.count(Item.id).filter(Item.priority == Priority.NONE).label("none_p"),
-            func.count(Item.id).filter(Item.fetched_at >= today_start).label("today"),
-            func.count(Item.id).filter(Item.fetched_at >= week_start).label("week"),
-        )
-    )).one()
+    base = select(
+        func.count(Item.id).label("total"),
+        func.count(Item.id).filter(Item.priority != Priority.NONE).label("relevant"),
+        func.count(Item.id).filter(Item.is_read == False, Item.priority != Priority.NONE).label("unread"),  # noqa: E712
+        func.count(Item.id).filter(Item.is_starred == True).label("starred"),  # noqa: E712
+        func.count(Item.id).filter(Item.priority == Priority.HIGH).label("high"),
+        func.count(Item.id).filter(Item.priority == Priority.MEDIUM).label("medium"),
+        func.count(Item.id).filter(Item.priority == Priority.LOW).label("low"),
+        func.count(Item.id).filter(Item.priority == Priority.NONE).label("none_p"),
+        func.count(Item.id).filter(Item.fetched_at >= today_start).label("today"),
+        func.count(Item.id).filter(Item.fetched_at >= week_start).label("week"),
+    )
+    if time_filter:
+        base = base.where(*time_filter)
+    item_stats_row = (await db.execute(base)).one()
 
     # Source/channel/rule counts in a single query
     sources_count = await db.scalar(select(func.count(Source.id))) or 0
