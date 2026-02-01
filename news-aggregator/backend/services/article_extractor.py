@@ -19,7 +19,7 @@ NEWS_DOMAINS = {
     # National news
     "spiegel.de", "zeit.de", "faz.net", "sueddeutsche.de", "tagesschau.de",
     "bild.de", "welt.de", "focus.de", "taz.de", "tagesspiegel.de",
-    "handelsblatt.com", "wiwo.de", "stern.de", "n-tv.de", "zdf.de",
+    "handelsblatt.com", "wiwo.de", "stern.de", "n-tv.de", "zdf.de", "phoenix.de",
     # Hessen regional
     "hessenschau.de", "fr.de", "fnp.de", "op-online.de", "hna.de",
     "giessener-allgemeine.de", "mittelhessen.de", "fuldaerzeitung.de",
@@ -273,6 +273,14 @@ class ArticleExtractor:
             is_article = self.is_likely_news_article(soup, url)
 
             if not is_article:
+                # SPA pages may not have article indicators in unrendered HTML
+                # Try Playwright before giving up
+                if len(html) > 5000 and _looks_like_spa(html):
+                    logger.info(f"Not detected as article but SPA markers found for {domain}, trying Playwright...")
+                    rendered_article = await _fetch_with_playwright(url, domain)
+                    if rendered_article:
+                        logger.info(f"Playwright rescued non-article SPA page for {domain}: {len(rendered_article.content)} chars")
+                        return rendered_article
                 logger.debug(f"URL {url} does not appear to be a news article")
                 return None
 
