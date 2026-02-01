@@ -12,7 +12,6 @@ evaluated when the classifier comes back online.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
@@ -56,9 +55,9 @@ class ClassifierWorker:
         # Worker state
         self._running = False
         self._paused = False
-        self._task: Optional[asyncio.Task] = None
-        self._poll_task: Optional[asyncio.Task] = None
-        self._sync_task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
+        self._sync_task: asyncio.Task | None = None
         self._classifier = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -811,10 +810,10 @@ class ClassifierWorker:
 
 
 # Global worker instance
-_worker: Optional[ClassifierWorker] = None
+_worker: ClassifierWorker | None = None
 
 
-def get_classifier_worker() -> Optional[ClassifierWorker]:
+def get_classifier_worker() -> ClassifierWorker | None:
     """Get the global classifier worker instance."""
     return _worker
 

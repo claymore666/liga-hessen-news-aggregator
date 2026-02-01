@@ -20,7 +20,6 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from playwright.async_api import async_playwright, Browser, Playwright
 
@@ -42,7 +41,7 @@ class BrowserPool:
     MAX_RESTART_FAILURES = 3  # consecutive failures before giving up until cooldown
 
     def __init__(self, max_browsers: int = 8, error_threshold: int = 10):
-        self._playwright: Optional[Playwright] = None
+        self._playwright: Playwright | None = None
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_browsers)
         self._initialized = False
@@ -79,12 +78,12 @@ class BrowserPool:
     async def get_browser(
         self,
         headless: bool = True,
-        args: Optional[list[str]] = None,
+        args: list[str] | None = None,
     ):
         if self._shutting_down:
             raise RuntimeError("Browser pool is shutting down")
 
-        browser: Optional[Browser] = None
+        browser: Browser | None = None
 
         async with self._semaphore:
             # Capture generation before we start so we can detect stale errors

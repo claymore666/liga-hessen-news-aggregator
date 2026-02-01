@@ -12,6 +12,8 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen that fetch
 | **Operations** | [docs/operations/](news-aggregator/docs/operations/) | Troubleshooting and monitoring |
 | **Classifier** | [relevance-tuner/CLAUDE.md](relevance-tuner/CLAUDE.md) | ML classifier training and API |
 | **Analytics** | [docs/architecture/PROCESSING_ANALYTICS.md](news-aggregator/docs/architecture/PROCESSING_ANALYTICS.md) | Processing logs and model comparison |
+| **Browser Pool** | [docs/services/BROWSER_POOL.md](news-aggregator/docs/services/BROWSER_POOL.md) | Shared Playwright instance management |
+| **Article Extractor** | [docs/services/ARTICLE_EXTRACTOR.md](news-aggregator/docs/services/ARTICLE_EXTRACTOR.md) | Content extraction with SPA fallback |
 
 ## Environments
 
@@ -77,7 +79,7 @@ ligahessen/
 
 ## Notes
 
-- **Old Dashboard hidden**: `DashboardView.vue` still exists but is not linked in the sidebar. `/dashboard` redirects to `/uebersicht`. The new Übersicht page replaces it with a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list. The old Dashboard can be deleted if no longer needed.
+- **Übersicht is the main dashboard**: `/dashboard` redirects to `/uebersicht`. The Übersicht page provides a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list.
 
 ## Key Components
 
@@ -86,6 +88,9 @@ ligahessen/
 - **Pipeline** (`services/pipeline.py`) - Item processing and deduplication
 - **LLM Worker** (`services/llm_worker.py`) - Async LLM analysis
 - **Classifier Worker** (`services/classifier_worker.py`) - ML classification
+- **Article Extractor** (`services/article_extractor.py`) - Content extraction (httpx+trafilatura → Wayback → Playwright SPA fallback)
+- **Browser Pool** (`services/browser_pool.py`) - Shared Playwright instance (singleton, max 4 concurrent)
+- **GPU1 Power Manager** (`services/gpu1_power.py`) - Wake-on-LAN for LLM processing
 
 ### Data Flow
 1. **Fetch**: Scheduler triggers connectors to fetch from sources

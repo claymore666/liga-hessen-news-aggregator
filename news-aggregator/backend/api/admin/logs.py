@@ -4,7 +4,6 @@ import logging
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -75,9 +74,9 @@ class LogsResponse(BaseModel):
 async def get_application_logs(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(100, ge=10, le=200, description="Entries per page"),
-    level: Optional[str] = Query(None, description="Filter by log level"),
-    logger_filter: Optional[str] = Query(None, alias="logger", description="Filter by logger name"),
-    search: Optional[str] = Query(None, description="Search in message"),
+    level: str | None = Query(None, description="Filter by log level"),
+    logger_filter: str | None = Query(None, alias="logger", description="Filter by logger name"),
+    search: str | None = Query(None, description="Search in message"),
 ) -> LogsResponse:
     """View recent application logs with pagination.
 

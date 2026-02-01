@@ -121,9 +121,9 @@ async def test_rule(
     if rule is None:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    # TODO: Implement rule testing logic
-    # matcher = RuleMatcher()
-    # matches = await matcher.test(rule, content)
+    # Rule testing placeholder — returns the rule without actually running it.
+    # Full testing would require a RuleMatcher that evaluates keyword/regex/semantic
+    # rules against provided content.
 
     return {
         "rule_id": rule_id,

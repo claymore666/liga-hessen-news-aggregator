@@ -23,7 +23,6 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
@@ -80,8 +79,8 @@ class GPU1PowerManager:
 
         # State tracking
         self._was_sleeping = False
-        self._wake_time: Optional[datetime] = None
-        self._last_activity: Optional[float] = None
+        self._wake_time: datetime | None = None
+        self._last_activity: float | None = None
 
     @property
     def was_sleeping(self) -> bool:
@@ -152,7 +151,7 @@ class GPU1PowerManager:
             logger.error(f"Failed to send WoL packet: {e}")
             return False
 
-    async def wait_for_ready(self, timeout: Optional[int] = None) -> bool:
+    async def wait_for_ready(self, timeout: int | None = None) -> bool:
         """
         Poll Ollama until available or timeout.
 
@@ -429,10 +428,10 @@ class GPU1PowerManager:
 
 
 # Global instance
-_power_manager: Optional[GPU1PowerManager] = None
+_power_manager: GPU1PowerManager | None = None
 
 
-def get_power_manager() -> Optional[GPU1PowerManager]:
+def get_power_manager() -> GPU1PowerManager | None:
     """
     Get the global GPU1 power manager instance.
 

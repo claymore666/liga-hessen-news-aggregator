@@ -11,14 +11,12 @@ Fresh items always take priority over backlog processing.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
-from sqlalchemy import and_, or_
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +55,9 @@ class LLMWorker:
         # Worker state
         self._running = False
         self._paused = False
-        self._task: Optional[asyncio.Task] = None
-        self._poll_task: Optional[asyncio.Task] = None
-        self._sync_task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
+        self._sync_task: asyncio.Task | None = None
         self._processor = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -711,10 +709,10 @@ class LLMWorker:
 
 
 # Global worker instance
-_worker: Optional[LLMWorker] = None
+_worker: LLMWorker | None = None
 
 
-def get_worker() -> Optional[LLMWorker]:
+def get_worker() -> LLMWorker | None:
     """Get the global worker instance."""
     return _worker
 

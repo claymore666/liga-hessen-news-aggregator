@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -17,9 +16,9 @@ class GPU1Status(BaseModel):
     enabled: bool
     available: bool
     was_sleeping: bool
-    wake_time: Optional[str] = None
-    last_activity: Optional[float] = None
-    idle_time: Optional[float] = None
+    wake_time: str | None = None
+    last_activity: float | None = None
+    idle_time: float | None = None
     auto_shutdown: bool
     idle_timeout: int
     pending_shutdown: bool

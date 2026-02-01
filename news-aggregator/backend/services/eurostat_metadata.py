@@ -11,7 +11,6 @@ descriptions that help the classifier understand the data.
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from typing import Optional
 
 import httpx
 
@@ -26,7 +25,7 @@ SDMX_NS = {
 
 # Cache for dataset metadata (refreshed every 24h)
 _metadata_cache: dict[str, dict] = {}
-_cache_timestamp: Optional[datetime] = None
+_cache_timestamp: datetime | None = None
 CACHE_TTL = timedelta(hours=24)
 
 # Cache for methodology page content (by URL)
@@ -95,7 +94,7 @@ class EurostatMetadata:
         logger.info(f"Loaded metadata for {len(metadata)} Eurostat datasets")
         return metadata
 
-    async def get_metadata(self, dataset_id: str) -> Optional[dict]:
+    async def get_metadata(self, dataset_id: str) -> dict | None:
         """
         Get metadata for a specific dataset.
 
@@ -125,7 +124,7 @@ class EurostatMetadata:
 
         return _metadata_cache.get(dataset_id.upper())
 
-    async def _fetch_methodology_content(self, url: str) -> Optional[str]:
+    async def _fetch_methodology_content(self, url: str) -> str | None:
         """
         Fetch and extract content from a methodology page using trafilatura.
 
@@ -238,7 +237,7 @@ class EurostatMetadata:
 
 
 # Singleton instance
-_eurostat_service: Optional[EurostatMetadata] = None
+_eurostat_service: EurostatMetadata | None = None
 
 
 def get_eurostat_service() -> EurostatMetadata:

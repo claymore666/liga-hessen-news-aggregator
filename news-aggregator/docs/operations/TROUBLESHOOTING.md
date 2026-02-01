@@ -258,6 +258,52 @@ rate limited
 - Wait 24h before retrying
 - Consider using instagram_scraper instead
 
+### Browser Pool / Playwright Issues
+
+**Symptoms**: X/Twitter or Instagram scraping fails, article extraction SPA fallback not working
+
+**Check**:
+```bash
+docker compose logs backend | grep -i playwright
+docker compose logs backend | grep -i "browser pool"
+```
+
+**Common causes**:
+
+1. **Playwright not installed or outdated**
+   ```
+   playwright._impl._errors.Error: Executable doesn't exist
+   ```
+   Fix: Rebuild backend container (Dockerfile installs Playwright)
+   ```bash
+   docker compose build backend
+   docker compose up -d backend
+   ```
+
+2. **Driver process crashed (generation restart)**
+   ```
+   Restarting Playwright driver (generation N, M errors)
+   ```
+   Usually self-recovers. If persistent:
+   ```bash
+   docker compose restart backend
+   ```
+
+3. **Semaphore exhausted (all browser slots in use)**
+   ```
+   Timeout waiting for browser slot
+   ```
+   Default max is 4 concurrent browsers. If multiple scrapers + SPA fallback run simultaneously, requests queue up. Check for stuck browsers:
+   ```bash
+   docker compose exec backend ps aux | grep chromium
+   ```
+
+4. **SPA fallback not triggering for expected sites**
+   The Playwright SPA fallback in `article_extractor.py` only activates when trafilatura fails to detect an article AND the page contains SPA markers (e.g., `<div id="app">`, `noscript` tags mentioning JavaScript). Check:
+   ```bash
+   docker compose logs backend | grep "SPA fallback"
+   ```
+
 ### Duplicate Detection Issues
 
 **Symptoms**: Similar articles not being detected as duplicates

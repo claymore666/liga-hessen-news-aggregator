@@ -14,7 +14,7 @@ from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, unquote
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Channel, Item, Priority, ProcessingStepType, Rule, RuleType
+from models import Channel, Item, Priority, Rule, RuleType
 from config import settings
 
 if TYPE_CHECKING:
