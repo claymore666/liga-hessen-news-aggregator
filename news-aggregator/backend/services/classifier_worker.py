@@ -57,6 +57,8 @@ class ClassifierWorker:
         self._running = False
         self._paused = False
         self._task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None
+        self._sync_task: Optional[asyncio.Task] = None
         self._classifier = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -83,6 +85,11 @@ class ClassifierWorker:
         self._stats["started_at"] = datetime.utcnow().isoformat()
         self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
+        self._poll_task = asyncio.create_task(self._poll_commands())
+        self._sync_task = asyncio.create_task(self._sync_stats())
+
+        from services.worker_status import write_state
+        await write_state("classifier", running=True)
         logger.info("Classifier worker started")
 
     async def stop(self):
@@ -91,28 +98,37 @@ class ClassifierWorker:
             return
 
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._task, self._poll_task, self._sync_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         # Close HTTP client in classifier to prevent resource leak
         if self._classifier:
             await self._classifier.close()
             self._classifier = None
 
+        from services.worker_status import write_state, write_stats
+        await write_state("classifier", running=False)
+        async with self._stats_lock:
+            await write_stats("classifier", self._stats.copy())
         logger.info("Classifier worker stopped")
 
-    def pause(self):
+    async def pause(self):
         """Pause processing."""
         self._paused = True
+        from services.worker_status import write_state
+        await write_state("classifier", running=True, paused=True)
         logger.info("Classifier worker paused")
 
-    def resume(self):
+    async def resume(self):
         """Resume processing."""
         self._paused = False
+        from services.worker_status import write_state
+        await write_state("classifier", running=True, paused=False)
         logger.info("Classifier worker resumed")
 
     async def get_status(self) -> dict:
@@ -197,6 +213,8 @@ class ClassifierWorker:
                     )
                     self._stopped_due_to_errors = True
                     self._running = False
+                    from services.worker_status import write_state
+                    await write_state("classifier", running=False, stopped_due_to_errors=True)
                     break
 
                 # Exponential backoff: 10s, 20s, 40s, ... up to 120s
@@ -205,6 +223,44 @@ class ClassifierWorker:
                 await asyncio.sleep(backoff)
 
         logger.info("Classifier worker loop ended")
+
+    async def _poll_commands(self):
+        """Poll DB for commands (pause/resume/stop) from API workers."""
+        from services.worker_status import read_and_clear_command, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                action = await read_and_clear_command("classifier")
+                if action == "pause":
+                    await self.pause()
+                elif action == "resume":
+                    await self.resume()
+                elif action == "stop":
+                    await self.stop()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Classifier command poll error: {e}")
+                await asyncio.sleep(10)
+
+    async def _sync_stats(self):
+        """Periodically sync stats to DB for API workers to read."""
+        from services.worker_status import write_stats, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                async with self._stats_lock:
+                    stats = self._stats.copy()
+                await write_stats("classifier", stats)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Classifier stats sync error: {e}")
+                await asyncio.sleep(10)
 
     async def _process_unclassified_items(self) -> int:
         """

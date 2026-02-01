@@ -795,11 +795,29 @@ def start_scheduler() -> None:
     scheduler.start()
     logger.info("Scheduler started")
 
+    # Write state to DB (fire-and-forget via event loop)
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        from services.worker_status import write_state
+        loop.create_task(write_state("scheduler", running=True))
+    except RuntimeError:
+        pass
+
 
 def stop_scheduler() -> None:
     """Stop the background scheduler."""
     scheduler.shutdown(wait=False)
     logger.info("Scheduler stopped")
+
+    # Write state to DB (fire-and-forget via event loop)
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        from services.worker_status import write_state
+        loop.create_task(write_state("scheduler", running=False))
+    except RuntimeError:
+        pass
 
 
 def get_job_status() -> list[dict]:

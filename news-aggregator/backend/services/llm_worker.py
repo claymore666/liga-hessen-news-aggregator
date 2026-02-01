@@ -58,6 +58,8 @@ class LLMWorker:
         self._running = False
         self._paused = False
         self._task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None
+        self._sync_task: Optional[asyncio.Task] = None
         self._processor = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -83,6 +85,11 @@ class LLMWorker:
         self._stats["started_at"] = datetime.utcnow().isoformat()
         self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
+        self._poll_task = asyncio.create_task(self._poll_commands())
+        self._sync_task = asyncio.create_task(self._sync_stats())
+
+        from services.worker_status import write_state
+        await write_state("llm", running=True)
         logger.info("LLM worker started")
 
     async def stop(self):
@@ -91,22 +98,32 @@ class LLMWorker:
             return
 
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._task, self._poll_task, self._sync_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        from services.worker_status import write_state, write_stats
+        await write_state("llm", running=False)
+        async with self._stats_lock:
+            await write_stats("llm", {**self._stats, "fresh_queue_size": self._fresh_queue.qsize()})
         logger.info("LLM worker stopped")
 
-    def pause(self):
+    async def pause(self):
         """Pause processing (items still queued)."""
         self._paused = True
+        from services.worker_status import write_state
+        await write_state("llm", running=True, paused=True)
         logger.info("LLM worker paused")
 
-    def resume(self):
+    async def resume(self):
         """Resume processing."""
         self._paused = False
+        from services.worker_status import write_state
+        await write_state("llm", running=True, paused=False)
         logger.info("LLM worker resumed")
 
     async def enqueue_fresh(self, item_id: int) -> bool:
@@ -216,6 +233,8 @@ class LLMWorker:
                     )
                     self._stopped_due_to_errors = True
                     self._running = False
+                    from services.worker_status import write_state
+                    await write_state("llm", running=False, stopped_due_to_errors=True)
                     break
 
                 # Exponential backoff: 5s, 10s, 20s, 40s, ... up to 60s
@@ -224,6 +243,44 @@ class LLMWorker:
                 await asyncio.sleep(backoff)
 
         logger.info("LLM worker loop ended")
+
+    async def _poll_commands(self):
+        """Poll DB for commands (pause/resume/stop) from API workers."""
+        from services.worker_status import read_and_clear_command, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                action = await read_and_clear_command("llm")
+                if action == "pause":
+                    await self.pause()
+                elif action == "resume":
+                    await self.resume()
+                elif action == "stop":
+                    await self.stop()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"LLM command poll error: {e}")
+                await asyncio.sleep(10)
+
+    async def _sync_stats(self):
+        """Periodically sync stats to DB for API workers to read."""
+        from services.worker_status import write_stats, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                async with self._stats_lock:
+                    stats = {**self._stats, "fresh_queue_size": self._fresh_queue.qsize()}
+                await write_stats("llm", stats)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"LLM stats sync error: {e}")
+                await asyncio.sleep(10)
 
     def _record_gpu1_activity(self):
         """Record LLM processing activity for gpu1 idle tracking."""

@@ -241,10 +241,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Only the leader runs background workers
     if is_leader:
+        from services.worker_status import write_state
+
         if settings.scheduler_enabled:
             start_scheduler()
             logging.info("Scheduler enabled and started")
         else:
+            await write_state("scheduler", running=False)
             logging.info("Scheduler disabled via SCHEDULER_ENABLED=false")
 
         proxy_manager.start_background_search()
@@ -257,6 +260,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             logging.info("LLM worker enabled and started")
         else:
+            await write_state("llm", running=False)
             logging.info("LLM worker disabled via LLM_WORKER_ENABLED=false")
 
         if settings.classifier_worker_enabled:
@@ -266,6 +270,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             logging.info("Classifier worker enabled and started")
         else:
+            await write_state("classifier", running=False)
             logging.info("Classifier worker disabled via CLASSIFIER_WORKER_ENABLED=false")
 
     yield
@@ -283,6 +288,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         from services.browser_pool import browser_pool
         await browser_pool.shutdown()
+
+        # Mark all workers as stopped in DB
+        from services.worker_status import write_state
+        for name in ("scheduler", "llm", "classifier"):
+            await write_state(name, running=False)
 
         _release_leader()
         logging.info("Leader shutdown complete")

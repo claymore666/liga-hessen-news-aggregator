@@ -58,10 +58,12 @@ async def get_system_health(
     from services.scheduler import scheduler, get_job_status
     from services.proxy_manager import proxy_manager
     from services.llm.ollama import OllamaProvider
+    from services.worker_status import read_state
 
-    # Scheduler status
-    scheduler_running = scheduler.running
-    scheduler_jobs = get_job_status() if scheduler_running else []
+    # Scheduler status - read from DB, fall back to local
+    sched_state = await read_state("scheduler")
+    scheduler_running = sched_state.get("running", False) or scheduler.running
+    scheduler_jobs = get_job_status() if scheduler.running else []
 
     # LLM status
     llm_available = False

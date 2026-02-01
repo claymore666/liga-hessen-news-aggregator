@@ -95,46 +95,35 @@ async def get_system_stats(
     Returns status of scheduler, workers, processing queue, and items.
     """
     from services.scheduler import scheduler, get_job_status
-    from services.llm_worker import get_worker as get_llm_worker
-    from services.classifier_worker import get_classifier_worker
+    from services.worker_status import read_state, read_stats
 
-    # Scheduler status
+    # Scheduler status - read from DB, fall back to local
+    sched_state = await read_state("scheduler")
+    scheduler_running = sched_state.get("running", False) or scheduler.running
     scheduler_status = SchedulerStatus(
-        running=scheduler.running,
+        running=scheduler_running,
         jobs=get_job_status() if scheduler.running else [],
     )
 
-    # LLM Worker status
-    llm_worker = get_llm_worker()
-    if llm_worker:
-        llm_status = await llm_worker.get_status()
-        llm_worker_status = WorkerStatus(
-            running=llm_status["running"],
-            paused=llm_status["paused"],
-            stats=llm_status["stats"],
-        )
-    else:
-        llm_worker_status = WorkerStatus(
-            running=False,
-            paused=False,
-            stats={"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
-        )
+    # LLM Worker status from DB
+    llm_state = await read_state("llm")
+    llm_stats = await read_stats("llm")
+    llm_worker_status = WorkerStatus(
+        running=llm_state.get("running", False),
+        paused=llm_state.get("paused", False),
+        stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
+              {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
+    )
 
-    # Classifier Worker status
-    classifier_worker = get_classifier_worker()
-    if classifier_worker:
-        clf_status = await classifier_worker.get_status()
-        classifier_worker_status = WorkerStatus(
-            running=clf_status["running"],
-            paused=clf_status["paused"],
-            stats=clf_status["stats"],
-        )
-    else:
-        classifier_worker_status = WorkerStatus(
-            running=False,
-            paused=False,
-            stats={"processed": 0, "errors": 0},
-        )
+    # Classifier Worker status from DB
+    clf_state = await read_state("classifier")
+    clf_stats = await read_stats("classifier")
+    classifier_worker_status = WorkerStatus(
+        running=clf_state.get("running", False),
+        paused=clf_state.get("paused", False),
+        stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
+              {"processed": 0, "errors": 0},
+    )
 
     # Processing queue stats — combine into fewer queries
     retry_priority = json_extract_path(Item.metadata_, "retry_priority")

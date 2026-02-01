@@ -129,6 +129,7 @@ class Settings(BaseSettings):
     # Workers
     llm_worker_enabled: bool = True  # Set to False to disable LLM worker on startup
     classifier_worker_enabled: bool = True  # Set to False to disable classifier on startup
+    worker_status_poll_interval: int = 10  # Seconds between DB status sync/command polls
 
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
