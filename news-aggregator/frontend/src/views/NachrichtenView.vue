@@ -352,13 +352,40 @@ function scrollToItem(id: number) {
   })
 }
 
+function scrollToTopic(topic: string) {
+  nextTick(() => {
+    const el = document.querySelector(`[data-topic="${CSS.escape(topic)}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      // Briefly highlight the topic header
+      const header = el.querySelector(':scope > div')
+      if (header) {
+        header.classList.add('bg-yellow-200')
+        setTimeout(() => header.classList.remove('bg-yellow-200'), 2000)
+      }
+    }
+  })
+}
+
 onMounted(async () => {
   // Apply search query from URL (e.g. from topic word cloud click)
   const querySearch = route.query.search
   if (querySearch && typeof querySearch === 'string') {
     itemsStore.setFilter('search', querySearch)
   }
+
+  // Switch to topic view if topic query param is present
+  const queryTopic = route.query.topic
+  if (queryTopic && typeof queryTopic === 'string') {
+    viewMode.value = 'topic'
+  }
+
   await Promise.all([loadItems(), loadTopics(), sourcesStore.fetchSources()])
+
+  // Scroll to topic group after topics loaded
+  if (queryTopic && typeof queryTopic === 'string') {
+    scrollToTopic(queryTopic)
+  }
 
   // Handle deep-link after items are loaded
   const deepLinkId = route.params.id

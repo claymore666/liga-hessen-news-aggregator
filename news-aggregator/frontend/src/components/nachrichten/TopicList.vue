@@ -40,7 +40,7 @@ const formatTime = (date: string | null) => {
     </div>
     <div v-else>
       <!-- Topic groups -->
-      <div v-for="group in topics" :key="group.topic" class="mb-0.5">
+      <div v-for="group in topics" :key="group.topic" :data-topic="group.topic" class="mb-0.5">
         <!-- Topic header -->
         <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 border-l-4 border-l-indigo-400 sticky top-0 z-10">
           <span class="font-semibold text-xs text-indigo-800 truncate">{{ group.topic }}</span>

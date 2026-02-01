@@ -51,7 +51,7 @@ async function fetchTopics() {
 }
 
 function navigateToTopic(topic: string) {
-  router.push({ path: '/items', query: { search: topic } })
+  router.push({ path: '/items', query: { topic } })
 }
 
 const minCount = computed(() => Math.min(...topics.value.map(t => t.count), 0))
