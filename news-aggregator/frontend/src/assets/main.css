@@ -42,7 +42,7 @@
   }
 
   .badge-medium {
-    @apply bg-orange-100 text-orange-800;
+    @apply bg-orange-100 text-black;
   }
 
   .badge-low {

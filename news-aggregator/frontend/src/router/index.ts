@@ -5,9 +5,17 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'dashboard',
-      component: () => import('../views/DashboardView.vue'),
-      meta: { title: 'Dashboard' }
+      redirect: '/uebersicht'
+    },
+    {
+      path: '/uebersicht',
+      name: 'uebersicht',
+      component: () => import('../views/UebersichtView.vue'),
+      meta: { title: 'Übersicht' }
+    },
+    {
+      path: '/dashboard',
+      redirect: '/uebersicht'
     },
     {
       path: '/items',

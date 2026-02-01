@@ -75,6 +75,10 @@ ligahessen/
 └── CLAUDE.md                 # This file
 ```
 
+## Notes
+
+- **Old Dashboard hidden**: `DashboardView.vue` still exists but is not linked in the sidebar. `/dashboard` redirects to `/uebersicht`. The new Übersicht page replaces it with a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list. The old Dashboard can be deleted if no longer needed.
+
 ## Key Components
 
 ### Backend Services
@@ -104,6 +108,96 @@ Environment variables in `.env`:
 - `OLLAMA_MODEL` - Model name (default: qwen3:14b-q8_0)
 - `CLASSIFIER_API_URL` - Classifier endpoint
 - `POSTGRES_*` - Database credentials
+
+## Development Practices
+
+### Testing and Data Fixes
+- **Always use existing API endpoints** for testing, regression testing, and fixing data — not custom one-off scripts or direct DB queries
+- This proves the actual code works end-to-end, not just an ad-hoc workaround
+- Use the refetch endpoints, item update endpoints, or trigger scheduler fetches via API
+- Only use direct DB access for investigation/diagnosis, not for applying fixes
+- **If testing requires functionality that has no API endpoint**, ask the user if we should add one before resorting to scripts
+
+### Useful API Endpoints for Testing & Operations
+
+**Item management:**
+```bash
+# Get item by ID (includes duplicates, metadata, processing info)
+curl -s http://localhost:8000/api/items/{id} | jq .
+
+# Update item fields (priority, is_read, assigned_aks, summary, etc.)
+curl -s -X PATCH http://localhost:8000/api/items/{id} \
+  -H "Content-Type: application/json" -d '{"priority": "high"}'
+
+# Re-fetch item (re-extract article content from URL)
+curl -s -X POST http://localhost:8000/api/items/{id}/refetch
+
+# Reprocess item through LLM
+curl -s -X POST http://localhost:8000/api/items/{id}/reprocess
+
+# List items with filters
+curl -s "http://localhost:8000/api/items?page_size=10&priority=high&relevant_only=true&search=keyword"
+
+# Items grouped by topic (with duplicates)
+curl -s "http://localhost:8000/api/items/by-topic?days=7"
+
+# Item event history
+curl -s http://localhost:8000/api/items/{id}/history | jq .
+```
+
+**Worker controls:**
+```bash
+# Check system status (scheduler, workers, queue)
+curl -s http://localhost:8000/api/admin/stats | jq .
+
+# Pause/resume workers
+curl -s -X POST http://localhost:8000/api/admin/classifier-worker/pause
+curl -s -X POST http://localhost:8000/api/admin/classifier-worker/resume
+curl -s -X POST http://localhost:8000/api/admin/llm-worker/pause
+curl -s -X POST http://localhost:8000/api/admin/llm-worker/resume
+
+# Trigger LLM retry processing
+curl -s -X POST "http://localhost:8000/api/items/retry-queue/process?batch_size=10"
+
+# Check retry queue stats
+curl -s http://localhost:8000/api/items/retry-queue | jq .
+```
+
+**Classifier API (port 8082):**
+```bash
+# Health check (shows index counts)
+curl -s http://localhost:8082/health | jq .
+
+# Find duplicates for text
+curl -s -X POST http://localhost:8082/find-duplicates \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Article title", "content": "Content", "threshold": 0.75}'
+
+# List indexed IDs
+curl -s http://localhost:8082/ids | jq .count
+
+# Delete items from vector store
+curl -s -X POST http://localhost:8082/delete \
+  -H "Content-Type: application/json" -d '{"ids": ["123", "456"]}'
+
+# Sync duplicate store from search store
+curl -s -X POST http://localhost:8082/sync-duplicate-store | jq .
+```
+
+**Analytics & debugging:**
+```bash
+# Processing analytics summary
+curl -s http://localhost:8000/api/analytics/summary | jq .
+
+# Items where classifier and LLM disagree
+curl -s http://localhost:8000/api/analytics/disagreements | jq .
+
+# Recent processing errors
+curl -s http://localhost:8000/api/analytics/recent-errors | jq .
+
+# Storage stats
+curl -s http://localhost:8000/api/admin/storage | jq .
+```
 
 ## Common Tasks
 

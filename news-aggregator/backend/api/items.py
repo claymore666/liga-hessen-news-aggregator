@@ -1,7 +1,7 @@
 """API endpoints for news items."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import case, func, select
@@ -68,6 +68,7 @@ async def list_items(
     is_read: bool | None = None,
     is_starred: bool | None = None,
     is_archived: bool | None = Query(None, description="Filter by archive status (default: exclude archived)"),
+    days: int | None = Query(None, description="Filter to last N days by fetched_at"),
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
@@ -120,6 +121,9 @@ async def list_items(
     else:
         # By default, exclude archived items
         query = query.where(Item.is_archived == False)  # noqa: E712
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        query = query.where(Item.fetched_at >= cutoff)
     if since is not None:
         # Strip timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE compatibility
         since_naive = since.replace(tzinfo=None) if since.tzinfo else since
@@ -285,19 +289,17 @@ async def get_items_by_topic(
             i.is_read
     """
 
-    # Query items with topics (unnested)
+    # Query items with topic from llm_analysis.topic field
     raw_query = sql_text(f"""
         SELECT
-            topic,
+            (i.metadata::jsonb)->'llm_analysis'->>'topic' AS topic,
             {item_fields}
         FROM items i
         LEFT JOIN channels c ON i.channel_id = c.id
         LEFT JOIN sources s ON c.source_id = s.id
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            (i.metadata::jsonb)->'llm_analysis'->'topics'
-        ) AS topic
         WHERE {base_where}
-          AND jsonb_typeof((i.metadata::jsonb)->'llm_analysis'->'topics') = 'array'
+          AND (i.metadata::jsonb)->'llm_analysis'->>'topic' IS NOT NULL
+          AND (i.metadata::jsonb)->'llm_analysis'->>'topic' != 'Sonstiges'
         ORDER BY topic, i.published_at DESC
     """)
 
@@ -354,6 +356,53 @@ async def get_items_by_topic(
     for row in all_rows:
         if row[0] not in grouped_item_ids:
             ungrouped_items.append(_make_brief(row, offset=0))
+
+    # Collect all item IDs to fetch their duplicates
+    all_item_ids = grouped_item_ids.copy()
+    for item in ungrouped_items:
+        all_item_ids.add(item.id)
+
+    # Fetch duplicates for all items in one query
+    if all_item_ids:
+        dup_query = sql_text("""
+            SELECT
+                i.similar_to_id,
+                i.id,
+                i.title,
+                i.url,
+                i.priority,
+                s.name as source_name,
+                i.published_at
+            FROM items i
+            LEFT JOIN channels c ON i.channel_id = c.id
+            LEFT JOIN sources s ON c.source_id = s.id
+            WHERE i.similar_to_id = ANY(:ids)
+              AND i.is_archived = false
+            ORDER BY i.similar_to_id, i.published_at DESC
+        """)
+        dup_result = await db.execute(dup_query, {"ids": list(all_item_ids)})
+        dup_rows = dup_result.fetchall()
+
+        # Build lookup: parent_id -> list of DuplicateBrief
+        dup_map: dict[int, list[DuplicateBrief]] = defaultdict(list)
+        for row in dup_rows:
+            parent_id = row[0]
+            source_brief = SourceBrief(id=0, name=row[5]) if row[5] else None
+            dup_map[parent_id].append(DuplicateBrief(
+                id=row[1],
+                title=row[2],
+                url=row[3],
+                priority=row[4],
+                source=source_brief,
+                published_at=row[6],
+            ))
+
+        # Attach duplicates to items
+        for group in groups:
+            for item in group.items:
+                item.duplicates = dup_map.get(item.id, [])
+        for item in ungrouped_items:
+            item.duplicates = dup_map.get(item.id, [])
 
     return TopicGroupsResponse(
         topics=groups,

@@ -57,6 +57,8 @@ class ClassifierWorker:
         self._running = False
         self._paused = False
         self._task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None
+        self._sync_task: Optional[asyncio.Task] = None
         self._classifier = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -83,6 +85,11 @@ class ClassifierWorker:
         self._stats["started_at"] = datetime.utcnow().isoformat()
         self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
+        self._poll_task = asyncio.create_task(self._poll_commands())
+        self._sync_task = asyncio.create_task(self._sync_stats())
+
+        from services.worker_status import write_state
+        await write_state("classifier", running=True)
         logger.info("Classifier worker started")
 
     async def stop(self):
@@ -91,28 +98,37 @@ class ClassifierWorker:
             return
 
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._task, self._poll_task, self._sync_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         # Close HTTP client in classifier to prevent resource leak
         if self._classifier:
             await self._classifier.close()
             self._classifier = None
 
+        from services.worker_status import write_state, write_stats
+        await write_state("classifier", running=False)
+        async with self._stats_lock:
+            await write_stats("classifier", self._stats.copy())
         logger.info("Classifier worker stopped")
 
-    def pause(self):
+    async def pause(self):
         """Pause processing."""
         self._paused = True
+        from services.worker_status import write_state
+        await write_state("classifier", running=True, paused=True)
         logger.info("Classifier worker paused")
 
-    def resume(self):
+    async def resume(self):
         """Resume processing."""
         self._paused = False
+        from services.worker_status import write_state
+        await write_state("classifier", running=True, paused=False)
         logger.info("Classifier worker resumed")
 
     async def get_status(self) -> dict:
@@ -139,6 +155,7 @@ class ClassifierWorker:
 
         consecutive_errors = 0
         max_consecutive_errors = 10
+        last_sync_check_date = None
 
         while self._running:
             try:
@@ -155,22 +172,29 @@ class ClassifierWorker:
                     await asyncio.sleep(0.5)
                     continue
 
-                # Priority 2: Re-check duplicates for items that missed the check
-                duplicates_checked = await self._process_unchecked_duplicates()
-                if duplicates_checked > 0:
-                    consecutive_errors = 0  # Reset on success
-                    await asyncio.sleep(0.5)
-                    continue
-
-                # Priority 3: Re-index items that weren't indexed in vector store
+                # Priority 2: Index items in vector store (before duplicate check
+                # so that items from the same batch are findable as duplicates)
                 indexed = await self._process_unindexed_items()
                 if indexed > 0:
                     consecutive_errors = 0  # Reset on success
                     await asyncio.sleep(0.5)
                     continue
 
+                # Priority 3: Re-check duplicates for items that missed the check
+                duplicates_checked = await self._process_unchecked_duplicates()
+                if duplicates_checked > 0:
+                    consecutive_errors = 0  # Reset on success
+                    await asyncio.sleep(0.5)
+                    continue
+
+                # Daily sync check: verify DB and ChromaDB are in sync
+                today = datetime.utcnow().date()
+                if last_sync_check_date != today and datetime.utcnow().hour >= 0:
+                    last_sync_check_date = today
+                    await self._check_vectordb_sync()
+
                 # No work available, sleep
-                logger.debug(f"No unclassified items, unchecked duplicates, or unindexed items, sleeping {self.idle_sleep}s")
+                logger.debug(f"No unclassified items, unindexed items, or unchecked duplicates, sleeping {self.idle_sleep}s")
                 await asyncio.sleep(self.idle_sleep)
 
             except asyncio.CancelledError:
@@ -189,6 +213,8 @@ class ClassifierWorker:
                     )
                     self._stopped_due_to_errors = True
                     self._running = False
+                    from services.worker_status import write_state
+                    await write_state("classifier", running=False, stopped_due_to_errors=True)
                     break
 
                 # Exponential backoff: 10s, 20s, 40s, ... up to 120s
@@ -197,6 +223,44 @@ class ClassifierWorker:
                 await asyncio.sleep(backoff)
 
         logger.info("Classifier worker loop ended")
+
+    async def _poll_commands(self):
+        """Poll DB for commands (pause/resume/stop) from API workers."""
+        from services.worker_status import read_and_clear_command, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                action = await read_and_clear_command("classifier")
+                if action == "pause":
+                    await self.pause()
+                elif action == "resume":
+                    await self.resume()
+                elif action == "stop":
+                    await self.stop()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Classifier command poll error: {e}")
+                await asyncio.sleep(10)
+
+    async def _sync_stats(self):
+        """Periodically sync stats to DB for API workers to read."""
+        from services.worker_status import write_stats, get_poll_interval
+
+        while self._running:
+            try:
+                interval = await get_poll_interval()
+                await asyncio.sleep(interval)
+                async with self._stats_lock:
+                    stats = self._stats.copy()
+                await write_stats("classifier", stats)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Classifier stats sync error: {e}")
+                await asyncio.sleep(10)
 
     async def _process_unclassified_items(self) -> int:
         """
@@ -453,6 +517,8 @@ class ClassifierWorker:
                 items_to_check.append({
                     "id": item.id,
                     "title": item.title,
+                    "url": item.url,
+                    "channel_id": item.channel_id,
                     "content": item.content or "",
                     "old_metadata": dict(item.metadata_) if item.metadata_ else {},
                 })
@@ -469,24 +535,47 @@ class ClassifierWorker:
                 break
 
             try:
-                # Strip boilerplate before duplicate check to avoid false positives
-                clean_title = _strip_boilerplate(item_data["title"])
-                clean_content = _strip_boilerplate(item_data["content"])
-
-                # Find potential duplicates
-                duplicates = await classifier.find_duplicates(
-                    title=clean_title,
-                    content=clean_content,
-                    threshold=0.75,
-                )
-
                 # Prepare updated metadata
                 new_metadata = dict(item_data["old_metadata"])
                 new_metadata["duplicate_checked"] = True
                 new_metadata["duplicate_checked_at"] = datetime.utcnow().isoformat()
 
                 similar_to_id = None
-                if duplicates:
+                duplicates = []
+
+                # 1. URL-based duplicate check (exact same article from different channel)
+                if item_data.get("url"):
+                    async with async_session_maker() as url_db:
+                        url_match = await url_db.scalar(
+                            select(Item.id).where(
+                                Item.url == item_data["url"],
+                                Item.id < item_data["id"],
+                                Item.channel_id != item_data["channel_id"],
+                            ).order_by(Item.id).limit(1)
+                        )
+                        if url_match:
+                            similar_to_id = url_match
+                            new_metadata["duplicate_method"] = "url_match"
+                            duplicates_found += 1
+                            logger.info(
+                                f"URL duplicate: '{item_data['title'][:40]}...' "
+                                f"same URL as item {similar_to_id}"
+                            )
+
+                # 2. Semantic duplicate check (same topic, different article)
+                if not similar_to_id:
+                    # Strip boilerplate before duplicate check to avoid false positives
+                    clean_title = _strip_boilerplate(item_data["title"])
+                    clean_content = _strip_boilerplate(item_data["content"])
+
+                    # Find potential duplicates
+                    duplicates = await classifier.find_duplicates(
+                        title=clean_title,
+                        content=clean_content,
+                        threshold=0.75,
+                    )
+
+                if not similar_to_id and duplicates:
                     # Find the best match that isn't the item itself and won't create circular reference
                     for dup in duplicates:
                         dup_id = int(dup["id"])
@@ -639,7 +728,8 @@ class ClassifierWorker:
                 self._stats["errors"] += 1
             return 0
 
-        # Update metadata for all items (even if indexed=0, the API succeeded)
+        # Mark items as indexed — the API call succeeded, items are either
+        # newly added or already existed in ChromaDB (both are valid states)
         if item_ids:
             try:
                 async with async_session_maker() as db:
@@ -670,6 +760,54 @@ class ClassifierWorker:
             logger.info(f"Indexed {len(item_ids)} items in vector store")
 
         return len(item_ids)
+
+    async def _check_vectordb_sync(self) -> None:
+        """Daily check: compare DB indexed count with ChromaDB item count.
+
+        Logs an error if the counts are significantly out of sync,
+        and resets vectordb_indexed flags for items missing from ChromaDB.
+        """
+        try:
+            classifier = await self._get_classifier()
+            if not classifier:
+                return
+
+            # Get ChromaDB item count from health endpoint
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{classifier.base_url}/health")
+                health = resp.json()
+
+            chromadb_count = health.get("duplicate_index_items", 0)
+
+            # Get DB indexed count
+            async with async_session_maker() as db:
+                from database import json_extract_path
+                db_count = await db.scalar(
+                    select(func.count()).select_from(Item).where(
+                        json_extract_path(Item.metadata_, "vectordb_indexed").isnot(None),
+                    )
+                )
+
+            diff = (db_count or 0) - chromadb_count
+            if abs(diff) > 50:
+                logger.error(
+                    f"VECTORDB SYNC CHECK: DB says {db_count} items indexed, "
+                    f"ChromaDB has {chromadb_count} items. "
+                    f"Difference: {diff} items. "
+                    f"Run /sync-duplicate-store or reset vectordb_indexed flags."
+                )
+            elif diff > 0:
+                logger.warning(
+                    f"VectorDB sync: {diff} items in DB but not in ChromaDB "
+                    f"(DB: {db_count}, ChromaDB: {chromadb_count})"
+                )
+            else:
+                logger.info(
+                    f"VectorDB sync check OK: DB={db_count}, ChromaDB={chromadb_count}"
+                )
+        except Exception as e:
+            logger.warning(f"VectorDB sync check failed: {e}")
 
 
 # Global worker instance

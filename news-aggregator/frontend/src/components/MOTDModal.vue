@@ -155,7 +155,7 @@ const formattedDate = computed(() => {
         >
           <div
             v-if="isVisible"
-            class="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden"
+            class="bg-white rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden"
           >
             <!-- Header -->
             <div class="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex items-center justify-between">

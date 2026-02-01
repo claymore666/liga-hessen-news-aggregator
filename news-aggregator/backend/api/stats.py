@@ -1,15 +1,14 @@
 """API endpoints for dashboard statistics."""
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db, json_extract_path
-from models import Channel, Item, ItemEvent, Priority, Rule, Source
+from database import get_db
+from models import Channel, Item, Priority, Rule, Source
 from schemas import ChannelStats, SourceStats, StatsResponse
 
 router = APIRouter()
@@ -18,27 +17,35 @@ router = APIRouter()
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(
     db: AsyncSession = Depends(get_db),
+    days: int | None = Query(None, description="Filter item counts to last N days (by fetched_at)"),
 ) -> StatsResponse:
     """Get dashboard statistics."""
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
+    # Optional time filter for item counts
+    time_filter = []
+    if days is not None:
+        cutoff = now - timedelta(days=days)
+        time_filter.append(Item.fetched_at >= cutoff)
+
     # Combine all item counts into a single query
-    item_stats_row = (await db.execute(
-        select(
-            func.count(Item.id).label("total"),
-            func.count(Item.id).filter(Item.priority != Priority.NONE).label("relevant"),
-            func.count(Item.id).filter(Item.is_read == False, Item.priority != Priority.NONE).label("unread"),  # noqa: E712
-            func.count(Item.id).filter(Item.is_starred == True).label("starred"),  # noqa: E712
-            func.count(Item.id).filter(Item.priority == Priority.HIGH).label("high"),
-            func.count(Item.id).filter(Item.priority == Priority.MEDIUM).label("medium"),
-            func.count(Item.id).filter(Item.priority == Priority.LOW).label("low"),
-            func.count(Item.id).filter(Item.priority == Priority.NONE).label("none_p"),
-            func.count(Item.id).filter(Item.fetched_at >= today_start).label("today"),
-            func.count(Item.id).filter(Item.fetched_at >= week_start).label("week"),
-        )
-    )).one()
+    base = select(
+        func.count(Item.id).label("total"),
+        func.count(Item.id).filter(Item.priority != Priority.NONE).label("relevant"),
+        func.count(Item.id).filter(Item.is_read == False, Item.priority != Priority.NONE).label("unread"),  # noqa: E712
+        func.count(Item.id).filter(Item.is_starred == True).label("starred"),  # noqa: E712
+        func.count(Item.id).filter(Item.priority == Priority.HIGH).label("high"),
+        func.count(Item.id).filter(Item.priority == Priority.MEDIUM).label("medium"),
+        func.count(Item.id).filter(Item.priority == Priority.LOW).label("low"),
+        func.count(Item.id).filter(Item.priority == Priority.NONE).label("none_p"),
+        func.count(Item.id).filter(Item.fetched_at >= today_start).label("today"),
+        func.count(Item.id).filter(Item.fetched_at >= week_start).label("week"),
+    )
+    if time_filter:
+        base = base.where(*time_filter)
+    item_stats_row = (await db.execute(base)).one()
 
     # Source/channel/rule counts in a single query
     sources_count = await db.scalar(select(func.count(Source.id))) or 0
@@ -82,10 +89,83 @@ async def get_stats(
     )
 
 
+@router.get("/stats/topic-counts")
+async def get_topic_counts(
+    db: AsyncSession = Depends(get_db),
+    days: int | None = None,
+    limit: int = 0,
+    priority: str | None = None,
+) -> dict:
+    """Get topic counts for word cloud.
+
+    Args:
+        days: Number of days to look back. Default: 1 (3 on Monday).
+        limit: Max topics to return (0 = all).
+        priority: Comma-separated priority filter (e.g. 'high,medium').
+    """
+    now = datetime.utcnow()
+    if days is None:
+        # Monday = 0, so use 3 days on Monday to cover the weekend
+        days = 3 if now.weekday() == 0 else 1
+
+    cutoff = now - timedelta(days=days)
+
+    topic_expr = Item.metadata_["llm_analysis"]["topic"].as_string()
+
+    query = (
+        select(
+            topic_expr.label("topic"),
+            func.count().label("count"),
+        )
+        .where(
+            Item.similar_to_id.is_(None),
+            Item.priority != Priority.NONE,
+            Item.fetched_at >= cutoff,
+            topic_expr.isnot(None),
+            topic_expr != "Sonstiges",
+        )
+        .group_by(topic_expr)
+        .order_by(func.count().desc())
+    )
+
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        query = query.where(Item.priority.in_(priorities))
+
+    if limit > 0:
+        query = query.limit(limit)
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Get total items count for the period
+    total_query = (
+        select(func.count())
+        .select_from(Item)
+        .where(
+            Item.similar_to_id.is_(None),
+            Item.priority != Priority.NONE,
+            Item.fetched_at >= cutoff,
+        )
+    )
+    if priority:
+        total_query = total_query.where(Item.priority.in_(priorities))
+
+    total = await db.scalar(total_query) or 0
+
+    return {
+        "topics": [{"topic": row.topic, "count": row.count} for row in rows],
+        "period_days": days,
+        "total_items": total,
+    }
+
+
 @router.get("/stats/by-source", response_model=list[SourceStats])
 async def get_stats_by_source(
     db: AsyncSession = Depends(get_db),
     source_id: int | None = None,
+    days: int | None = None,
+    priority: str | None = None,
 ) -> list[SourceStats]:
     """Get item counts grouped by source (organization).
 
@@ -93,7 +173,18 @@ async def get_stats_by_source(
 
     Args:
         source_id: Filter by specific source ID
+        days: Filter items to last N days
+        priority: Comma-separated priority filter (e.g. 'high,medium')
     """
+    # Build item filter conditions
+    item_conditions = [Channel.id == Item.channel_id]
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        item_conditions.append(Item.fetched_at >= cutoff)
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        item_conditions.append(Item.priority.in_(priorities))
+
     # Subquery to count items per source through channels
     item_counts = (
         select(
@@ -101,7 +192,7 @@ async def get_stats_by_source(
             func.count(Item.id).label("item_count"),
             func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
         )
-        .outerjoin(Item, Channel.id == Item.channel_id)
+        .outerjoin(Item, and_(*item_conditions))
         .group_by(Channel.source_id)
         .subquery()
     )
@@ -142,6 +233,115 @@ async def get_stats_by_source(
         )
         for row in rows
     ]
+
+
+@router.get("/stats/source-donut")
+async def get_source_donut(
+    db: AsyncSession = Depends(get_db),
+    days: int | None = None,
+    priority: str | None = None,
+    resolve_ga: str | None = None,
+) -> list[dict]:
+    """Get source counts for donut chart, with optional Google Alerts resolution.
+
+    Returns a flat list of {name, count} suitable for a donut chart.
+    When resolve_ga is set, Google Alerts items are broken out by keyword or
+    source domain instead of being lumped under their parent source.
+
+    Args:
+        days: Filter items to last N days.
+        priority: Comma-separated priority filter.
+        resolve_ga: None (default), 'keyword' (GA channel name), or 'source' (source_domain).
+    """
+    base_conditions = [Item.priority != Priority.NONE]
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        base_conditions.append(Item.fetched_at >= cutoff)
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        base_conditions.append(Item.priority.in_(priorities))
+
+    results: dict[str, dict] = {}  # name -> {count, is_ga}
+
+    # Find Google Alerts source IDs by name
+    ga_source_ids_result = await db.execute(
+        select(Source.id).where(Source.name.ilike("%google alert%"))
+    )
+    ga_source_ids = [row[0] for row in ga_source_ids_result.all()]
+
+    if resolve_ga and ga_source_ids:
+        # Non-GA items: group by source name
+        non_ga_query = (
+            select(
+                Source.name.label("name"),
+                func.count(Item.id).label("count"),
+            )
+            .select_from(Item)
+            .join(Channel, Channel.id == Item.channel_id)
+            .join(Source, Source.id == Channel.source_id)
+            .where(Source.id.not_in(ga_source_ids), *base_conditions)
+            .group_by(Source.name)
+        )
+        for row in (await db.execute(non_ga_query)).all():
+            entry = results.get(row.name, {"count": 0, "is_ga": False})
+            entry["count"] += row.count
+            results[row.name] = entry
+
+        # GA items: resolve by keyword or source domain
+        if resolve_ga == "source":
+            source_domain = Item.metadata_["source_domain"].as_string()
+            ga_query = (
+                select(
+                    source_domain.label("name"),
+                    func.count().label("count"),
+                )
+                .select_from(Item)
+                .join(Channel, Channel.id == Item.channel_id)
+                .where(
+                    Channel.source_id.in_(ga_source_ids),
+                    source_domain.isnot(None),
+                    source_domain != "",
+                    *base_conditions,
+                )
+                .group_by(source_domain)
+            )
+        else:
+            # keyword = channel name
+            ga_query = (
+                select(
+                    Channel.name.label("name"),
+                    func.count().label("count"),
+                )
+                .select_from(Item)
+                .join(Channel, Channel.id == Item.channel_id)
+                .where(Channel.source_id.in_(ga_source_ids), *base_conditions)
+                .group_by(Channel.name)
+            )
+        for row in (await db.execute(ga_query)).all():
+            name = row.name or "Unbekannt"
+            entry = results.get(name, {"count": 0, "is_ga": True})
+            entry["count"] += row.count
+            entry["is_ga"] = True
+            results[name] = entry
+    else:
+        # Default: group everything by source name
+        query = (
+            select(
+                Source.name.label("name"),
+                func.count(Item.id).label("count"),
+            )
+            .select_from(Item)
+            .join(Channel, Channel.id == Item.channel_id)
+            .join(Source, Source.id == Channel.source_id)
+        )
+        if base_conditions:
+            query = query.where(*base_conditions)
+        query = query.group_by(Source.name)
+        for row in (await db.execute(query)).all():
+            results[row.name] = {"count": row.count, "is_ga": False}
+
+    sorted_results = sorted(results.items(), key=lambda x: x[1]["count"], reverse=True)
+    return [{"name": name, "count": entry["count"], "is_ga": entry["is_ga"]} for name, entry in sorted_results]
 
 
 @router.get("/stats/by-channel", response_model=list[ChannelStats])
@@ -246,150 +446,3 @@ async def get_stats_by_priority(
         result[priority.value] = count
 
     return result
-
-
-class ClassifierAgreementStats(BaseModel):
-    """Response model for classifier agreement statistics."""
-    period_days: int
-    total_items: int
-    items_with_agreement: int
-    relevance: dict[str, Any]
-    priority: dict[str, Any]
-    ak: dict[str, Any]
-    by_classifier_version: dict[str, dict[str, Any]] | None = None
-
-
-@router.get("/stats/classifier-agreement", response_model=ClassifierAgreementStats)
-async def get_classifier_agreement(
-    db: AsyncSession = Depends(get_db),
-    days: int = Query(7, ge=1, le=90, description="Number of days to analyze"),
-) -> ClassifierAgreementStats:
-    """Get classifier vs LLM agreement statistics.
-
-    Analyzes items processed by both classifier and LLM to track:
-    - Relevance agreement (both say relevant or both say irrelevant)
-    - Priority agreement (exact match and within-one-level)
-    - AK agreement (exact match and partial overlap)
-
-    Used to monitor classifier quality and detect drift over time.
-    """
-    since = datetime.utcnow() - timedelta(days=days)
-
-    # Query LLM events with agreement data
-    query = (
-        select(ItemEvent)
-        .where(ItemEvent.event_type == "llm_processed")
-        .where(ItemEvent.timestamp >= since)
-    )
-
-    result = await db.execute(query)
-    events = result.scalars().all()
-
-    # Filter events that have agreement data
-    events_with_agreement = [
-        e for e in events
-        if e.data and e.data.get("agreement")
-    ]
-
-    if not events_with_agreement:
-        return ClassifierAgreementStats(
-            period_days=days,
-            total_items=len(events),
-            items_with_agreement=0,
-            relevance={"agreement_rate": None, "matches": 0, "mismatches": 0},
-            priority={"exact_match": None, "within_one": None},
-            ak={"exact_match": None, "partial_match": None},
-        )
-
-    # Aggregate metrics
-    relevance_matches = 0
-    relevance_mismatches = 0
-    priority_exact = 0
-    priority_within_one = 0
-    ak_exact = 0
-    ak_partial = 0
-
-    # Track by classifier version
-    by_version: dict[str, dict[str, int]] = {}
-
-    for event in events_with_agreement:
-        agreement = event.data["agreement"]
-
-        # Relevance
-        if agreement.get("relevance_match"):
-            relevance_matches += 1
-        else:
-            relevance_mismatches += 1
-
-        # Priority
-        if agreement.get("priority_match"):
-            priority_exact += 1
-        if agreement.get("priority_within_one"):
-            priority_within_one += 1
-
-        # AK
-        if agreement.get("ak_exact_match"):
-            ak_exact += 1
-        if agreement.get("ak_partial_match"):
-            ak_partial += 1
-
-        # Track by version
-        version = agreement.get("classifier_version") or "unknown"
-        if version not in by_version:
-            by_version[version] = {
-                "total": 0,
-                "relevance_matches": 0,
-                "priority_exact": 0,
-                "ak_exact": 0,
-            }
-        by_version[version]["total"] += 1
-        if agreement.get("relevance_match"):
-            by_version[version]["relevance_matches"] += 1
-        if agreement.get("priority_match"):
-            by_version[version]["priority_exact"] += 1
-        if agreement.get("ak_exact_match"):
-            by_version[version]["ak_exact"] += 1
-
-    total = len(events_with_agreement)
-
-    # Compute rates
-    relevance_rate = relevance_matches / total if total > 0 else None
-    priority_exact_rate = priority_exact / total if total > 0 else None
-    priority_within_one_rate = priority_within_one / total if total > 0 else None
-    ak_exact_rate = ak_exact / total if total > 0 else None
-    ak_partial_rate = ak_partial / total if total > 0 else None
-
-    # Compute rates by version
-    by_version_stats = {}
-    for version, counts in by_version.items():
-        v_total = counts["total"]
-        by_version_stats[version] = {
-            "total": v_total,
-            "relevance_rate": counts["relevance_matches"] / v_total if v_total > 0 else None,
-            "priority_exact_rate": counts["priority_exact"] / v_total if v_total > 0 else None,
-            "ak_exact_rate": counts["ak_exact"] / v_total if v_total > 0 else None,
-        }
-
-    return ClassifierAgreementStats(
-        period_days=days,
-        total_items=len(events),
-        items_with_agreement=total,
-        relevance={
-            "agreement_rate": round(relevance_rate, 3) if relevance_rate else None,
-            "matches": relevance_matches,
-            "mismatches": relevance_mismatches,
-        },
-        priority={
-            "exact_match": round(priority_exact_rate, 3) if priority_exact_rate else None,
-            "within_one": round(priority_within_one_rate, 3) if priority_within_one_rate else None,
-            "exact_count": priority_exact,
-            "within_one_count": priority_within_one,
-        },
-        ak={
-            "exact_match": round(ak_exact_rate, 3) if ak_exact_rate else None,
-            "partial_match": round(ak_partial_rate, 3) if ak_partial_rate else None,
-            "exact_count": ak_exact,
-            "partial_count": ak_partial,
-        },
-        by_classifier_version=by_version_stats if len(by_version_stats) > 1 else None,
-    )

@@ -5,7 +5,7 @@ import { XMarkIcon } from '@heroicons/vue/24/outline'
 const visible = ref(false)
 
 const shortcuts = [
-  { keys: ['G'], description: 'Gehe zum Dashboard' },
+  { keys: ['G'], description: 'Gehe zur Übersicht' },
   { keys: ['I'], description: 'Gehe zu Nachrichten' },
   { keys: ['S'], description: 'Gehe zu Quellen' },
   { keys: ['R'], description: 'Gehe zu Regeln' },

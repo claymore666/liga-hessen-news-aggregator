@@ -46,6 +46,27 @@ async def lifespan(app: FastAPI):
         )
         logger.info(f"Duplicate store ready: {duplicate_store.get_stats()}")
 
+        # Auto-sync: if duplicate store has fewer items than search store,
+        # sync missing items from search to duplicate index
+        vs_count = vector_store.get_stats()["total_items"]
+        ds_count = duplicate_store.get_stats()["total_items"]
+        if ds_count < vs_count:
+            logger.info(
+                f"Duplicate store ({ds_count}) behind search store ({vs_count}), "
+                f"syncing {vs_count - ds_count} items..."
+            )
+            items = vector_store.get_all_items()
+            # Batch to stay under ChromaDB's max batch size
+            batch_size = 2000
+            total_synced = 0
+            for i in range(0, len(items), batch_size):
+                batch = items[i:i + batch_size]
+                synced = duplicate_store.add_items_batch(batch)
+                total_synced += synced
+                if synced > 0:
+                    logger.info(f"Synced batch {i//batch_size + 1}: {synced} items")
+            logger.info(f"Auto-sync complete: {total_synced} items added to duplicate store")
+
         # Warm up the models with test predictions
         logger.info("Warming up models...")
         _ = classifier.predict("Test", "Test content", "test")

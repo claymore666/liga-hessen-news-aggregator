@@ -8,11 +8,11 @@ export const useStatsStore = defineStore('stats', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchStats() {
+  async function fetchStats(params?: { days?: number }) {
     loading.value = true
     error.value = null
     try {
-      const response = await statsApi.get()
+      const response = await statsApi.get(params)
       stats.value = response.data
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch stats'

@@ -19,7 +19,7 @@ NEWS_DOMAINS = {
     # National news
     "spiegel.de", "zeit.de", "faz.net", "sueddeutsche.de", "tagesschau.de",
     "bild.de", "welt.de", "focus.de", "taz.de", "tagesspiegel.de",
-    "handelsblatt.com", "wiwo.de", "stern.de", "n-tv.de", "zdf.de",
+    "handelsblatt.com", "wiwo.de", "stern.de", "n-tv.de", "zdf.de", "phoenix.de",
     # Hessen regional
     "hessenschau.de", "fr.de", "fnp.de", "op-online.de", "hna.de",
     "giessener-allgemeine.de", "mittelhessen.de", "fuldaerzeitung.de",
@@ -273,6 +273,14 @@ class ArticleExtractor:
             is_article = self.is_likely_news_article(soup, url)
 
             if not is_article:
+                # SPA pages may not have article indicators in unrendered HTML
+                # Try Playwright before giving up
+                if len(html) > 5000 and _looks_like_spa(html):
+                    logger.info(f"Not detected as article but SPA markers found for {domain}, trying Playwright...")
+                    rendered_article = await _fetch_with_playwright(url, domain)
+                    if rendered_article:
+                        logger.info(f"Playwright rescued non-article SPA page for {domain}: {len(rendered_article.content)} chars")
+                        return rendered_article
                 logger.debug(f"URL {url} does not appear to be a news article")
                 return None
 
@@ -289,6 +297,17 @@ class ArticleExtractor:
                 if wayback_content and len(wayback_content.content) > len(content or ""):
                     logger.info(f"Got better content from Wayback Machine: {len(wayback_content.content)} chars")
                     return wayback_content
+
+            # Playwright fallback for JS-rendered pages (SPAs like Angular, React, Vue)
+            # Check before the <100 early return so we can rescue 0-149 char content
+            if (not content or len(content) < 150) and len(html) > 5000:
+                if _looks_like_spa(html):
+                    original_len = len(content) if content else 0
+                    logger.info(f"Short content ({original_len} chars) with SPA markers detected for {domain}, trying Playwright...")
+                    rendered_article = await _fetch_with_playwright(url, domain)
+                    if rendered_article and len(rendered_article.content) > original_len:
+                        logger.info(f"Playwright fallback succeeded for {domain}: {len(rendered_article.content)} chars (was {original_len})")
+                        return rendered_article
 
             if not content or len(content) < 100:
                 logger.debug(f"Insufficient content extracted from {url}: {len(content) if content else 0} chars")
@@ -497,3 +516,91 @@ class ArticleExtractor:
         except Exception as e:
             logger.debug(f"Wayback Machine fallback failed for {url}: {e}")
             return None
+
+
+# SPA framework markers that indicate JS rendering is needed
+_SPA_MARKERS = [
+    "{{ ",        # Angular/Vue template expressions
+    "ng-app",     # AngularJS
+    "ng-bind",    # AngularJS
+    "data-reactroot",  # React
+    "__NEXT_DATA__",   # Next.js
+    "v-app",      # Vuetify/Vue
+    "nuxt",       # Nuxt.js
+    "_nuxt",      # Nuxt.js build artifacts
+    "app-root",   # Angular
+]
+
+
+def _looks_like_spa(html: str) -> bool:
+    """Check if HTML contains SPA framework markers suggesting JS rendering is needed."""
+    html_lower = html.lower()
+    return any(marker.lower() in html_lower for marker in _SPA_MARKERS)
+
+
+async def _fetch_with_playwright(url: str, domain: str) -> ArticleContent | None:
+    """Fetch article using Playwright browser for JS-rendered pages.
+
+    Uses the shared browser pool to render the page and re-extract content
+    with trafilatura.
+    """
+    from services.browser_pool import browser_pool
+
+    try:
+        async with browser_pool.get_browser() as browser:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="de-DE",
+            )
+            try:
+                page = await context.new_page()
+
+                logger.debug(f"Playwright fallback: navigating to {url}")
+                await page.goto(url, wait_until="networkidle", timeout=15000)
+
+                html = await page.content()
+            finally:
+                await context.close()
+
+        # Re-extract with trafilatura on rendered HTML
+        try:
+            import trafilatura
+            content = trafilatura.extract(
+                html,
+                favor_precision=True,
+                include_comments=False,
+                include_tables=False,
+                include_formatting=False,
+                include_images=False,
+                no_fallback=False,
+            )
+        except Exception as e:
+            logger.debug(f"Playwright trafilatura extraction failed for {url}: {e}")
+            content = None
+
+        if not content or len(content) < 100:
+            # Try BeautifulSoup fallback on rendered HTML
+            soup = BeautifulSoup(html, "lxml")
+            extractor = ArticleExtractor()
+            content = extractor._extract_content_fallback(soup)
+
+        if not content or len(content) < 100:
+            logger.debug(f"Playwright fallback: insufficient content from {url}: {len(content) if content else 0} chars")
+            return None
+
+        # Extract title from rendered page
+        soup = BeautifulSoup(html, "lxml")
+        extractor = ArticleExtractor()
+        title = extractor._extract_title(soup)
+
+        return ArticleContent(
+            url=url,
+            title=title,
+            content=content,
+            is_article=True,
+            source_domain=domain,
+        )
+
+    except Exception as e:
+        logger.warning(f"Playwright fallback failed for {url}: {e}")
+        return None

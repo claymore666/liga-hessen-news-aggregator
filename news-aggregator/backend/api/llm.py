@@ -562,29 +562,16 @@ async def get_worker_status() -> WorkerStatusResponse:
     1. Fresh items (from fetch) - immediate processing
     2. Backlog items (needs_llm_processing=True) - when idle
     """
-    from services.llm_worker import get_worker
+    from services.worker_status import read_state, read_stats
 
-    worker = get_worker()
-    if worker is None:
-        return WorkerStatusResponse(
-            running=False,
-            paused=False,
-            fresh_queue_size=0,
-            stats={
-                "fresh_processed": 0,
-                "backlog_processed": 0,
-                "errors": 0,
-                "started_at": None,
-                "last_processed_at": None,
-            },
-        )
+    state = await read_state("llm")
+    stats = await read_stats("llm")
 
-    status = await worker.get_status()
     return WorkerStatusResponse(
-        running=status["running"],
-        paused=status["paused"],
-        fresh_queue_size=status["fresh_queue_size"],
-        stats=status["stats"],
+        running=state.get("running", False),
+        paused=state.get("paused", False),
+        fresh_queue_size=stats.get("fresh_queue_size", 0),
+        stats={k: v for k, v in stats.items() if k not in ("fresh_queue_size", "synced_at")},
     )
 
 
@@ -594,27 +581,40 @@ async def pause_worker() -> dict:
 
     Items will still be queued but not processed until resumed.
     """
-    from services.llm_worker import get_worker
+    from services.worker_status import read_state, write_command
 
-    worker = get_worker()
-    if worker is None:
+    state = await read_state("llm")
+    if not state.get("running"):
         raise HTTPException(status_code=503, detail="LLM worker not running")
 
-    worker.pause()
-    return {"status": "paused", "message": "LLM worker paused"}
+    # Try local first
+    from services.llm_worker import get_worker
+    worker = get_worker()
+    if worker and worker._running:
+        await worker.pause()
+        return {"status": "paused", "message": "LLM worker paused"}
+
+    await write_command("llm", "pause")
+    return {"status": "command_queued", "message": "Pause command queued"}
 
 
 @router.post("/llm/worker/resume")
 async def resume_worker() -> dict:
     """Resume LLM worker processing."""
-    from services.llm_worker import get_worker
+    from services.worker_status import read_state, write_command
 
-    worker = get_worker()
-    if worker is None:
+    state = await read_state("llm")
+    if not state.get("running"):
         raise HTTPException(status_code=503, detail="LLM worker not running")
 
-    worker.resume()
-    return {"status": "resumed", "message": "LLM worker resumed"}
+    from services.llm_worker import get_worker
+    worker = get_worker()
+    if worker and worker._running:
+        await worker.resume()
+        return {"status": "resumed", "message": "LLM worker resumed"}
+
+    await write_command("llm", "resume")
+    return {"status": "command_queued", "message": "Resume command queued"}
 
 
 # ============================================================================
@@ -637,27 +637,15 @@ async def get_classifier_worker_status() -> ClassifierWorkerStatusResponse:
     The classifier worker processes items that have never been classified
     (no pre_filter metadata) and updates their priority based on classifier confidence.
     """
-    from services.classifier_worker import get_classifier_worker
+    from services.worker_status import read_state, read_stats
 
-    worker = get_classifier_worker()
-    if worker is None:
-        return ClassifierWorkerStatusResponse(
-            running=False,
-            paused=False,
-            stats={
-                "processed": 0,
-                "priority_changed": 0,
-                "errors": 0,
-                "started_at": None,
-                "last_processed_at": None,
-            },
-        )
+    state = await read_state("classifier")
+    stats = await read_stats("classifier")
 
-    status = await worker.get_status()
     return ClassifierWorkerStatusResponse(
-        running=status["running"],
-        paused=status["paused"],
-        stats=status["stats"],
+        running=state.get("running", False),
+        paused=state.get("paused", False),
+        stats={k: v for k, v in stats.items() if k != "synced_at"},
     )
 
 
@@ -667,27 +655,39 @@ async def pause_classifier_worker() -> dict:
 
     Items will still be queued but not processed until resumed.
     """
-    from services.classifier_worker import get_classifier_worker
+    from services.worker_status import read_state, write_command
 
-    worker = get_classifier_worker()
-    if worker is None:
+    state = await read_state("classifier")
+    if not state.get("running"):
         raise HTTPException(status_code=503, detail="Classifier worker not running")
 
-    worker.pause()
-    return {"status": "paused", "message": "Classifier worker paused"}
+    from services.classifier_worker import get_classifier_worker
+    worker = get_classifier_worker()
+    if worker and worker._running:
+        await worker.pause()
+        return {"status": "paused", "message": "Classifier worker paused"}
+
+    await write_command("classifier", "pause")
+    return {"status": "command_queued", "message": "Pause command queued"}
 
 
 @router.post("/classifier/worker/resume")
 async def resume_classifier_worker() -> dict:
     """Resume classifier worker processing."""
-    from services.classifier_worker import get_classifier_worker
+    from services.worker_status import read_state, write_command
 
-    worker = get_classifier_worker()
-    if worker is None:
+    state = await read_state("classifier")
+    if not state.get("running"):
         raise HTTPException(status_code=503, detail="Classifier worker not running")
 
-    worker.resume()
-    return {"status": "resumed", "message": "Classifier worker resumed"}
+    from services.classifier_worker import get_classifier_worker
+    worker = get_classifier_worker()
+    if worker and worker._running:
+        await worker.resume()
+        return {"status": "resumed", "message": "Classifier worker resumed"}
+
+    await write_command("classifier", "resume")
+    return {"status": "command_queued", "message": "Resume command queued"}
 
 
 @router.get("/classifier/unclassified/count")

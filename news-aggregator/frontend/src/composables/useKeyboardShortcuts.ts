@@ -50,8 +50,8 @@ export function useGlobalShortcuts() {
   const shortcuts: Shortcut[] = [
     {
       key: 'g',
-      description: 'Gehe zum Dashboard',
-      action: () => router.push('/')
+      description: 'Gehe zur Übersicht',
+      action: () => router.push('/uebersicht')
     },
     {
       key: 'i',

@@ -224,6 +224,7 @@ class TopicItemBrief(BaseModel):
     summary: str | None = None
     assigned_aks: list[str] = Field(default_factory=list)
     is_read: bool = False
+    duplicates: list[DuplicateBrief] = Field(default_factory=list)
 
 
 class TopicGroup(BaseModel):

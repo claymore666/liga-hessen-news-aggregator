@@ -64,6 +64,15 @@ export const itemsApi = {
 }
 
 // Topic grouping types
+export interface TopicDuplicateBrief {
+  id: number
+  title: string
+  url: string
+  priority: string
+  source: { id: number; name: string } | null
+  published_at: string
+}
+
 export interface TopicItemBrief {
   id: number
   title: string
@@ -75,6 +84,7 @@ export interface TopicItemBrief {
   summary: string | null
   assigned_aks: string[]
   is_read: boolean
+  duplicates: TopicDuplicateBrief[]
 }
 
 export interface TopicGroup {
@@ -98,7 +108,7 @@ export const rulesApi = {
 }
 
 export const statsApi = {
-  get: () => api.get<Stats>('/stats'),
+  get: (params?: { days?: number }) => api.get<Stats>('/stats', { params }),
   byPriority: () => api.get<Record<string, number>>('/stats/by-priority'),
   bySource: (sourceId?: number) =>
     api.get<SourceStats[]>('/stats/by-source', { params: sourceId ? { source_id: sourceId } : undefined }),
