@@ -51,7 +51,7 @@ export function useGlobalShortcuts() {
     {
       key: 'g',
       description: 'Gehe zum Dashboard',
-      action: () => router.push('/')
+      action: () => router.push('/dashboard')
     },
     {
       key: 'i',

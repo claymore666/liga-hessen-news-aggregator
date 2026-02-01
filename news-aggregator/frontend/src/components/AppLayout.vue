@@ -21,7 +21,7 @@ const uiStore = useUiStore()
 const sidebarOpen = ref(false)
 
 const navigation = [
-  { name: 'Dashboard', to: '/', icon: HomeIcon },
+  { name: 'Dashboard', to: '/dashboard', icon: HomeIcon },
   { name: 'Nachrichten', to: '/items', icon: NewspaperIcon },
   { name: 'Quellen', to: '/sources', icon: RssIcon },
   { name: 'Regeln', to: '/rules', icon: AdjustmentsHorizontalIcon },
