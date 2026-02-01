@@ -75,6 +75,10 @@ ligahessen/
 └── CLAUDE.md                 # This file
 ```
 
+## Notes
+
+- **Old Dashboard hidden**: `DashboardView.vue` still exists but is not linked in the sidebar. `/dashboard` redirects to `/uebersicht`. The new Übersicht page replaces it with a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list. The old Dashboard can be deleted if no longer needed.
+
 ## Key Components
 
 ### Backend Services
