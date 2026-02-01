@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
 import { ArrowPathIcon } from '@heroicons/vue/24/outline'
@@ -327,21 +327,30 @@ watch(
   }
 )
 
-// Handle deep-link to specific item
+// Handle deep-link to specific item (after navigation within the page)
 watch(
   () => route.params.id,
-  async (newId) => {
+  async (newId, oldId) => {
+    // Skip initial mount — handled in onMounted after items load
+    if (!oldId) return
     if (newId) {
       const id = parseInt(newId as string)
       if (id) {
         await selectItem(id)
-        const index = itemsStore.items.findIndex(i => i.id === id)
-        if (index >= 0) focusedIndex.value = index
+        scrollToItem(id)
       }
     }
   },
-  { immediate: true }
 )
+
+function scrollToItem(id: number) {
+  const index = itemsStore.items.findIndex(i => i.id === id)
+  if (index >= 0) focusedIndex.value = index
+  nextTick(() => {
+    const el = document.querySelector(`[data-item-id="${id}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  })
+}
 
 onMounted(async () => {
   // Apply search query from URL (e.g. from topic word cloud click)
@@ -350,6 +359,16 @@ onMounted(async () => {
     itemsStore.setFilter('search', querySearch)
   }
   await Promise.all([loadItems(), loadTopics(), sourcesStore.fetchSources()])
+
+  // Handle deep-link after items are loaded
+  const deepLinkId = route.params.id
+  if (deepLinkId) {
+    const id = parseInt(deepLinkId as string)
+    if (id) {
+      await selectItem(id)
+      scrollToItem(id)
+    }
+  }
 })
 </script>
 

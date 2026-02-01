@@ -53,6 +53,7 @@ const formatTime = (date: string | null) => {
           <li
             v-for="(item, idx) in group.items"
             :key="item.id"
+            :data-item-id="item.id"
           >
             <div
               class="flex items-center py-1.5 px-3 pl-6 transition-colors cursor-pointer border-l-4"
@@ -140,6 +141,7 @@ const formatTime = (date: string | null) => {
           <li
             v-for="(item, idx) in ungroupedItems"
             :key="item.id"
+            :data-item-id="item.id"
           >
             <div
               class="flex items-center py-1.5 px-3 pl-6 transition-colors cursor-pointer border-l-4"
