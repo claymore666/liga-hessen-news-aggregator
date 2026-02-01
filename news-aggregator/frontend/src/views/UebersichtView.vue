@@ -89,11 +89,6 @@ onMounted(() => {
 
 <template>
   <div class="space-y-3">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-bold text-gray-900">Übersicht</h1>
-      <p class="text-sm text-gray-500">Liga der Freien Wohlfahrtspflege Hessen</p>
-    </div>
-
     <!-- Stats Cards -->
     <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
       <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
