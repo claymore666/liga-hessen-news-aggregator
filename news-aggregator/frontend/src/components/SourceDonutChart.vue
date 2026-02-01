@@ -14,6 +14,7 @@ ChartJS.register(ArcElement, Tooltip, Legend)
 interface DataItem {
   name: string
   count: number
+  is_ga: boolean
 }
 
 const items = ref<DataItem[]>([])
@@ -21,6 +22,7 @@ const loading = ref(false)
 const selectedPriority = ref<string | null>(null)
 const selectedRange = ref<string>('all')
 const resolveGa = ref<string | null>(null)
+const chartKey = ref(0)
 
 const priorities = [
   { key: null, label: 'Alle' },
@@ -43,10 +45,20 @@ const gaOptions = [
   { key: 'source', label: 'GA Quelle', tooltip: 'Google Alerts nach Ursprungsmedium aufschlüsseln' },
 ]
 
+// Non-GA colors — deliberately no blue/red/yellow/green shades that could be confused with Google
 const chartColors = [
-  '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6',
-  '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#84cc16',
+  '#8b5cf6', '#ec4899', '#f97316', '#14b8a6', '#06b6d4',
+  '#a855f7', '#d946ef', '#78716c', '#0891b2', '#7c3aed',
   '#9ca3af',
+]
+
+// Google brand color shades (blue #4285F4, red #EA4335, yellow #FBBC05, green #34A853)
+const googleShades = [
+  '#4285F4', '#3367D6', '#2A56C6', '#1A44B8',
+  '#EA4335', '#D33426', '#C12717', '#A11A0A',
+  '#FBBC05', '#E8AB00', '#D49B00', '#B88A00',
+  '#34A853', '#2D9249', '#267D3E', '#1F6832',
+  '#5B9BF7', '#EF6B5E', '#FCD34D', '#5CC073',
 ]
 
 async function fetchData() {
@@ -60,6 +72,7 @@ async function fetchData() {
 
     const { data } = await axios.get('/api/stats/source-donut', { params })
     items.value = data
+    chartKey.value++
   } catch (e) {
     console.error('Failed to fetch data', e)
   } finally {
@@ -83,12 +96,20 @@ const chartData = computed(() => {
   const { items: topItems, otherCount } = top10.value
   const labels = topItems.map(s => s.name)
   const data = topItems.map(s => s.count)
-  const colors = topItems.map((_, i) => chartColors[i % chartColors.length])
+
+  let gaIdx = 0
+  let nonGaIdx = 0
+  const colors = topItems.map(s => {
+    if (s.is_ga) {
+      return googleShades[gaIdx++ % googleShades.length]
+    }
+    return chartColors[nonGaIdx++ % chartColors.length]
+  })
 
   if (otherCount > 0) {
     labels.push('Andere')
     data.push(otherCount)
-    colors.push(chartColors[10])
+    colors.push('#d1d5db')
   }
 
   return {
@@ -198,7 +219,7 @@ onMounted(fetchData)
     </div>
 
     <div v-else class="h-64">
-      <Doughnut :data="chartData" :options="chartOptions" />
+      <Doughnut :key="chartKey" :data="chartData" :options="chartOptions" />
     </div>
   </div>
 </template>

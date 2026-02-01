@@ -245,7 +245,7 @@ async def get_source_donut(
         priority: Comma-separated priority filter.
         resolve_ga: None (default), 'keyword' (GA channel name), or 'source' (source_domain).
     """
-    base_conditions = []
+    base_conditions = [Item.priority != Priority.NONE]
     if days is not None:
         cutoff = datetime.utcnow() - timedelta(days=days)
         base_conditions.append(Item.fetched_at >= cutoff)
@@ -253,9 +253,15 @@ async def get_source_donut(
         priorities = [p.strip() for p in priority.split(",")]
         base_conditions.append(Item.priority.in_(priorities))
 
-    results: dict[str, int] = {}
+    results: dict[str, dict] = {}  # name -> {count, is_ga}
 
-    if resolve_ga:
+    # Find Google Alerts source IDs by name
+    ga_source_ids_result = await db.execute(
+        select(Source.id).where(Source.name.ilike("%google alert%"))
+    )
+    ga_source_ids = [row[0] for row in ga_source_ids_result.all()]
+
+    if resolve_ga and ga_source_ids:
         # Non-GA items: group by source name
         non_ga_query = (
             select(
@@ -265,11 +271,13 @@ async def get_source_donut(
             .select_from(Item)
             .join(Channel, Channel.id == Item.channel_id)
             .join(Source, Source.id == Channel.source_id)
-            .where(Channel.connector_type != "google_alerts", *base_conditions)
+            .where(Source.id.not_in(ga_source_ids), *base_conditions)
             .group_by(Source.name)
         )
         for row in (await db.execute(non_ga_query)).all():
-            results[row.name] = results.get(row.name, 0) + row.count
+            entry = results.get(row.name, {"count": 0, "is_ga": False})
+            entry["count"] += row.count
+            results[row.name] = entry
 
         # GA items: resolve by keyword or source domain
         if resolve_ga == "source":
@@ -282,7 +290,7 @@ async def get_source_donut(
                 .select_from(Item)
                 .join(Channel, Channel.id == Item.channel_id)
                 .where(
-                    Channel.connector_type == "google_alerts",
+                    Channel.source_id.in_(ga_source_ids),
                     source_domain.isnot(None),
                     source_domain != "",
                     *base_conditions,
@@ -298,12 +306,15 @@ async def get_source_donut(
                 )
                 .select_from(Item)
                 .join(Channel, Channel.id == Item.channel_id)
-                .where(Channel.connector_type == "google_alerts", *base_conditions)
+                .where(Channel.source_id.in_(ga_source_ids), *base_conditions)
                 .group_by(Channel.name)
             )
         for row in (await db.execute(ga_query)).all():
             name = row.name or "Unbekannt"
-            results[name] = results.get(name, 0) + row.count
+            entry = results.get(name, {"count": 0, "is_ga": True})
+            entry["count"] += row.count
+            entry["is_ga"] = True
+            results[name] = entry
     else:
         # Default: group everything by source name
         query = (
@@ -319,10 +330,10 @@ async def get_source_donut(
             query = query.where(*base_conditions)
         query = query.group_by(Source.name)
         for row in (await db.execute(query)).all():
-            results[row.name] = row.count
+            results[row.name] = {"count": row.count, "is_ga": False}
 
-    sorted_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
-    return [{"name": name, "count": count} for name, count in sorted_results]
+    sorted_results = sorted(results.items(), key=lambda x: x[1]["count"], reverse=True)
+    return [{"name": name, "count": entry["count"], "is_ga": entry["is_ga"]} for name, entry in sorted_results]
 
 
 @router.get("/stats/by-channel", response_model=list[ChannelStats])
