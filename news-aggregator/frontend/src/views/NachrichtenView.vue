@@ -344,6 +344,11 @@ watch(
 )
 
 onMounted(async () => {
+  // Apply search query from URL (e.g. from topic word cloud click)
+  const querySearch = route.query.search
+  if (querySearch && typeof querySearch === 'string') {
+    itemsStore.setFilter('search', querySearch)
+  }
   await Promise.all([loadItems(), loadTopics(), sourcesStore.fetchSources()])
 })
 </script>
