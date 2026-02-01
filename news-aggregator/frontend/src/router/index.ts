@@ -8,6 +8,12 @@ const router = createRouter({
       redirect: '/items'
     },
     {
+      path: '/uebersicht',
+      name: 'uebersicht',
+      component: () => import('../views/UebersichtView.vue'),
+      meta: { title: 'Übersicht' }
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: () => import('../views/DashboardView.vue'),

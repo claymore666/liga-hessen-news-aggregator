@@ -8,6 +8,7 @@ import {
   AdjustmentsHorizontalIcon,
   Cog6ToothIcon,
   ChartBarIcon,
+  PresentationChartBarIcon,
   Bars3Icon,
   XMarkIcon,
   ChevronLeftIcon,
@@ -21,6 +22,7 @@ const uiStore = useUiStore()
 const sidebarOpen = ref(false)
 
 const navigation = [
+  { name: 'Übersicht', to: '/uebersicht', icon: PresentationChartBarIcon },
   { name: 'Dashboard', to: '/dashboard', icon: HomeIcon },
   { name: 'Nachrichten', to: '/items', icon: NewspaperIcon },
   { name: 'Quellen', to: '/sources', icon: RssIcon },

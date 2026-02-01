@@ -1,9 +1,10 @@
 """API endpoints for dashboard statistics."""
 
 from datetime import datetime, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import case, func, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -80,10 +81,83 @@ async def get_stats(
     )
 
 
+@router.get("/stats/topic-counts")
+async def get_topic_counts(
+    db: AsyncSession = Depends(get_db),
+    days: int | None = None,
+    limit: int = 0,
+    priority: str | None = None,
+) -> dict:
+    """Get topic counts for word cloud.
+
+    Args:
+        days: Number of days to look back. Default: 1 (3 on Monday).
+        limit: Max topics to return (0 = all).
+        priority: Comma-separated priority filter (e.g. 'high,medium').
+    """
+    now = datetime.utcnow()
+    if days is None:
+        # Monday = 0, so use 3 days on Monday to cover the weekend
+        days = 3 if now.weekday() == 0 else 1
+
+    cutoff = now - timedelta(days=days)
+
+    topic_expr = Item.metadata_["llm_analysis"]["topic"].as_string()
+
+    query = (
+        select(
+            topic_expr.label("topic"),
+            func.count().label("count"),
+        )
+        .where(
+            Item.similar_to_id.is_(None),
+            Item.priority != Priority.NONE,
+            Item.fetched_at >= cutoff,
+            topic_expr.isnot(None),
+            topic_expr != "Sonstiges",
+        )
+        .group_by(topic_expr)
+        .order_by(func.count().desc())
+    )
+
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        query = query.where(Item.priority.in_(priorities))
+
+    if limit > 0:
+        query = query.limit(limit)
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Get total items count for the period
+    total_query = (
+        select(func.count())
+        .select_from(Item)
+        .where(
+            Item.similar_to_id.is_(None),
+            Item.priority != Priority.NONE,
+            Item.fetched_at >= cutoff,
+        )
+    )
+    if priority:
+        total_query = total_query.where(Item.priority.in_(priorities))
+
+    total = await db.scalar(total_query) or 0
+
+    return {
+        "topics": [{"topic": row.topic, "count": row.count} for row in rows],
+        "period_days": days,
+        "total_items": total,
+    }
+
+
 @router.get("/stats/by-source", response_model=list[SourceStats])
 async def get_stats_by_source(
     db: AsyncSession = Depends(get_db),
     source_id: int | None = None,
+    days: int | None = None,
+    priority: str | None = None,
 ) -> list[SourceStats]:
     """Get item counts grouped by source (organization).
 
@@ -91,7 +165,18 @@ async def get_stats_by_source(
 
     Args:
         source_id: Filter by specific source ID
+        days: Filter items to last N days
+        priority: Comma-separated priority filter (e.g. 'high,medium')
     """
+    # Build item filter conditions
+    item_conditions = [Channel.id == Item.channel_id]
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        item_conditions.append(Item.fetched_at >= cutoff)
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        item_conditions.append(Item.priority.in_(priorities))
+
     # Subquery to count items per source through channels
     item_counts = (
         select(
@@ -99,7 +184,7 @@ async def get_stats_by_source(
             func.count(Item.id).label("item_count"),
             func.sum(case((Item.is_read == False, 1), else_=0)).label("unread_count"),  # noqa: E712
         )
-        .outerjoin(Item, Channel.id == Item.channel_id)
+        .outerjoin(Item, and_(*item_conditions))
         .group_by(Channel.source_id)
         .subquery()
     )
@@ -140,6 +225,104 @@ async def get_stats_by_source(
         )
         for row in rows
     ]
+
+
+@router.get("/stats/source-donut")
+async def get_source_donut(
+    db: AsyncSession = Depends(get_db),
+    days: int | None = None,
+    priority: str | None = None,
+    resolve_ga: str | None = None,
+) -> list[dict]:
+    """Get source counts for donut chart, with optional Google Alerts resolution.
+
+    Returns a flat list of {name, count} suitable for a donut chart.
+    When resolve_ga is set, Google Alerts items are broken out by keyword or
+    source domain instead of being lumped under their parent source.
+
+    Args:
+        days: Filter items to last N days.
+        priority: Comma-separated priority filter.
+        resolve_ga: None (default), 'keyword' (GA channel name), or 'source' (source_domain).
+    """
+    base_conditions = []
+    if days is not None:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        base_conditions.append(Item.fetched_at >= cutoff)
+    if priority:
+        priorities = [p.strip() for p in priority.split(",")]
+        base_conditions.append(Item.priority.in_(priorities))
+
+    results: dict[str, int] = {}
+
+    if resolve_ga:
+        # Non-GA items: group by source name
+        non_ga_query = (
+            select(
+                Source.name.label("name"),
+                func.count(Item.id).label("count"),
+            )
+            .select_from(Item)
+            .join(Channel, Channel.id == Item.channel_id)
+            .join(Source, Source.id == Channel.source_id)
+            .where(Channel.connector_type != "google_alerts", *base_conditions)
+            .group_by(Source.name)
+        )
+        for row in (await db.execute(non_ga_query)).all():
+            results[row.name] = results.get(row.name, 0) + row.count
+
+        # GA items: resolve by keyword or source domain
+        if resolve_ga == "source":
+            source_domain = Item.metadata_["source_domain"].as_string()
+            ga_query = (
+                select(
+                    source_domain.label("name"),
+                    func.count().label("count"),
+                )
+                .select_from(Item)
+                .join(Channel, Channel.id == Item.channel_id)
+                .where(
+                    Channel.connector_type == "google_alerts",
+                    source_domain.isnot(None),
+                    source_domain != "",
+                    *base_conditions,
+                )
+                .group_by(source_domain)
+            )
+        else:
+            # keyword = channel name
+            ga_query = (
+                select(
+                    Channel.name.label("name"),
+                    func.count().label("count"),
+                )
+                .select_from(Item)
+                .join(Channel, Channel.id == Item.channel_id)
+                .where(Channel.connector_type == "google_alerts", *base_conditions)
+                .group_by(Channel.name)
+            )
+        for row in (await db.execute(ga_query)).all():
+            name = row.name or "Unbekannt"
+            results[name] = results.get(name, 0) + row.count
+    else:
+        # Default: group everything by source name
+        query = (
+            select(
+                Source.name.label("name"),
+                func.count(Item.id).label("count"),
+            )
+            .select_from(Item)
+            .join(Channel, Channel.id == Item.channel_id)
+            .join(Source, Source.id == Channel.source_id)
+        )
+        if base_conditions:
+            query = query.where(*base_conditions)
+        query = query.group_by(Source.name)
+        for row in (await db.execute(query)).all():
+            results[row.name] = row.count
+
+    sorted_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
+    return [{"name": name, "count": count} for name, count in sorted_results]
 
 
 @router.get("/stats/by-channel", response_model=list[ChannelStats])
