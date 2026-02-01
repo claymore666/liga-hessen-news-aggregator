@@ -2,7 +2,6 @@
 import { ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  HomeIcon,
   NewspaperIcon,
   RssIcon,
   AdjustmentsHorizontalIcon,
@@ -23,7 +22,6 @@ const sidebarOpen = ref(false)
 
 const navigation = [
   { name: 'Übersicht', to: '/uebersicht', icon: PresentationChartBarIcon },
-  { name: 'Dashboard', to: '/dashboard', icon: HomeIcon },
   { name: 'Nachrichten', to: '/items', icon: NewspaperIcon },
   { name: 'Quellen', to: '/sources', icon: RssIcon },
   { name: 'Regeln', to: '/rules', icon: AdjustmentsHorizontalIcon },
