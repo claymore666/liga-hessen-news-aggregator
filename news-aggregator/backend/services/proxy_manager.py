@@ -575,17 +575,28 @@ class ProxyManager:
         return self.http_proxies + self.https_proxies
 
     async def _sync_status_to_db(self) -> None:
-        """Write proxy pool status to DB for cross-worker visibility."""
+        """Write proxy pool status to Redis (fast) with DB fallback."""
+        status = {
+            "http_count": len(self.http_proxies),
+            "https_count": len(self.https_proxies),
+            "http_min_required": self.min_http_proxies,
+            "https_min_required": self.min_https_proxies,
+            "background_running": self._running,
+            "initial_fill_complete": self._initial_fill_complete,
+        }
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                await r.set("proxy:status", json.dumps(status))
+                return
+        except Exception as e:
+            logger.debug(f"Redis proxy status write failed: {e}")
+
+        # DB fallback
         try:
             from services.worker_status import write_stats
-            await write_stats("proxy_manager", {
-                "http_count": len(self.http_proxies),
-                "https_count": len(self.https_proxies),
-                "http_min_required": self.min_http_proxies,
-                "https_min_required": self.min_https_proxies,
-                "background_running": self._running,
-                "initial_fill_complete": self._initial_fill_complete,
-            })
+            await write_stats("proxy_manager", status)
         except Exception as e:
             logger.debug(f"Failed to sync proxy status to DB: {e}")
 

@@ -330,6 +330,7 @@ export interface HealthCheckResponse {
     database?: string
     path?: string
   }
+  redis_available: boolean
   items_count: number
   sources_count: number
 }

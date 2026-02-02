@@ -43,6 +43,7 @@ class HealthCheckResponse(BaseModel):
     proxy_https_min_required: int
     database_ok: bool
     database_info: DatabaseInfo
+    redis_available: bool
     items_count: int
     sources_count: int
 
@@ -55,10 +56,12 @@ async def get_system_health(
 
     Combines scheduler, LLM, proxy, and database status in one call.
     """
+    import json as _json
     from services.scheduler import scheduler, get_job_status
     from services.proxy_manager import proxy_manager
     from services.llm.ollama import OllamaProvider
     from services.worker_status import read_state, read_stats
+    from services.redis_client import get_redis, is_redis_available
 
     # Scheduler status - read from DB, fall back to local
     sched_state = await read_state("scheduler")
@@ -83,11 +86,21 @@ async def get_system_health(
     except Exception as e:
         logger.debug(f"LLM health check failed: {e}")
 
-    # Proxy status — read from DB (cross-worker safe), fall back to local singleton
-    proxy_db_stats = await read_stats("proxy_manager")
-    if proxy_db_stats and proxy_db_stats.get("initial_fill_complete"):
-        proxy_status = proxy_db_stats
-    else:
+    # Proxy status — Redis first, then DB, then local singleton
+    proxy_status = None
+    r = await get_redis()
+    if r is not None:
+        try:
+            raw = await r.get("proxy:status")
+            if raw:
+                proxy_status = _json.loads(raw)
+        except Exception:
+            pass
+    if proxy_status is None:
+        proxy_db_stats = await read_stats("proxy_manager")
+        if proxy_db_stats and proxy_db_stats.get("initial_fill_complete"):
+            proxy_status = proxy_db_stats
+    if proxy_status is None:
         proxy_status = proxy_manager.get_status()
     proxy_count = proxy_status.get("http_count", 0)
     proxy_working = proxy_count
@@ -130,6 +143,7 @@ async def get_system_health(
         proxy_https_min_required=proxy_https_min_required,
         database_ok=database_ok,
         database_info=DatabaseInfo(**db_info),
+        redis_available=is_redis_available(),
         items_count=items_count,
         sources_count=sources_count,
     )

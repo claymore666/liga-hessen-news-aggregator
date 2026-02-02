@@ -305,7 +305,7 @@ onUnmounted(() => {
     <!-- Status Tab -->
     <template v-else-if="activeTab === 'status'">
       <!-- Service Availability Cards -->
-      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
+      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <!-- Database -->
         <div class="card">
           <div class="flex items-center gap-3">
@@ -320,6 +320,26 @@ onUnmounted(() => {
                 />
                 <span :class="health?.database_ok ? 'text-green-600' : 'text-red-600'">
                   {{ health?.database_ok ? 'Verbunden' : 'Fehler' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Redis -->
+        <div class="card">
+          <div class="flex items-center gap-3">
+            <ServerIcon class="h-8 w-8 text-gray-400" />
+            <div>
+              <div class="text-sm font-medium text-gray-500">Redis</div>
+              <div class="flex items-center gap-1">
+                <component
+                  :is="health?.redis_available ? CheckCircleIcon : XCircleIcon"
+                  class="h-5 w-5"
+                  :class="health?.redis_available ? 'text-green-500' : 'text-red-500'"
+                />
+                <span :class="health?.redis_available ? 'text-green-600' : 'text-red-600'">
+                  {{ health?.redis_available ? 'Verbunden' : 'Offline' }}
                 </span>
               </div>
             </div>

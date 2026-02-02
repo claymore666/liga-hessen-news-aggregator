@@ -224,8 +224,13 @@ async def run_migrations() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler for startup/shutdown."""
     # Set up in-memory log buffer for web UI
-    from api.admin.logs import setup_memory_logging
+    from api.admin.logs import setup_memory_logging, start_log_writer, stop_log_writer
     setup_memory_logging()
+
+    # Initialize Redis (shared cross-worker state)
+    from services.redis_client import init_redis, close_redis
+    await init_redis()
+    await start_log_writer()
 
     # Determine if this worker should run background tasks
     is_leader = _try_become_leader()
@@ -275,6 +280,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    # Stop log writer (all workers)
+    from api.admin.logs import stop_log_writer
+    await stop_log_writer()
+
     # Shutdown - only leader stops background workers
     if is_leader:
         logging.info("Leader shutting down background workers...")
@@ -298,6 +307,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.info("Leader shutdown complete")
     else:
         logging.info(f"Worker {os.getpid()} shutdown complete")
+
+    # Close Redis (all workers)
+    from services.redis_client import close_redis
+    await close_redis()
 
 
 API_DESCRIPTION = """

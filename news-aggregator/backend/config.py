@@ -86,6 +86,9 @@ class Settings(BaseSettings):
 
         return {"type": "unknown"}
 
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
     # LLM - General
     llm_enabled: bool = True  # Set to False to disable all LLM processing
 
