@@ -83,8 +83,12 @@ async def get_system_health(
     except Exception as e:
         logger.debug(f"LLM health check failed: {e}")
 
-    # Proxy status (split pools)
-    proxy_status = proxy_manager.get_status()
+    # Proxy status — read from DB (cross-worker safe), fall back to local singleton
+    proxy_db_stats = await read_stats("proxy_manager")
+    if proxy_db_stats and proxy_db_stats.get("initial_fill_complete"):
+        proxy_status = proxy_db_stats
+    else:
+        proxy_status = proxy_manager.get_status()
     proxy_count = proxy_status.get("http_count", 0)
     proxy_working = proxy_count
     proxy_https_count = proxy_status.get("https_count", 0)

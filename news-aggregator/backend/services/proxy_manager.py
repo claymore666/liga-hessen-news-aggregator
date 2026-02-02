@@ -457,6 +457,7 @@ class ProxyManager:
             self._initial_fill_complete = True
             logger.info(f"✅ Initial fill complete: HTTP={len(self.http_proxies)}, "
                        f"HTTPS={len(self.https_proxies)}")
+            await self._sync_status_to_db()
 
             # Phase 2: Maintenance mode
             while self._running:
@@ -466,6 +467,8 @@ class ProxyManager:
                 if not self._pools_filled():
                     logger.info("Pool below minimum, refilling...")
                     await self._fill_pools()
+
+                await self._sync_status_to_db()
 
         except asyncio.CancelledError:
             logger.info("Proxy manager stopped")
@@ -570,6 +573,21 @@ class ProxyManager:
     def working_proxies(self) -> list[dict]:
         """Combined list of all working proxies (for backward compatibility)."""
         return self.http_proxies + self.https_proxies
+
+    async def _sync_status_to_db(self) -> None:
+        """Write proxy pool status to DB for cross-worker visibility."""
+        try:
+            from services.worker_status import write_stats
+            await write_stats("proxy_manager", {
+                "http_count": len(self.http_proxies),
+                "https_count": len(self.https_proxies),
+                "http_min_required": self.min_http_proxies,
+                "https_min_required": self.min_https_proxies,
+                "background_running": self._running,
+                "initial_fill_complete": self._initial_fill_complete,
+            })
+        except Exception as e:
+            logger.debug(f"Failed to sync proxy status to DB: {e}")
 
     def get_status(self) -> dict:
         """Get current proxy pool status."""
