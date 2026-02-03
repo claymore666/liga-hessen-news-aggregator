@@ -47,12 +47,12 @@ docker compose up -d --build
 
 The classifier sleep handler requires manual installation on gpu1. It's not part of the Docker deployment.
 
-**File:** `/home/kamienc/docker-sleep-handler`
+**Source:** `scripts/docker-sleep-handler`
 **Target:** `/usr/lib/systemd/system-sleep/docker-sleep-handler`
 
 ```bash
 # Install/update after changes
-sudo cp /home/kamienc/docker-sleep-handler /usr/lib/systemd/system-sleep/
+sudo cp scripts/docker-sleep-handler /usr/lib/systemd/system-sleep/
 sudo chmod 755 /usr/lib/systemd/system-sleep/docker-sleep-handler
 
 # Verify logs after sleep/wake
