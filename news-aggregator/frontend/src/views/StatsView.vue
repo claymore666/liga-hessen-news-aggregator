@@ -469,12 +469,18 @@ onUnmounted(() => {
             <div class="text-xs font-medium text-gray-500">Wake-on-LAN</div>
             <div class="mt-1 flex items-center gap-1">
               <component
-                :is="gpu1Status.was_sleeping ? CheckCircleIcon : XCircleIcon"
+                :is="gpu1Status.was_sleeping === true ? CheckCircleIcon : XCircleIcon"
                 class="h-4 w-4"
-                :class="gpu1Status.was_sleeping ? 'text-blue-500' : 'text-gray-400'"
+                :class="gpu1Status.was_sleeping === true ? 'text-blue-500' : 'text-gray-400'"
               />
               <span class="text-sm">
-                {{ gpu1Status.was_sleeping ? 'Von uns geweckt' : 'War bereits wach' }}
+                {{
+                  gpu1Status.was_sleeping === null
+                    ? '-'
+                    : gpu1Status.was_sleeping
+                      ? 'Von uns geweckt'
+                      : 'War bereits wach'
+                }}
               </span>
             </div>
             <div v-if="gpu1Status.wake_time" class="mt-1 text-xs text-gray-400">

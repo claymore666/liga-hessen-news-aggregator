@@ -270,12 +270,15 @@ export interface StorageStats {
 export interface GPU1Status {
   enabled: boolean
   available: boolean
-  was_sleeping: boolean
+  was_sleeping: boolean | null  // null when gpu1 unavailable
   wake_time: string | null
   last_activity: number | null
   idle_time: number | null
   auto_shutdown: boolean
   idle_timeout: number
+  wake_interval: number
+  last_wol_time: number | null
+  seconds_until_next_wake: number | null
   pending_shutdown: boolean
   active_hours_start: number
   active_hours_end: number
