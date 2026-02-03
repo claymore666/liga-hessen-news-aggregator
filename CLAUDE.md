@@ -43,6 +43,24 @@ git pull origin dev
 docker compose up -d --build
 ```
 
+### Local Deployment (gpu1 only)
+
+The classifier sleep handler requires manual installation on gpu1. It's not part of the Docker deployment.
+
+**File:** `/home/kamienc/docker-sleep-handler`
+**Target:** `/usr/lib/systemd/system-sleep/docker-sleep-handler`
+
+```bash
+# Install/update after changes
+sudo cp /home/kamienc/docker-sleep-handler /usr/lib/systemd/system-sleep/
+sudo chmod 755 /usr/lib/systemd/system-sleep/docker-sleep-handler
+
+# Verify logs after sleep/wake
+journalctl -t docker-sleep-handler --since "1 hour ago"
+```
+
+This ensures ChromaDB flushes to disk before gpu1 suspends.
+
 ### Quick Commands
 
 ```bash
