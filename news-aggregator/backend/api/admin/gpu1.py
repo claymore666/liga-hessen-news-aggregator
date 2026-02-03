@@ -15,7 +15,7 @@ class GPU1Status(BaseModel):
 
     enabled: bool
     available: bool
-    was_sleeping: bool
+    was_sleeping: bool | None = None  # None when unavailable
     wake_time: str | None = None
     last_activity: float | None = None
     idle_time: float | None = None
@@ -133,10 +133,11 @@ async def get_gpu1_status() -> GPU1Status:
     return GPU1Status(
         enabled=True,
         available=available,
-        was_sleeping=power_mgr._was_sleeping,
-        wake_time=power_mgr._wake_time.isoformat() if power_mgr._wake_time else None,
-        last_activity=power_mgr._last_activity,
-        idle_time=idle_time if idle_time != float("inf") else None,
+        # Only show wake state when gpu1 is available; otherwise it's meaningless
+        was_sleeping=power_mgr._was_sleeping if available else None,
+        wake_time=power_mgr._wake_time.isoformat() if available and power_mgr._wake_time else None,
+        last_activity=power_mgr._last_activity if available else None,
+        idle_time=idle_time if available and idle_time != float("inf") else None,
         auto_shutdown=power_mgr.auto_shutdown,
         idle_timeout=power_mgr.idle_timeout,
         wake_interval=power_mgr.wake_interval,
