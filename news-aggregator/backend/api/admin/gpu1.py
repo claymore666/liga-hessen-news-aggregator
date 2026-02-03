@@ -21,6 +21,9 @@ class GPU1Status(BaseModel):
     idle_time: float | None = None
     auto_shutdown: bool
     idle_timeout: int
+    wake_interval: int
+    last_wol_time: float | None = None
+    seconds_until_next_wake: int | None = None
     pending_shutdown: bool
     active_hours_start: int
     active_hours_end: int
@@ -55,6 +58,9 @@ async def get_gpu1_status() -> GPU1Status:
             idle_time=None,
             auto_shutdown=False,
             idle_timeout=0,
+            wake_interval=0,
+            last_wol_time=None,
+            seconds_until_next_wake=None,
             pending_shutdown=False,
             active_hours_start=0,
             active_hours_end=0,
@@ -120,6 +126,10 @@ async def get_gpu1_status() -> GPU1Status:
         and len(logged_in_users) == 0
     )
 
+    # Get wake interval status
+    last_wol_time = power_mgr._last_wol_time
+    seconds_until = power_mgr._seconds_until_next_wake(last_wol_time)
+
     return GPU1Status(
         enabled=True,
         available=available,
@@ -129,6 +139,9 @@ async def get_gpu1_status() -> GPU1Status:
         idle_time=idle_time if idle_time != float("inf") else None,
         auto_shutdown=power_mgr.auto_shutdown,
         idle_timeout=power_mgr.idle_timeout,
+        wake_interval=power_mgr.wake_interval,
+        last_wol_time=last_wol_time,
+        seconds_until_next_wake=seconds_until if seconds_until > 0 else None,
         pending_shutdown=pending_shutdown,
         active_hours_start=power_mgr.active_hours_start,
         active_hours_end=power_mgr.active_hours_end,

@@ -118,7 +118,8 @@ class Settings(BaseSettings):
     gpu1_ssh_user: str = "ligahessen"  # SSH user for shutdown (dedicated user)
     gpu1_ssh_key_path: str = "/app/ssh/id_ed25519"  # SSH key path in container
     gpu1_auto_shutdown: bool = True  # Shutdown after idle if we woke it
-    gpu1_idle_timeout: int = 300  # Seconds idle before auto-shutdown (5 min)
+    gpu1_idle_timeout: int = 60  # Seconds idle before auto-shutdown (1 min)
+    gpu1_wake_interval: int = 3600  # Minimum seconds between WoL wakes (1 hour)
     gpu1_wake_timeout: int = 120  # Max seconds to wait for Ollama after WoL
     gpu1_active_hours_start: int = 7  # Hour (0-23) when gpu1 usage allowed (default 7 AM)
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)

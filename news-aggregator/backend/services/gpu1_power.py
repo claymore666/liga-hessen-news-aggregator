@@ -3,7 +3,7 @@ GPU1 Power Management with Wake-on-LAN support.
 
 Manages gpu1 power state for LLM processing:
 - Detects when gpu1 is sleeping (Ollama unreachable)
-- Sends Wake-on-LAN magic packet to wake it
+- Sends Wake-on-LAN magic packet to wake it (max once per wake_interval)
 - Polls until Ollama is available
 - Optionally shuts down after idle period if we woke it
 
@@ -15,8 +15,9 @@ Configuration via environment:
 - GPU1_SSH_USER: SSH user for shutdown command
 - GPU1_SSH_KEY_PATH: Path to SSH private key
 - GPU1_AUTO_SHUTDOWN: Auto-shutdown after idle if we woke it (default: true)
-- GPU1_IDLE_TIMEOUT: Seconds idle before auto-shutdown (default: 300)
+- GPU1_IDLE_TIMEOUT: Seconds idle before auto-shutdown (default: 60)
 - GPU1_WAKE_TIMEOUT: Max seconds to wait for Ollama after WoL (default: 120)
+- GPU1_WAKE_INTERVAL: Minimum seconds between WoL wakes (default: 3600 = 1 hour)
 """
 
 import asyncio
@@ -41,8 +42,9 @@ class GPU1PowerManager:
         ssh_user: str = "ligahessen",
         ssh_key_path: str = "/app/ssh/id_ed25519",
         auto_shutdown: bool = True,
-        idle_timeout: int = 300,
+        idle_timeout: int = 60,
         wake_timeout: int = 120,
+        wake_interval: int = 3600,
         active_hours_start: int = 7,
         active_hours_end: int = 16,
         active_weekdays_only: bool = True,
@@ -60,6 +62,7 @@ class GPU1PowerManager:
             auto_shutdown: Whether to shutdown after idle if we woke it
             idle_timeout: Seconds idle before auto-shutdown
             wake_timeout: Max seconds to wait after WoL
+            wake_interval: Minimum seconds between WoL wakes (default 1 hour)
             active_hours_start: Hour (0-23) when gpu1 usage is allowed
             active_hours_end: Hour (0-23) when gpu1 usage stops
             active_weekdays_only: Only wake on weekdays (Mon-Fri)
@@ -73,19 +76,54 @@ class GPU1PowerManager:
         self.auto_shutdown = auto_shutdown
         self.idle_timeout = idle_timeout
         self.wake_timeout = wake_timeout
+        self.wake_interval = wake_interval
         self.active_hours_start = active_hours_start
         self.active_hours_end = active_hours_end
         self.active_weekdays_only = active_weekdays_only
 
-        # State tracking
+        # State tracking (in-memory, synced to Redis for persistence)
         self._was_sleeping = False
         self._wake_time: datetime | None = None
         self._last_activity: float | None = None
+        self._last_wol_time: float | None = None  # Timestamp of last WoL packet
 
     @property
     def was_sleeping(self) -> bool:
         """Whether gpu1 was sleeping when we last checked."""
         return self._was_sleeping
+
+    async def _get_last_wol_time(self) -> float | None:
+        """Get last WoL time from Redis (persists across restarts)."""
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                val = await r.get("gpu1:last_wol_time")
+                if val:
+                    return float(val)
+        except Exception as e:
+            logger.debug(f"Failed to read last_wol_time from Redis: {e}")
+        return self._last_wol_time
+
+    async def _set_last_wol_time(self, timestamp: float) -> None:
+        """Store last WoL time in Redis."""
+        self._last_wol_time = timestamp
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                # Expire after 24 hours (cleanup)
+                await r.setex("gpu1:last_wol_time", 86400, str(timestamp))
+        except Exception as e:
+            logger.debug(f"Failed to write last_wol_time to Redis: {e}")
+
+    def _seconds_until_next_wake(self, last_wol: float | None) -> int:
+        """Calculate seconds until next WoL is allowed."""
+        if last_wol is None:
+            return 0
+        elapsed = time.time() - last_wol
+        remaining = self.wake_interval - elapsed
+        return max(0, int(remaining))
 
     def is_within_active_hours(self) -> bool:
         """
@@ -141,6 +179,7 @@ class GPU1PowerManager:
 
             self._was_sleeping = True
             self._wake_time = datetime.utcnow()
+            await self._set_last_wol_time(time.time())
 
             logger.info(
                 f"Sent WoL packet to {self.mac_address} via {self.broadcast}:9"
@@ -188,8 +227,11 @@ class GPU1PowerManager:
         This is the main entry point for LLM worker integration.
         Checks availability, sends WoL if needed, waits for ready.
 
-        Active hours only restrict WAKING gpu1 - if gpu1 is already awake,
-        it will be used regardless of the time.
+        Constraints:
+        - Active hours only restrict WAKING gpu1 - if gpu1 is already awake,
+          it will be used regardless of the time.
+        - Wake interval: WoL is sent at most once per wake_interval (default 1 hour)
+          to batch processing and reduce wake/shutdown cycles.
 
         Returns:
             True if Ollama is available, False if wake/wait failed or outside active hours
@@ -204,7 +246,7 @@ class GPU1PowerManager:
             logger.info("gpu1 went down (external shutdown), resetting wake state")
             self.reset_state()
 
-        # Check if we're allowed to wake it
+        # Check if we're allowed to wake it (active hours)
         if not self.is_within_active_hours():
             now = datetime.now()
             day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -217,7 +259,18 @@ class GPU1PowerManager:
             )
             return False
 
-        # Within active hours, try to wake
+        # Check wake interval (max once per hour by default)
+        last_wol = await self._get_last_wol_time()
+        seconds_until = self._seconds_until_next_wake(last_wol)
+        if seconds_until > 0:
+            minutes_until = seconds_until // 60
+            logger.info(
+                f"gpu1 not available, but wake interval not elapsed "
+                f"({minutes_until}m {seconds_until % 60}s remaining). Items will be queued."
+            )
+            return False
+
+        # Within active hours and wake interval elapsed, try to wake
         logger.info("gpu1 not available, sending Wake-on-LAN...")
 
         if not await self.wake():
@@ -417,6 +470,7 @@ class GPU1PowerManager:
 
     def get_status(self) -> dict:
         """Get current power manager status."""
+        seconds_until = self._seconds_until_next_wake(self._last_wol_time)
         return {
             "was_sleeping": self._was_sleeping,
             "wake_time": self._wake_time.isoformat() if self._wake_time else None,
@@ -424,6 +478,9 @@ class GPU1PowerManager:
             "idle_time": self.get_idle_time() if self._last_activity else None,
             "auto_shutdown": self.auto_shutdown,
             "idle_timeout": self.idle_timeout,
+            "wake_interval": self.wake_interval,
+            "last_wol_time": self._last_wol_time,
+            "seconds_until_next_wake": seconds_until if seconds_until > 0 else None,
         }
 
 
@@ -461,6 +518,7 @@ def get_power_manager() -> GPU1PowerManager | None:
         auto_shutdown=settings.gpu1_auto_shutdown,
         idle_timeout=settings.gpu1_idle_timeout,
         wake_timeout=settings.gpu1_wake_timeout,
+        wake_interval=settings.gpu1_wake_interval,
         active_hours_start=settings.gpu1_active_hours_start,
         active_hours_end=settings.gpu1_active_hours_end,
         active_weekdays_only=settings.gpu1_active_weekdays_only,
@@ -471,6 +529,7 @@ def get_power_manager() -> GPU1PowerManager | None:
         f"GPU1 power manager initialized: "
         f"MAC={settings.gpu1_mac_address}, "
         f"active_hours={settings.gpu1_active_hours_start}:00-{settings.gpu1_active_hours_end}:00{weekdays_str}, "
+        f"wake_interval={settings.gpu1_wake_interval}s, idle_timeout={settings.gpu1_idle_timeout}s, "
         f"broadcast={settings.gpu1_broadcast}, "
         f"auto_shutdown={settings.gpu1_auto_shutdown}"
     )
