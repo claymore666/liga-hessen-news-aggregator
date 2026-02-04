@@ -295,7 +295,6 @@ class Pipeline:
                         match_id = int(best_match["id"])
 
                         # Verify the candidate item still exists (vector index may be out of sync)
-                        from sqlalchemy import select
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
                         try:
                             existing = await self.db.scalar(
