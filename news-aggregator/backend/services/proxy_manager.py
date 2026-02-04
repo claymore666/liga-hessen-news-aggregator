@@ -50,7 +50,7 @@ class ProxyManager:
         "https://vakhov.github.io/fresh-proxy-list/http.txt",
         "https://vakhov.github.io/fresh-proxy-list/https.txt",
         "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
-        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
     ]
 
     # Validation settings
