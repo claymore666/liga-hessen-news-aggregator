@@ -250,3 +250,84 @@ async def resume_classifier_worker_endpoint():
 
     await write_command("classifier", "resume")
     return {"status": "command_queued", "message": "Resume command queued for leader process"}
+
+
+# =============================================================================
+# Dedup Worker Control
+# =============================================================================
+
+
+@router.post("/admin/dedup-worker/start")
+async def start_dedup_worker_endpoint():
+    """Start the dedup worker."""
+    from services.dedup_worker import get_dedup_worker, start_dedup_worker
+
+    worker = get_dedup_worker()
+    if worker and worker._running:
+        return {"status": "already_running", "message": "Dedup worker is already running"}
+
+    state = await read_state("dedup")
+    if state.get("running"):
+        return {"status": "already_running", "message": "Dedup worker is already running"}
+
+    if worker is not None or get_dedup_worker() is not None:
+        await start_dedup_worker()
+        return {"status": "started", "message": "Dedup worker started"}
+
+    await write_command("dedup", "start")
+    return {"status": "command_queued", "message": "Start command queued for leader process"}
+
+
+@router.post("/admin/dedup-worker/stop")
+async def stop_dedup_worker_endpoint():
+    """Stop the dedup worker."""
+    state = await read_state("dedup")
+    if not state.get("running"):
+        return {"status": "already_stopped", "message": "Dedup worker is not running"}
+
+    from services.dedup_worker import get_dedup_worker, stop_dedup_worker
+    worker = get_dedup_worker()
+    if worker and worker._running:
+        await stop_dedup_worker()
+        return {"status": "stopped", "message": "Dedup worker stopped"}
+
+    await write_command("dedup", "stop")
+    return {"status": "command_queued", "message": "Stop command queued for leader process"}
+
+
+@router.post("/admin/dedup-worker/pause")
+async def pause_dedup_worker_endpoint():
+    """Pause the dedup worker."""
+    state = await read_state("dedup")
+    if not state.get("running"):
+        raise HTTPException(status_code=503, detail="Dedup worker not running")
+    if state.get("paused"):
+        return {"status": "already_paused", "message": "Dedup worker is already paused"}
+
+    from services.dedup_worker import get_dedup_worker
+    worker = get_dedup_worker()
+    if worker and worker._running:
+        await worker.pause()
+        return {"status": "paused", "message": "Dedup worker paused"}
+
+    await write_command("dedup", "pause")
+    return {"status": "command_queued", "message": "Pause command queued for leader process"}
+
+
+@router.post("/admin/dedup-worker/resume")
+async def resume_dedup_worker_endpoint():
+    """Resume the dedup worker."""
+    state = await read_state("dedup")
+    if not state.get("running"):
+        raise HTTPException(status_code=503, detail="Dedup worker not running")
+    if not state.get("paused"):
+        return {"status": "already_running", "message": "Dedup worker is not paused"}
+
+    from services.dedup_worker import get_dedup_worker
+    worker = get_dedup_worker()
+    if worker and worker._running:
+        await worker.resume()
+        return {"status": "resumed", "message": "Dedup worker resumed"}
+
+    await write_command("dedup", "resume")
+    return {"status": "command_queued", "message": "Resume command queued for leader process"}

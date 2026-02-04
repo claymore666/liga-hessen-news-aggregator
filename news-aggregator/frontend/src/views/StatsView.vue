@@ -542,7 +542,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Worker Status Cards -->
-      <div v-if="stats" class="grid gap-4 md:grid-cols-3">
+      <div v-if="stats" class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <!-- Scheduler -->
         <div class="card">
           <div class="flex items-center justify-between">
@@ -679,9 +679,7 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-2 space-y-1 text-sm text-gray-500">
-            <div>Klassifizierung: {{ stats.processing_queue.awaiting_classifier }}</div>
-            <div>Duplikat-Check: {{ stats.processing_queue.awaiting_dedup }}</div>
-            <div>VectorDB-Index: {{ stats.processing_queue.awaiting_vectordb }}</div>
+            <div>Ausstehend: {{ stats.processing_queue.awaiting_classifier }}</div>
           </div>
 
           <div class="mt-4 flex gap-2">
@@ -721,6 +719,76 @@ onUnmounted(() => {
                 class="btn btn-sm btn-secondary"
                 :disabled="actionLoading === 'clf-stop'"
                 @click="controlAction(adminApi.stopClassifierWorker, 'clf-stop')"
+              >
+                <StopIcon class="h-4 w-4" />
+                Stop
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <!-- Dedup Worker -->
+        <div class="card">
+          <div class="flex items-center justify-between">
+            <h2 class="font-medium text-gray-900">Dedup</h2>
+            <span
+              class="flex items-center gap-1 text-sm"
+              :class="{
+                'text-green-600': stats.dedup_worker.running && !stats.dedup_worker.paused,
+                'text-yellow-600': stats.dedup_worker.paused,
+                'text-red-600': !stats.dedup_worker.running
+              }"
+            >
+              <component
+                :is="stats.dedup_worker.running ? (stats.dedup_worker.paused ? PauseIcon : CheckCircleIcon) : XCircleIcon"
+                class="h-4 w-4"
+              />
+              {{ !stats.dedup_worker.running ? 'Gestoppt' : stats.dedup_worker.paused ? 'Pausiert' : 'Läuft' }}
+            </span>
+          </div>
+
+          <div class="mt-2 space-y-1 text-sm text-gray-500">
+            <div>Ausstehend: {{ stats.processing_queue.awaiting_dedup }}</div>
+            <div>VectorDB: {{ stats.processing_queue.awaiting_vectordb }}</div>
+          </div>
+
+          <div class="mt-4 flex gap-2">
+            <button
+              v-if="!stats.dedup_worker.running"
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="actionLoading === 'dedup-start'"
+              @click="controlAction(adminApi.startDedupWorker, 'dedup-start')"
+            >
+              <PlayIcon class="h-4 w-4" />
+              Start
+            </button>
+            <template v-else>
+              <button
+                v-if="!stats.dedup_worker.paused"
+                type="button"
+                class="btn btn-sm btn-secondary"
+                :disabled="actionLoading === 'dedup-pause'"
+                @click="controlAction(adminApi.pauseDedupWorker, 'dedup-pause')"
+              >
+                <PauseIcon class="h-4 w-4" />
+                Pause
+              </button>
+              <button
+                v-else
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="actionLoading === 'dedup-resume'"
+                @click="controlAction(adminApi.resumeDedupWorker, 'dedup-resume')"
+              >
+                <PlayIcon class="h-4 w-4" />
+                Fortsetzen
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-secondary"
+                :disabled="actionLoading === 'dedup-stop'"
+                @click="controlAction(adminApi.stopDedupWorker, 'dedup-stop')"
               >
                 <StopIcon class="h-4 w-4" />
                 Stop

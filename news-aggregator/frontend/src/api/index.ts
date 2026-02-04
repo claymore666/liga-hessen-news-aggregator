@@ -215,6 +215,7 @@ export interface SystemStatsResponse {
   scheduler: SchedulerStatus
   llm_worker: WorkerStatus
   classifier_worker: WorkerStatus
+  dedup_worker: WorkerStatus
   processing_queue: ProcessingQueueStats
   items: ItemStats
   timestamp: string
@@ -368,6 +369,12 @@ export const adminApi = {
   stopClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/stop'),
   pauseClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/pause'),
   resumeClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/resume'),
+
+  // Dedup Worker controls
+  startDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/start'),
+  stopDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/stop'),
+  pauseDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/pause'),
+  resumeDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/resume'),
 
   // Housekeeping / Data Management
   getHousekeeping: () => api.get<HousekeepingConfig>('/admin/housekeeping'),

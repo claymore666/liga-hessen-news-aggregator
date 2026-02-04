@@ -59,6 +59,7 @@ class SystemStatsResponse(BaseModel):
     scheduler: SchedulerStatus
     llm_worker: WorkerStatus
     classifier_worker: WorkerStatus
+    dedup_worker: WorkerStatus
     processing_queue: ProcessingQueueStats
     items: ItemStats
     timestamp: str
@@ -128,6 +129,16 @@ async def get_system_stats(
               {"processed": 0, "errors": 0},
     )
 
+    # Dedup Worker status from DB
+    dedup_state = await read_state("dedup")
+    dedup_stats = await read_stats("dedup")
+    dedup_worker_status = WorkerStatus(
+        running=dedup_state.get("running", False),
+        paused=dedup_state.get("paused", False),
+        stats={k: v for k, v in dedup_stats.items() if k != "synced_at"} or
+              {"phase1_checked": 0, "phase2_checked": 0, "duplicates_found": 0, "errors": 0},
+    )
+
     # Processing queue stats — combine into fewer queries
     retry_priority = json_extract_path(Item.metadata_, "retry_priority")
 
@@ -151,7 +162,7 @@ async def get_system_stats(
             ).label("awaiting_classifier"),
             func.count(Item.id).filter(
                 Item.similar_to_id.is_(None),
-                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+                json_extract_path(Item.metadata_, "dedup_phase2").is_(None),
             ).label("awaiting_dedup"),
             func.count(Item.id).filter(
                 json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
@@ -202,6 +213,7 @@ async def get_system_stats(
         scheduler=scheduler_status,
         llm_worker=llm_worker_status,
         classifier_worker=classifier_worker_status,
+        dedup_worker=dedup_worker_status,
         processing_queue=processing_queue,
         items=item_stats,
         timestamp=datetime.utcnow().isoformat(),

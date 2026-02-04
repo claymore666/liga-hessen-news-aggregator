@@ -23,6 +23,10 @@ from services.classifier_worker import (
     start_classifier_worker,
     stop_classifier_worker,
 )
+from services.dedup_worker import (
+    start_dedup_worker,
+    stop_dedup_worker,
+)
 
 LEADER_LOCK_FILE = "/tmp/liga-worker-leader"
 
@@ -278,6 +282,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await write_state("classifier", running=False)
             logging.info("Classifier worker disabled via CLASSIFIER_WORKER_ENABLED=false")
 
+        if settings.dedup_worker_enabled:
+            await start_dedup_worker(
+                batch_size=50,
+                idle_sleep=30.0,
+            )
+            logging.info("Dedup worker enabled and started")
+        else:
+            await write_state("dedup", running=False)
+            logging.info("Dedup worker disabled via DEDUP_WORKER_ENABLED=false")
+
     yield
 
     # Stop log writer (all workers)
@@ -289,6 +303,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.info("Leader shutting down background workers...")
         if settings.scheduler_enabled:
             stop_scheduler()
+        if settings.dedup_worker_enabled:
+            await stop_dedup_worker()
         if settings.classifier_worker_enabled:
             await stop_classifier_worker()
         if settings.llm_worker_enabled:
@@ -300,7 +316,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         # Mark all workers as stopped in DB
         from services.worker_status import write_state
-        for name in ("scheduler", "llm", "classifier"):
+        for name in ("scheduler", "llm", "classifier", "dedup"):
             await write_state(name, running=False)
 
         _release_leader()

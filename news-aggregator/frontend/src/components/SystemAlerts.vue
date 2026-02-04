@@ -49,6 +49,24 @@ const alerts = computed(() => {
     })
   }
 
+  // Check Dedup worker
+  const dedup = systemStats.value.dedup_worker
+  if (dedup.stopped_due_to_errors && !dismissed.value.has('dedup_error')) {
+    result.push({
+      id: 'dedup_error',
+      type: 'error',
+      title: 'Dedup Worker gestoppt',
+      message: 'Der Dedup Worker wurde nach wiederholten Fehlern gestoppt. Bitte Logs prüfen und manuell neu starten.'
+    })
+  } else if (!dedup.running && !dedup.stopped_due_to_errors && !dismissed.value.has('dedup_stopped')) {
+    result.push({
+      id: 'dedup_stopped',
+      type: 'warning',
+      title: 'Dedup Worker inaktiv',
+      message: 'Der Dedup Worker ist nicht gestartet. Neue Artikel werden nicht auf Dubletten geprüft.'
+    })
+  }
+
   // Check Scheduler
   const scheduler = systemStats.value.scheduler
   if (!scheduler.running && !dismissed.value.has('scheduler_stopped')) {

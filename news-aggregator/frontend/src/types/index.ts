@@ -120,6 +120,7 @@ export interface Item {
   // Duplicate grouping
   similar_to_id: number | null
   duplicates: DuplicateBrief[]
+  dedup_pending: boolean
 }
 
 export interface Rule {

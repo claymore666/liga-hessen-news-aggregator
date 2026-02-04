@@ -41,6 +41,14 @@ def _build_item_response(item: Item) -> ItemResponse:
     # Create base response
     response = ItemResponse.model_validate(item)
     response.duplicates = duplicates
+
+    # Set dedup_pending: true if not yet fully dedup-checked (Phase 2 not done)
+    meta = item.metadata_ or {}
+    response.dedup_pending = (
+        item.similar_to_id is None
+        and not meta.get("dedup_phase2")
+    )
+
     return response
 
 router = APIRouter()
