@@ -161,6 +161,18 @@ class GPU1PowerManager:
             logger.debug(f"Ollama not available at {self.ollama_url}: {e}")
             return False
 
+    async def is_host_reachable(self) -> bool:
+        """Check if gpu1 host is reachable (SSH port open)."""
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.ssh_host, 22), timeout=3
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except Exception:
+            return False
+
     async def wake(self) -> bool:
         """
         Send Wake-on-LAN magic packet to gpu1.

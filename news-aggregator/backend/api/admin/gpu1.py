@@ -14,7 +14,8 @@ class GPU1Status(BaseModel):
     """GPU1 power management status."""
 
     enabled: bool
-    available: bool
+    available: bool  # Host reachable (SSH port)
+    ollama_available: bool  # Ollama API reachable
     was_sleeping: bool | None = None  # None when unavailable
     wake_time: str | None = None
     last_activity: float | None = None
@@ -52,6 +53,7 @@ async def get_gpu1_status() -> GPU1Status:
         return GPU1Status(
             enabled=False,
             available=False,
+            ollama_available=False,
             was_sleeping=False,
             wake_time=None,
             last_activity=None,
@@ -106,13 +108,17 @@ async def get_gpu1_status() -> GPU1Status:
             logger.debug(f"Failed to get logged-in users: {e}")
         return []
 
-    # Run availability check and SSH user check concurrently
-    available, logged_in_users = await asyncio.gather(
+    # Run all checks concurrently
+    host_reachable, ollama_available, logged_in_users = await asyncio.gather(
+        power_mgr.is_host_reachable(),
         power_mgr.is_available(),
         check_logged_in_users(),
     )
 
-    # If gpu1 is not available, discard SSH results (may be stale)
+    # Host is available if reachable OR Ollama responds (Ollama implies host is up)
+    available = host_reachable or ollama_available
+
+    # If gpu1 host is not reachable, discard SSH results (may be stale)
     if not available:
         logged_in_users = []
 
@@ -133,6 +139,7 @@ async def get_gpu1_status() -> GPU1Status:
     return GPU1Status(
         enabled=True,
         available=available,
+        ollama_available=ollama_available,
         # Only show wake state when gpu1 is available; otherwise it's meaningless
         was_sleeping=power_mgr._was_sleeping if available else None,
         wake_time=power_mgr._wake_time.isoformat() if available and power_mgr._wake_time else None,

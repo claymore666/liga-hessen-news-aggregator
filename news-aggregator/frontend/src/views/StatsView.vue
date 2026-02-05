@@ -382,6 +382,10 @@ onUnmounted(() => {
                   {{ gpu1Status?.available ? 'Läuft' : 'Aus' }}
                 </span>
               </div>
+              <div v-if="gpu1Status?.available && !gpu1Status?.ollama_available" class="flex items-center gap-1 mt-0.5">
+                <ExclamationTriangleIcon class="h-4 w-4 text-yellow-500" />
+                <span class="text-xs text-yellow-600">Ollama gestoppt</span>
+              </div>
             </div>
           </div>
         </div>
@@ -454,13 +458,22 @@ onUnmounted(() => {
             <BoltIcon class="mr-1 inline h-5 w-5" />
             GPU1 Power Management
           </h2>
-          <span
-            class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium"
-            :class="gpu1Status.available ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'"
-          >
-            <component :is="gpu1Status.available ? SunIcon : MoonIcon" class="h-4 w-4" />
-            {{ gpu1Status.available ? 'Wach' : 'Schläft' }}
-          </span>
+          <div class="flex items-center gap-2">
+            <span
+              v-if="gpu1Status.available && !gpu1Status.ollama_available"
+              class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-700"
+            >
+              <ExclamationTriangleIcon class="h-4 w-4" />
+              Ollama aus
+            </span>
+            <span
+              class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium"
+              :class="gpu1Status.available ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'"
+            >
+              <component :is="gpu1Status.available ? SunIcon : MoonIcon" class="h-4 w-4" />
+              {{ gpu1Status.available ? 'Wach' : 'Schläft' }}
+            </span>
+          </div>
         </div>
 
         <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

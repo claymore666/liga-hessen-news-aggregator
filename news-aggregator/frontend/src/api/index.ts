@@ -270,7 +270,8 @@ export interface StorageStats {
 // GPU1 Status Types
 export interface GPU1Status {
   enabled: boolean
-  available: boolean
+  available: boolean  // Host reachable (SSH port)
+  ollama_available: boolean  // Ollama API reachable
   was_sleeping: boolean | null  // null when gpu1 unavailable
   wake_time: string | null
   last_activity: number | null
