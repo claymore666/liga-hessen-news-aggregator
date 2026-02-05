@@ -91,41 +91,35 @@ async def stop_scheduler_endpoint():
 
 @router.post("/admin/llm-worker/start")
 async def start_llm_worker_endpoint():
-    """Start the LLM worker (only works on leader process)."""
+    """Start the LLM worker."""
     from services.llm_worker import get_worker, start_worker
 
     worker = get_worker()
     if worker and worker._running:
         return {"status": "already_running", "message": "LLM worker is already running"}
 
-    # Check DB state - if no local worker, send command
     state = await read_state("llm")
     if state.get("running"):
         return {"status": "already_running", "message": "LLM worker is already running"}
 
-    # Try local start first (works if we're on leader)
-    if worker is not None or get_worker() is not None:
-        await start_worker()
-        return {"status": "started", "message": "LLM worker started"}
-
-    # Not on leader - queue command
-    await write_command("llm", "start")
-    return {"status": "command_queued", "message": "Start command queued for leader process"}
+    await start_worker()
+    return {"status": "started", "message": "LLM worker started"}
 
 
 @router.post("/admin/llm-worker/stop")
 async def stop_llm_worker_endpoint():
     """Stop the LLM worker."""
-    state = await read_state("llm")
-    if not state.get("running"):
-        return {"status": "already_stopped", "message": "LLM worker is not running"}
-
-    # Try local stop first
     from services.llm_worker import get_worker, stop_worker
+
     worker = get_worker()
     if worker and worker._running:
         await stop_worker()
         return {"status": "stopped", "message": "LLM worker stopped"}
+
+    # Worker not on this process - queue command for leader
+    state = await read_state("llm")
+    if not state.get("running"):
+        return {"status": "already_stopped", "message": "LLM worker is not running"}
 
     await write_command("llm", "stop")
     return {"status": "command_queued", "message": "Stop command queued for leader process"}
@@ -189,26 +183,23 @@ async def start_classifier_worker_endpoint():
     if state.get("running"):
         return {"status": "already_running", "message": "Classifier worker is already running"}
 
-    if worker is not None or get_classifier_worker() is not None:
-        await start_classifier_worker()
-        return {"status": "started", "message": "Classifier worker started"}
-
-    await write_command("classifier", "start")
-    return {"status": "command_queued", "message": "Start command queued for leader process"}
+    await start_classifier_worker()
+    return {"status": "started", "message": "Classifier worker started"}
 
 
 @router.post("/admin/classifier-worker/stop")
 async def stop_classifier_worker_endpoint():
     """Stop the classifier worker."""
-    state = await read_state("classifier")
-    if not state.get("running"):
-        return {"status": "already_stopped", "message": "Classifier worker is not running"}
-
     from services.classifier_worker import get_classifier_worker, stop_classifier_worker
+
     worker = get_classifier_worker()
     if worker and worker._running:
         await stop_classifier_worker()
         return {"status": "stopped", "message": "Classifier worker stopped"}
+
+    state = await read_state("classifier")
+    if not state.get("running"):
+        return {"status": "already_stopped", "message": "Classifier worker is not running"}
 
     await write_command("classifier", "stop")
     return {"status": "command_queued", "message": "Stop command queued for leader process"}
@@ -270,26 +261,23 @@ async def start_dedup_worker_endpoint():
     if state.get("running"):
         return {"status": "already_running", "message": "Dedup worker is already running"}
 
-    if worker is not None or get_dedup_worker() is not None:
-        await start_dedup_worker()
-        return {"status": "started", "message": "Dedup worker started"}
-
-    await write_command("dedup", "start")
-    return {"status": "command_queued", "message": "Start command queued for leader process"}
+    await start_dedup_worker()
+    return {"status": "started", "message": "Dedup worker started"}
 
 
 @router.post("/admin/dedup-worker/stop")
 async def stop_dedup_worker_endpoint():
     """Stop the dedup worker."""
-    state = await read_state("dedup")
-    if not state.get("running"):
-        return {"status": "already_stopped", "message": "Dedup worker is not running"}
-
     from services.dedup_worker import get_dedup_worker, stop_dedup_worker
+
     worker = get_dedup_worker()
     if worker and worker._running:
         await stop_dedup_worker()
         return {"status": "stopped", "message": "Dedup worker stopped"}
+
+    state = await read_state("dedup")
+    if not state.get("running"):
+        return {"status": "already_stopped", "message": "Dedup worker is not running"}
 
     await write_command("dedup", "stop")
     return {"status": "command_queued", "message": "Stop command queued for leader process"}
