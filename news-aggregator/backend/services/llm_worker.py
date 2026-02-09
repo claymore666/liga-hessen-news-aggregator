@@ -162,6 +162,15 @@ class LLMWorker:
         # Always check if gpu1 is available (even if processor is cached)
         power_mgr = get_power_manager()
         if power_mgr is not None:
+            # Outside active hours: don't use gpu1 at all (free VRAM for local use)
+            if not power_mgr.is_within_active_hours():
+                logger.debug(
+                    "Outside active hours, skipping LLM processing "
+                    "(gpu1 VRAM reserved for local use)"
+                )
+                self._processor = None
+                return None
+
             if await power_mgr.is_available():
                 logger.debug("gpu1 available, proceeding with LLM processing")
             else:
