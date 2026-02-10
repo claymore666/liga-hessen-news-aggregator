@@ -35,12 +35,21 @@ cd news-aggregator
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+**Note:** The classifier API is NOT in docker-compose.prod.yml (no GPU on docker-ai).
+To update the classifier, rebuild it on gpu1 via `docker compose up -d --build classifier`.
+
 ### QA/Development (gpu1)
 
 ```bash
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
 git pull origin dev
 docker compose up -d --build
+```
+
+This includes the classifier API (requires NVIDIA GPU). To rebuild only the classifier:
+
+```bash
+docker compose up -d --build classifier
 ```
 
 ### Local Deployment (gpu1 only)

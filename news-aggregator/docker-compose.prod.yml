@@ -6,9 +6,13 @@
 # Sends WoL packets to gpu1 for LLM processing during active hours.
 #
 # Environment files:
-#   - docker-compose.yml      -> gpu1 (QA) - workers disabled
-#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled
+#   - docker-compose.yml      -> gpu1 (QA) - workers disabled, includes classifier
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled, NO classifier
 #   - docker-compose.training.yml -> classifier training
+#
+# NOTE: The classifier API requires an NVIDIA GPU and runs on gpu1, not here.
+# Backend connects to it remotely via CLASSIFIER_URL=http://gpu1.fritz.box:8082.
+# To rebuild the classifier, use docker-compose.yml on gpu1.
 # =============================================================================
 
 # Network for LAN access (Wake-on-LAN)
