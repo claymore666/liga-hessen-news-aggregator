@@ -260,7 +260,7 @@ class DedupWorker:
         Returns:
             Number of items checked
         """
-        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
 
         async with async_session_maker() as db:
             conditions = [
@@ -474,7 +474,7 @@ class DedupWorker:
             logger.debug(f"Cannot create classifier for Phase 2 dedup: {e}")
             return 0
 
-        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "7"))
+        check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
 
         async with async_session_maker() as db:
             from sqlalchemy import or_
@@ -533,10 +533,16 @@ class DedupWorker:
                 clean_title = _strip_boilerplate(item_data["title"])
                 clean_content = _strip_boilerplate(item_data["content"])
 
+                # Only match against items from recent days
+                fetched_after = None
+                if check_days > 0:
+                    fetched_after = (datetime.utcnow() - timedelta(days=check_days)).isoformat()
+
                 duplicates = await classifier.find_duplicates(
                     title=clean_title,
                     content=clean_content,
                     threshold=0.75,
+                    fetched_after=fetched_after,
                 )
 
                 if duplicates:
@@ -668,6 +674,7 @@ class DedupWorker:
                         "source": source_name,
                         "priority": item.priority.value if hasattr(item.priority, 'value') else str(item.priority),
                         "channel_id": str(item.channel_id) if item.channel_id else "",
+                        "fetched_at": item.fetched_at.isoformat() if item.fetched_at else "",
                     },
                 })
                 item_ids.append(item.id)

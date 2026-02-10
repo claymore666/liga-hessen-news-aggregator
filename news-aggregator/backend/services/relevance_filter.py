@@ -276,6 +276,7 @@ class RelevanceFilter:
         title: str,
         content: str,
         threshold: float = 0.75,
+        fetched_after: str | None = None,
     ) -> list[dict]:
         """
         Find semantically similar items that may be duplicates.
@@ -288,19 +289,23 @@ class RelevanceFilter:
             title: Item title
             content: Item content
             threshold: Similarity threshold (default 0.75)
+            fetched_after: ISO timestamp - only match items fetched after this time
 
         Returns:
             List of duplicate candidates with id, title, score, metadata
         """
         try:
             client = await self._get_client()
+            payload = {
+                "title": title,
+                "content": content,
+                "threshold": threshold,
+            }
+            if fetched_after:
+                payload["fetched_after"] = fetched_after
             response = await client.post(
                 f"{self.base_url}/find-duplicates",
-                json={
-                    "title": title,
-                    "content": content,
-                    "threshold": threshold,
-                },
+                json=payload,
             )
             response.raise_for_status()
             result = response.json()

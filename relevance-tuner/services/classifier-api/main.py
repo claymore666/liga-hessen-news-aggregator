@@ -146,6 +146,7 @@ class DuplicateRequest(BaseModel):
     content: str
     threshold: float = 0.75  # Cosine similarity threshold (paraphrase model)
     n_results: int = 5
+    fetched_after: str | None = None  # ISO timestamp - only match items fetched after this time
 
 
 class DuplicateResponse(BaseModel):
@@ -339,6 +340,7 @@ async def find_duplicates(request: DuplicateRequest):
             content=request.content,
             threshold=request.threshold,
             n_results=request.n_results,
+            fetched_after=request.fetched_after,
         )
 
         return DuplicateResponse(
