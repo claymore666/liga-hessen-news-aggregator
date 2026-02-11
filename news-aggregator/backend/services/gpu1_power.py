@@ -250,7 +250,23 @@ class GPU1PowerManager:
         """
         # First check if already available - use it regardless of active hours
         if await self.is_available():
-            logger.debug("gpu1 already available")
+            # If we sent WoL recently and gpu1 is available but _was_sleeping
+            # was reset (e.g., gpu1 rebooted after PackageKit updates),
+            # restore shutdown responsibility so we don't leave it running
+            if not self._was_sleeping:
+                last_wol = await self._get_last_wol_time()
+                if last_wol and self._seconds_until_next_wake(last_wol) > 0:
+                    logger.info(
+                        "gpu1 available after recent WoL (likely rebooted), "
+                        "restoring shutdown responsibility"
+                    )
+                    self._was_sleeping = True
+                    self._wake_time = datetime.utcfromtimestamp(last_wol)
+                    self._last_activity = time.time()  # Prevent immediate shutdown
+                else:
+                    logger.debug("gpu1 already available")
+            else:
+                logger.debug("gpu1 already available (we woke it)")
             return True
 
         # gpu1 is not available - if we previously woke it, it was shut down externally
