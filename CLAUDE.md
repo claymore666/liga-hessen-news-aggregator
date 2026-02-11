@@ -54,21 +54,32 @@ docker compose up -d --build classifier
 
 ### Local Deployment (gpu1 only)
 
-The classifier sleep handler requires manual installation on gpu1. It's not part of the Docker deployment.
+Two components ensure ChromaDB data is flushed before gpu1 powers off. Neither is part of Docker deployment.
 
-**Source:** `scripts/docker-sleep-handler`
-**Target:** `/usr/lib/systemd/system-sleep/docker-sleep-handler`
+**1. Shutdown flush service** (`scripts/classifier-flush.service`)
+Gracefully stops the classifier on shutdown/reboot/halt:
 
 ```bash
-# Install/update after changes
+# Install/update
+sudo cp scripts/classifier-flush.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now classifier-flush.service
+
+# Verify after shutdown
+journalctl -u classifier-flush.service
+```
+
+**2. Sleep handler** (`scripts/docker-sleep-handler`)
+Stops/starts the classifier around suspend/resume:
+
+```bash
+# Install/update
 sudo cp scripts/docker-sleep-handler /usr/lib/systemd/system-sleep/
 sudo chmod 755 /usr/lib/systemd/system-sleep/docker-sleep-handler
 
-# Verify logs after sleep/wake
+# Verify after sleep/wake
 journalctl -t docker-sleep-handler --since "1 hour ago"
 ```
-
-This ensures ChromaDB flushes to disk before gpu1 suspends.
 
 ### Quick Commands
 
