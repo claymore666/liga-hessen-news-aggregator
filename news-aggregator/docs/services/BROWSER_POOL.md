@@ -29,9 +29,10 @@ async with browser_pool.get_browser() as browser:
 
 ### Concurrency Control
 
-- **Max browsers**: 4 concurrent (configurable via `max_browsers`)
+- **Max browsers**: 2 concurrent (configurable via `BROWSER_POOL_MAX` env var, default: 2)
 - Uses `asyncio.Semaphore` to limit concurrent browser launches
 - Each `get_browser()` call launches a fresh Chromium instance and closes it on exit
+- Set to 2 to match docker-ai's 2-core CPU (see [CPU_ASSESSMENT.md](../operations/CPU_ASSESSMENT.md))
 
 ### Error Recovery
 
@@ -53,7 +54,7 @@ The pool uses a **generation-based restart** mechanism:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_browsers` | 4 | Max concurrent Chromium instances |
+| `BROWSER_POOL_MAX` (env) | 2 | Max concurrent Chromium instances |
 | `error_threshold` | 10 | Errors before driver restart |
 | `RESTART_COOLDOWN` | 30s | Min time between restart attempts |
 | `MAX_RESTART_FAILURES` | 3 | Consecutive failures before backing off |
