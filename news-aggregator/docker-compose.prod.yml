@@ -52,6 +52,20 @@ services:
     image: postgres:17-alpine
     container_name: liga-news-db
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=30
+      - -c
+      - random_page_cost=1.1
     environment:
       POSTGRES_DB: liga_news
       POSTGRES_USER: liga

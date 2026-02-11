@@ -9,6 +9,7 @@ Keys: worker:{name}:state, worker:{name}:stats, worker:{name}:command
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 COMMAND_TIMEOUT_SECONDS = 60
 
+# Cache for get_poll_interval() to avoid querying settings table every 10s
+_poll_interval_cache: int | None = None
+_poll_interval_cached_at: float = 0
+_POLL_INTERVAL_CACHE_TTL = 60  # seconds
+
 
 def _key(name: str, suffix: str) -> str:
     return f"worker:{name}:{suffix}"
@@ -30,7 +36,12 @@ def _key(name: str, suffix: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def get_poll_interval() -> int:
-    """Get poll interval from DB (needs persistence, infrequent)."""
+    """Get poll interval from DB, cached for 60s to reduce settings table scans."""
+    global _poll_interval_cache, _poll_interval_cached_at
+    now = time.monotonic()
+    if _poll_interval_cache is not None and (now - _poll_interval_cached_at) < _POLL_INTERVAL_CACHE_TTL:
+        return _poll_interval_cache
+
     try:
         async with async_session_maker() as db:
             result = await db.scalar(
@@ -39,12 +50,17 @@ async def get_poll_interval() -> int:
             if result is not None:
                 val = result if isinstance(result, int) else int(result)
                 if 1 <= val <= 300:
+                    _poll_interval_cache = val
+                    _poll_interval_cached_at = now
                     return val
     except Exception:
         pass
 
     from config import settings
-    return settings.worker_status_poll_interval
+    val = settings.worker_status_poll_interval
+    _poll_interval_cache = val
+    _poll_interval_cached_at = now
+    return val
 
 
 async def write_state(name: str, *, running: bool, paused: bool = False,
