@@ -107,6 +107,7 @@ services:
       - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-false}
       - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - REDIS_URL=redis://redis:6379/0
+      - BROWSER_POOL_MAX=${BROWSER_POOL_MAX:-2}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - backend-data:/app/data

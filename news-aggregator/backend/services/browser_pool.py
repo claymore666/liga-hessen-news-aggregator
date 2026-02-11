@@ -237,5 +237,8 @@ class BrowserPool:
         }
 
 
-# Singleton instance
-browser_pool = BrowserPool(max_browsers=4)
+# Singleton instance — max_browsers configurable via BROWSER_POOL_MAX env var
+# Uses os.environ directly to avoid circular import with config.py
+import os
+
+browser_pool = BrowserPool(max_browsers=int(os.environ.get("BROWSER_POOL_MAX", "2")))

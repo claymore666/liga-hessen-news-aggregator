@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     dedup_worker_enabled: bool = True  # Set to False to disable dedup worker on startup
     worker_status_poll_interval: int = 10  # Seconds between DB status sync/command polls
 
+    # Browser Pool
+    browser_pool_max: int = 2  # Max concurrent Playwright browsers (match CPU cores)
+
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
     proxy_pool_max: int = 25  # Maximum working proxies (buffer)
