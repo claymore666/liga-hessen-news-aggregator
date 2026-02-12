@@ -283,11 +283,16 @@ class Pipeline:
                     # Strip boilerplate before embedding to avoid false positive similarity
                     clean_title = _strip_boilerplate(normalized.title)
                     clean_content = _strip_boilerplate(normalized.content)
+                    # Limit to recent items (same window as dedup worker)
+                    import os
+                    check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
+                    fetched_after = (datetime.now(UTC) - timedelta(days=check_days)).isoformat() if check_days > 0 else None
                     # Use lower threshold to catch "maybe duplicates" for LLM review
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=clean_title,
                         content=clean_content,
                         threshold=DUPLICATE_THRESHOLD_MAYBE,  # 0.60 - catches edge cases
+                        fetched_after=fetched_after,
                     )
                     if duplicates:
                         best_match = duplicates[0]
