@@ -18,9 +18,9 @@ const alerts = computed(() => {
   if (llm.stopped_due_to_errors && !dismissed.value.has('llm_error')) {
     result.push({
       id: 'llm_error',
-      type: 'error',
-      title: 'LLM Worker gestoppt',
-      message: 'Der LLM Worker wurde nach wiederholten Fehlern gestoppt. Bitte Logs prüfen und manuell neu starten.'
+      type: 'warning',
+      title: 'LLM Worker beeinträchtigt',
+      message: 'Der LLM Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
     })
   } else if (!llm.running && !llm.stopped_due_to_errors && !dismissed.value.has('llm_stopped')) {
     result.push({
@@ -36,9 +36,9 @@ const alerts = computed(() => {
   if (clf.stopped_due_to_errors && !dismissed.value.has('classifier_error')) {
     result.push({
       id: 'classifier_error',
-      type: 'error',
-      title: 'Classifier Worker gestoppt',
-      message: 'Der Classifier Worker wurde nach wiederholten Fehlern gestoppt. Bitte Logs prüfen und manuell neu starten.'
+      type: 'warning',
+      title: 'Classifier Worker beeinträchtigt',
+      message: 'Der Classifier Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
     })
   } else if (!clf.running && !clf.stopped_due_to_errors && !dismissed.value.has('classifier_stopped')) {
     result.push({
@@ -54,9 +54,9 @@ const alerts = computed(() => {
   if (dedup.stopped_due_to_errors && !dismissed.value.has('dedup_error')) {
     result.push({
       id: 'dedup_error',
-      type: 'error',
-      title: 'Dedup Worker gestoppt',
-      message: 'Der Dedup Worker wurde nach wiederholten Fehlern gestoppt. Bitte Logs prüfen und manuell neu starten.'
+      type: 'warning',
+      title: 'Dedup Worker beeinträchtigt',
+      message: 'Der Dedup Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
     })
   } else if (!dedup.running && !dedup.stopped_due_to_errors && !dismissed.value.has('dedup_stopped')) {
     result.push({

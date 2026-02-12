@@ -140,6 +140,14 @@ class ClassifierWorker:
             "stats": stats_copy,
         }
 
+    async def _on_success(self):
+        """Clear degraded state on successful processing."""
+        if self._stopped_due_to_errors:
+            self._stopped_due_to_errors = False
+            logger.info("Classifier worker recovered from degraded state")
+            from services.worker_status import write_state
+            await write_state("classifier", running=True, stopped_due_to_errors=False)
+
     async def _get_classifier(self):
         """Get or create the classifier instance."""
         if self._classifier is None:
@@ -164,7 +172,8 @@ class ClassifierWorker:
                 # Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
+                    await self._on_success()
                     # More items might be available
                     await asyncio.sleep(0.5)
                     continue
@@ -182,19 +191,17 @@ class ClassifierWorker:
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.critical(
-                        f"Classifier worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
-                        "Manual restart required after fixing the issue."
+                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                    logger.warning(
+                        f"Classifier worker in degraded state after {consecutive_errors} errors. "
+                        "Will keep retrying with backoff."
                     )
                     self._stopped_due_to_errors = True
-                    self._running = False
                     from services.worker_status import write_state
-                    await write_state("classifier", running=False, stopped_due_to_errors=True)
-                    break
+                    await write_state("classifier", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 10s, 20s, 40s, ... up to 120s
-                backoff = min(120.0, 10.0 * (2 ** (consecutive_errors - 1)))
+                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
                 logger.info(f"Backing off for {backoff:.0f}s before retry")
                 await asyncio.sleep(backoff)
 

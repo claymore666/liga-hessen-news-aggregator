@@ -154,6 +154,14 @@ class LLMWorker:
             "stats": stats_copy,
         }
 
+    async def _on_success(self):
+        """Clear degraded state on successful processing."""
+        if self._stopped_due_to_errors:
+            self._stopped_due_to_errors = False
+            logger.info("LLM worker recovered from degraded state")
+            from services.worker_status import write_state
+            await write_state("llm", running=True, stopped_due_to_errors=False)
+
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""
         from services.gpu1_power import get_power_manager
@@ -205,14 +213,16 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
+                    await self._on_success()
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
+                    await self._on_success()
                     self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
                     continue
@@ -233,19 +243,17 @@ class LLMWorker:
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.critical(
-                        f"LLM worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
-                        "Manual restart required after fixing the issue."
+                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                    logger.warning(
+                        f"LLM worker in degraded state after {consecutive_errors} errors. "
+                        "Will keep retrying with backoff."
                     )
                     self._stopped_due_to_errors = True
-                    self._running = False
                     from services.worker_status import write_state
-                    await write_state("llm", running=False, stopped_due_to_errors=True)
-                    break
+                    await write_state("llm", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 5s, 10s, 20s, 40s, ... up to 60s
-                backoff = min(60.0, 5.0 * (2 ** (consecutive_errors - 1)))
+                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
                 logger.info(f"Backing off for {backoff:.0f}s before retry")
                 await asyncio.sleep(backoff)
 

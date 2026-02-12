@@ -28,6 +28,7 @@ class WorkerStatus(BaseModel):
     """Status of a background worker."""
     running: bool
     paused: bool
+    stopped_due_to_errors: bool = False
     stats: dict
 
 
@@ -115,6 +116,7 @@ async def get_system_stats(
     llm_worker_status = WorkerStatus(
         running=llm_state.get("running", False),
         paused=llm_state.get("paused", False),
+        stopped_due_to_errors=llm_state.get("stopped_due_to_errors", False),
         stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
@@ -125,6 +127,7 @@ async def get_system_stats(
     classifier_worker_status = WorkerStatus(
         running=clf_state.get("running", False),
         paused=clf_state.get("paused", False),
+        stopped_due_to_errors=clf_state.get("stopped_due_to_errors", False),
         stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
               {"processed": 0, "errors": 0},
     )
@@ -135,6 +138,7 @@ async def get_system_stats(
     dedup_worker_status = WorkerStatus(
         running=dedup_state.get("running", False),
         paused=dedup_state.get("paused", False),
+        stopped_due_to_errors=dedup_state.get("stopped_due_to_errors", False),
         stats={k: v for k, v in dedup_stats.items() if k != "synced_at"} or
               {"phase1_checked": 0, "phase2_checked": 0, "duplicates_found": 0, "errors": 0},
     )
