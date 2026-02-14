@@ -62,8 +62,9 @@ class ProxyManager:
         "http://ident.me",
     ]
     MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds
-    BATCH_SIZE = 100  # Test this many proxies per batch
-    REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
+    BATCH_SIZE = 25  # Test this many proxies per batch (keep low to avoid CPU spikes)
+    BATCH_COOLDOWN = 5  # Seconds between batches to avoid hammering
+    REVALIDATION_INTERVAL = 600  # Seconds between health checks (10 min)
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
     KNOWN_PROXIES_TO_TRY_FIRST = 20  # Try this many from known list first
 
@@ -376,15 +377,23 @@ class ProxyManager:
 
     async def _fill_pools(self):
         """Fill both pools until they meet their minimums."""
-        max_batches = 30  # Limit search to avoid infinite loops
+        max_batches = 10  # Limit search to avoid excessive CPU usage
         batches_tried = 0
+        empty_batches = 0
 
         while not self._pools_filled() and batches_tried < max_batches:
             http_found, https_found = await self._search_batch()
             batches_tried += 1
 
             if http_found == 0 and https_found == 0:
-                await asyncio.sleep(1)
+                empty_batches += 1
+                # Give up early if we keep finding nothing
+                if empty_batches >= 3:
+                    logger.info("3 consecutive empty batches, stopping search")
+                    break
+
+            # Cooldown between batches to avoid CPU spikes
+            await asyncio.sleep(self.BATCH_COOLDOWN)
 
             logger.info(f"Pools: HTTP {len(self.http_proxies)}/{self.min_http_proxies}, "
                        f"HTTPS {len(self.https_proxies)}/{self.min_https_proxies}")
