@@ -678,16 +678,16 @@ onUnmounted(() => {
             <span
               class="flex items-center gap-1 text-sm"
               :class="{
-                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused,
-                'text-yellow-600': stats.classifier_worker.paused,
+                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available !== false,
+                'text-yellow-600': stats.classifier_worker.paused || (stats.classifier_worker.running && stats.classifier_worker.service_available === false),
                 'text-red-600': !stats.classifier_worker.running
               }"
             >
               <component
-                :is="stats.classifier_worker.running ? (stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon) : XCircleIcon"
+                :is="stats.classifier_worker.running ? (stats.classifier_worker.paused ? PauseIcon : (stats.classifier_worker.service_available === false ? ExclamationTriangleIcon : CheckCircleIcon)) : XCircleIcon"
                 class="h-4 w-4"
               />
-              {{ !stats.classifier_worker.running ? 'Gestoppt' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
+              {{ !stats.classifier_worker.running ? 'Gestoppt' : stats.classifier_worker.paused ? 'Pausiert' : stats.classifier_worker.service_available === false ? 'Dienst nicht erreichbar' : 'Läuft' }}
             </span>
           </div>
 

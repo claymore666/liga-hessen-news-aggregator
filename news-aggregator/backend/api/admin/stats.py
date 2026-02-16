@@ -29,6 +29,7 @@ class WorkerStatus(BaseModel):
     running: bool
     paused: bool
     stopped_due_to_errors: bool = False
+    service_available: bool | None = None  # For workers that depend on external services
     stats: dict
 
 
@@ -121,13 +122,23 @@ async def get_system_stats(
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
 
-    # Classifier Worker status from DB
+    # Classifier Worker status from DB + actual service reachability
     clf_state = await read_state("classifier")
     clf_stats = await read_stats("classifier")
+    # Check if the classifier API is actually reachable
+    classifier_reachable = False
+    try:
+        from services.relevance_filter import get_relevance_filter
+        rf = await get_relevance_filter()
+        if rf:
+            classifier_reachable = await rf.is_available()
+    except Exception:
+        pass
     classifier_worker_status = WorkerStatus(
         running=clf_state.get("running", False),
         paused=clf_state.get("paused", False),
         stopped_due_to_errors=clf_state.get("stopped_due_to_errors", False),
+        service_available=classifier_reachable,
         stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
               {"processed": 0, "errors": 0},
     )
