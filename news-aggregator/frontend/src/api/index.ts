@@ -183,6 +183,7 @@ export interface WorkerStatus {
   running: boolean
   paused: boolean
   stopped_due_to_errors?: boolean
+  service_available?: boolean | null
   stats: Record<string, unknown>
 }
 

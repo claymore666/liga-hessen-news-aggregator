@@ -678,21 +678,24 @@ onUnmounted(() => {
             <span
               class="flex items-center gap-1 text-sm"
               :class="{
-                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available !== false,
-                'text-yellow-600': stats.classifier_worker.paused || (stats.classifier_worker.running && stats.classifier_worker.service_available === false),
-                'text-red-600': !stats.classifier_worker.running
+                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available === true,
+                'text-yellow-600': stats.classifier_worker.paused,
+                'text-red-600': !stats.classifier_worker.running || stats.classifier_worker.service_available === false
               }"
             >
               <component
-                :is="stats.classifier_worker.running ? (stats.classifier_worker.paused ? PauseIcon : (stats.classifier_worker.service_available === false ? ExclamationTriangleIcon : CheckCircleIcon)) : XCircleIcon"
+                :is="!stats.classifier_worker.running || stats.classifier_worker.service_available === false ? XCircleIcon : stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon"
                 class="h-4 w-4"
               />
-              {{ !stats.classifier_worker.running ? 'Gestoppt' : stats.classifier_worker.paused ? 'Pausiert' : stats.classifier_worker.service_available === false ? 'Dienst nicht erreichbar' : 'Läuft' }}
+              {{ !stats.classifier_worker.running ? 'Worker gestoppt' : stats.classifier_worker.service_available === false ? 'Classifier nicht erreichbar' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
             </span>
           </div>
 
           <div class="mt-2 space-y-1 text-sm text-gray-500">
             <div>Ausstehend: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div v-if="stats.classifier_worker.service_available !== null">
+              API: <span :class="stats.classifier_worker.service_available ? 'text-green-600' : 'text-red-600'">{{ stats.classifier_worker.service_available ? 'Erreichbar' : 'Nicht erreichbar' }}</span>
+            </div>
           </div>
 
           <div class="mt-4 flex gap-2">
