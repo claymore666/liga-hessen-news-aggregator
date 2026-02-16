@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, func
@@ -125,13 +126,14 @@ async def get_system_stats(
     # Classifier Worker status from DB + actual service reachability
     clf_state = await read_state("classifier")
     clf_stats = await read_stats("classifier")
-    # Check if the classifier API is actually reachable
+    # Check if the classifier API is actually reachable (direct health check)
     classifier_reachable = False
     try:
-        from services.relevance_filter import get_relevance_filter
-        rf = await get_relevance_filter()
-        if rf:
-            classifier_reachable = await rf.is_available()
+        from config import settings
+        if settings.classifier_url:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                resp = await client.get(f"{settings.classifier_url.rstrip('/')}/health")
+                classifier_reachable = resp.status_code == 200
     except Exception:
         pass
     classifier_worker_status = WorkerStatus(
