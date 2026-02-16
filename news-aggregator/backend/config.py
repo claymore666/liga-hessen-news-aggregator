@@ -143,7 +143,7 @@ class Settings(BaseSettings):
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
     proxy_pool_max: int = 25  # Maximum working proxies (buffer)
     proxy_known_max: int = 100  # Maximum known good proxies to store
-    proxy_https_pool_min: int = 1  # Minimum HTTPS-capable proxies (free HTTPS proxies are rare)
+    proxy_https_pool_min: int = 0  # HTTPS proxies optional; X scraper falls back to direct connection
 
     # API
     api_prefix: str = "/api"
