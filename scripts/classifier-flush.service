@@ -1,5 +1,5 @@
 [Unit]
-Description=Gracefully stop classifier container (flush ChromaDB)
+Description=Manage classifier container lifecycle (start on boot, flush on shutdown)
 DefaultDependencies=no
 Before=shutdown.target reboot.target halt.target
 After=docker.service
@@ -8,7 +8,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/true
+ExecStart=/usr/bin/docker start liga-classifier
 ExecStop=/usr/bin/docker stop liga-classifier --time 30
 
 [Install]
