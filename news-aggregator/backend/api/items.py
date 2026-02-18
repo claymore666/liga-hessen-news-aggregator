@@ -315,11 +315,17 @@ async def get_items_by_topic(
     rows = result.fetchall()
 
     def _make_brief(row, offset=0) -> TopicItemBrief:
+        # Raw SQL returns priority as string; coerce unknown values to "none"
+        raw_priority = row[3 + offset]
+        try:
+            priority = Priority(raw_priority)
+        except ValueError:
+            priority = Priority.NONE
         return TopicItemBrief(
             id=row[0 + offset],
             title=row[1 + offset],
             url=row[2 + offset],
-            priority=row[3 + offset],
+            priority=priority,
             published_at=row[4 + offset],
             summary=row[5 + offset],
             source_name=row[6 + offset],
