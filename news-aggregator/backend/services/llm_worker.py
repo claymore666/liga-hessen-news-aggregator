@@ -577,7 +577,10 @@ class LLMWorker:
                 if analysis.get("relevant") is False:
                     llm_priority = None
 
-                if llm_priority == "high":
+                if llm_priority == "critical":
+                    new_priority = Priority.HIGH
+                    new_score = max(item_data["priority_score"], 95)
+                elif llm_priority == "high":
                     new_priority = Priority.HIGH
                     new_score = max(item_data["priority_score"], 90)
                 elif llm_priority == "medium":

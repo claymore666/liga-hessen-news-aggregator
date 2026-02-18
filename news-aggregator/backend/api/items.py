@@ -55,6 +55,14 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _safe_priority(value: str) -> Priority:
+    """Coerce a raw priority string to a Priority enum, defaulting to NONE."""
+    try:
+        return Priority(value)
+    except (ValueError, KeyError):
+        return Priority.NONE
+
+
 def get_client_ip(request: Request) -> str | None:
     """Extract client IP from request, handling proxies."""
     # Check for forwarded header (behind proxy)
@@ -316,11 +324,7 @@ async def get_items_by_topic(
 
     def _make_brief(row, offset=0) -> TopicItemBrief:
         # Raw SQL returns priority as string; coerce unknown values to "none"
-        raw_priority = row[3 + offset]
-        try:
-            priority = Priority(raw_priority)
-        except ValueError:
-            priority = Priority.NONE
+        priority = _safe_priority(row[3 + offset])
         return TopicItemBrief(
             id=row[0 + offset],
             title=row[1 + offset],
@@ -406,7 +410,7 @@ async def get_items_by_topic(
                 id=row[1],
                 title=row[2],
                 url=row[3],
-                priority=row[4],
+                priority=_safe_priority(row[4]),
                 source=source_brief,
                 published_at=row[6],
             ))
@@ -1069,6 +1073,9 @@ async def refetch_item(
 
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if not item.channel:
+        raise HTTPException(status_code=400, detail="Item has no channel, cannot re-fetch")
 
     connector_type = item.channel.connector_type
 
