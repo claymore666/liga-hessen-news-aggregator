@@ -459,7 +459,7 @@ class ProcessingLogger:
             confidence = result.get("relevance_confidence", 0.5)
 
             log = ItemProcessingLog(
-                run_id=str(uuid4()),
+                processing_run_id=str(uuid4()),
                 step_type=ProcessingStepType.CLASSIFIER_OVERRIDE,
                 step_order=0,
                 item_id=upd["id"],
