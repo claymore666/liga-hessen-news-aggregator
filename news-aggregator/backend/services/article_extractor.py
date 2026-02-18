@@ -89,11 +89,9 @@ class ArticleExtractor:
         Filters out internal Twitter/X links and non-article URLs.
         Handles X.com's space-broken URLs (e.g., "https:// faz.net/article").
         """
-        # First, fix space-broken URLs that X.com creates
-        # Pattern: https:// domain.tld/path with spaces in protocol or path
-        fixed_text = re.sub(r'https?://\s+', 'https://', text)  # Fix space after ://
-        # Remove spaces within URLs (between word chars, or after punctuation like -)
-        fixed_text = re.sub(r'([/\w.-])\s+([/\w.-])', r'\1\2', fixed_text)
+        # Fix space-broken URLs that X.com creates (e.g., "https:// faz.net/article")
+        # Only fix the space after :// — don't collapse spaces in surrounding text
+        fixed_text = re.sub(r'(https?://)\s+', r'\1', text)
 
         # Match URLs
         url_pattern = r'https?://[^\s<>"\'{}|\\^`\[\]]+'
@@ -106,6 +104,10 @@ class ArticleExtractor:
 
             parsed = urlparse(url)
             domain = parsed.netloc.lower()
+
+            # Skip invalid/garbage hostnames (max valid FQDN is 253 chars)
+            if len(domain) > 253 or not domain:
+                continue
 
             # Skip Twitter/X internal links (but keep t.co - these redirect to articles)
             if domain in ("x.com", "twitter.com", "pic.twitter.com"):

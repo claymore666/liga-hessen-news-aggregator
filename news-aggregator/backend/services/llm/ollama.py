@@ -67,6 +67,7 @@ class OllamaProvider(BaseLLMProvider):
             "messages": messages,
             "stream": False,
             "think": False,  # Disable qwen3 thinking mode to ensure content is returned
+            "keep_alive": "5m",  # Unload model from VRAM after 5 min idle
             "options": {
                 "temperature": temperature,
             },
@@ -124,6 +125,7 @@ class OllamaProvider(BaseLLMProvider):
             "messages": messages,
             "stream": False,
             "think": False,
+            "keep_alive": "5m",  # Unload model from VRAM after 5 min idle
             "options": {
                 "temperature": temperature,
             },

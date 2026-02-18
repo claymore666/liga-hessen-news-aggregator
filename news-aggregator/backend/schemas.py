@@ -166,6 +166,7 @@ class ItemResponse(ItemBase, BaseSchema):
     # Duplicate grouping
     similar_to_id: int | None = None  # ID of primary item if this is a duplicate
     duplicates: list[DuplicateBrief] = Field(default_factory=list)  # Child duplicates if this is primary
+    dedup_pending: bool = False  # True while dedup check is not yet complete
 
 
 class ItemUpdate(BaseModel):

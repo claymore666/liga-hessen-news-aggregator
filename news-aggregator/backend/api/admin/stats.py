@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, func
@@ -28,6 +29,8 @@ class WorkerStatus(BaseModel):
     """Status of a background worker."""
     running: bool
     paused: bool
+    stopped_due_to_errors: bool = False
+    service_available: bool | None = None  # For workers that depend on external services
     stats: dict
 
 
@@ -59,6 +62,7 @@ class SystemStatsResponse(BaseModel):
     scheduler: SchedulerStatus
     llm_worker: WorkerStatus
     classifier_worker: WorkerStatus
+    dedup_worker: WorkerStatus
     processing_queue: ProcessingQueueStats
     items: ItemStats
     timestamp: str
@@ -114,18 +118,42 @@ async def get_system_stats(
     llm_worker_status = WorkerStatus(
         running=llm_state.get("running", False),
         paused=llm_state.get("paused", False),
+        stopped_due_to_errors=llm_state.get("stopped_due_to_errors", False),
         stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
 
-    # Classifier Worker status from DB
+    # Classifier Worker status from DB + actual service reachability
     clf_state = await read_state("classifier")
     clf_stats = await read_stats("classifier")
+    # Check if the classifier API is actually reachable (direct health check)
+    classifier_reachable = False
+    try:
+        from config import settings
+        if settings.classifier_url:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                resp = await client.get(f"{settings.classifier_url.rstrip('/')}/health")
+                classifier_reachable = resp.status_code == 200
+    except Exception:
+        pass
     classifier_worker_status = WorkerStatus(
         running=clf_state.get("running", False),
         paused=clf_state.get("paused", False),
+        stopped_due_to_errors=clf_state.get("stopped_due_to_errors", False),
+        service_available=classifier_reachable,
         stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
               {"processed": 0, "errors": 0},
+    )
+
+    # Dedup Worker status from DB
+    dedup_state = await read_state("dedup")
+    dedup_stats = await read_stats("dedup")
+    dedup_worker_status = WorkerStatus(
+        running=dedup_state.get("running", False),
+        paused=dedup_state.get("paused", False),
+        stopped_due_to_errors=dedup_state.get("stopped_due_to_errors", False),
+        stats={k: v for k, v in dedup_stats.items() if k != "synced_at"} or
+              {"phase1_checked": 0, "phase2_checked": 0, "duplicates_found": 0, "errors": 0},
     )
 
     # Processing queue stats — combine into fewer queries
@@ -151,7 +179,7 @@ async def get_system_stats(
             ).label("awaiting_classifier"),
             func.count(Item.id).filter(
                 Item.similar_to_id.is_(None),
-                json_extract_path(Item.metadata_, "duplicate_checked").is_(None),
+                json_extract_path(Item.metadata_, "dedup_phase2").is_(None),
             ).label("awaiting_dedup"),
             func.count(Item.id).filter(
                 json_extract_path(Item.metadata_, "vectordb_indexed").is_(None)
@@ -202,6 +230,7 @@ async def get_system_stats(
         scheduler=scheduler_status,
         llm_worker=llm_worker_status,
         classifier_worker=classifier_worker_status,
+        dedup_worker=dedup_worker_status,
         processing_queue=processing_queue,
         items=item_stats,
         timestamp=datetime.utcnow().isoformat(),

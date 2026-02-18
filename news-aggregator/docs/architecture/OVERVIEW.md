@@ -23,7 +23,7 @@ The Liga Hessen News Aggregator is a multi-component system that:
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
 │  │   API    │  │ Services │  │Connectors│  │   Background     │ │
 │  │Endpoints │  │ Pipeline │  │  RSS/X/  │  │    Workers       │ │
-│  │          │  │ Processor│  │  etc.    │  │ LLM/Classifier   │ │
+│  │          │  │ Processor│  │  etc.    │  │LLM/Clf/GPU1 Pwr  │ │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
         │                │                          │
@@ -51,7 +51,9 @@ Business logic and processing:
 - `pipeline.py` - Item processing, deduplication, classification
 - `llm_worker.py` - Async LLM analysis worker
 - `classifier_worker.py` - ML classification worker
-- `article_extractor.py` - Full article content extraction
+- `article_extractor.py` - Full article content extraction (httpx+trafilatura → Wayback Machine → Playwright SPA fallback)
+- `browser_pool.py` - Shared Playwright instance for scrapers (singleton, max 4 concurrent)
+- `gpu1_power.py` - GPU1 Wake-on-LAN power management for LLM processing
 
 ### Connectors (`backend/connectors/`)
 Source-specific fetchers:
@@ -99,7 +101,7 @@ Vector database for embeddings:
 
 ## Background Workers
 
-Two async workers run continuously:
+Three async workers/managers run continuously:
 
 ### Classifier Worker
 - Processes new items through ML classifier
@@ -110,6 +112,12 @@ Two async workers run continuously:
 - Processes items needing detailed analysis
 - Generates summaries and reasoning
 - Runs after classifier for deeper understanding
+
+### GPU1 Power Manager
+- Manages gpu1 power state via Wake-on-LAN
+- Wakes gpu1 during active hours (Mon-Fri 7:00-16:00) when LLM work is pending
+- Auto-shuts down gpu1 after idle timeout (default 5 min)
+- Items queue up outside active hours and are processed when gpu1 next wakes
 
 ## Request Flow
 

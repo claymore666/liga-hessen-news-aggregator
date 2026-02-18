@@ -612,6 +612,7 @@ class DuplicateStore:
         content: str,
         threshold: float = 0.75,
         n_results: int = 5,
+        fetched_after: str | None = None,
     ) -> list[dict]:
         """
         Find semantically similar items that may be duplicates.
@@ -623,6 +624,7 @@ class DuplicateStore:
             content: Article content
             threshold: Similarity threshold (default 0.75)
             n_results: Max results to return
+            fetched_after: ISO timestamp - only match items fetched after this time
 
         Returns:
             List of duplicates with id, title, score, metadata
@@ -630,11 +632,20 @@ class DuplicateStore:
         text = f"{title} {content}"
         embedding = self.embedder.encode([text], show_progress_bar=False)[0]
 
-        results = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=n_results,
-            include=["metadatas", "documents", "distances"],
-        )
+        # Build ChromaDB where filter for time-bounded dedup
+        where_filter = None
+        if fetched_after:
+            where_filter = {"fetched_at": {"$gte": fetched_after}}
+
+        query_kwargs = {
+            "query_embeddings": [embedding],
+            "n_results": n_results,
+            "include": ["metadatas", "documents", "distances"],
+        }
+        if where_filter:
+            query_kwargs["where"] = where_filter
+
+        results = self.collection.query(**query_kwargs)
 
         items = []
         for i in range(len(results["ids"][0])):

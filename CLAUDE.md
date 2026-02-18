@@ -12,6 +12,8 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen that fetch
 | **Operations** | [docs/operations/](news-aggregator/docs/operations/) | Troubleshooting and monitoring |
 | **Classifier** | [relevance-tuner/CLAUDE.md](relevance-tuner/CLAUDE.md) | ML classifier training and API |
 | **Analytics** | [docs/architecture/PROCESSING_ANALYTICS.md](news-aggregator/docs/architecture/PROCESSING_ANALYTICS.md) | Processing logs and model comparison |
+| **Browser Pool** | [docs/services/BROWSER_POOL.md](news-aggregator/docs/services/BROWSER_POOL.md) | Shared Playwright instance management |
+| **Article Extractor** | [docs/services/ARTICLE_EXTRACTOR.md](news-aggregator/docs/services/ARTICLE_EXTRACTOR.md) | Content extraction with SPA fallback |
 
 ## Environments
 
@@ -33,12 +35,50 @@ cd news-aggregator
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+**Note:** The classifier API is NOT in docker-compose.prod.yml (no GPU on docker-ai).
+To update the classifier, rebuild it on gpu1 via `docker compose up -d --build classifier`.
+
 ### QA/Development (gpu1)
 
 ```bash
 cd /home/kamienc/claude.ai/ligahessen/news-aggregator
 git pull origin dev
 docker compose up -d --build
+```
+
+This includes the classifier API (requires NVIDIA GPU). To rebuild only the classifier:
+
+```bash
+docker compose up -d --build classifier
+```
+
+### Local Deployment (gpu1 only)
+
+Two components ensure ChromaDB data is flushed before gpu1 powers off. Neither is part of Docker deployment.
+
+**1. Shutdown flush service** (`scripts/classifier-flush.service`)
+Gracefully stops the classifier on shutdown/reboot/halt:
+
+```bash
+# Install/update
+sudo cp scripts/classifier-flush.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now classifier-flush.service
+
+# Verify after shutdown
+journalctl -u classifier-flush.service
+```
+
+**2. Sleep handler** (`scripts/docker-sleep-handler`)
+Stops/starts the classifier around suspend/resume:
+
+```bash
+# Install/update
+sudo cp scripts/docker-sleep-handler /usr/lib/systemd/system-sleep/
+sudo chmod 755 /usr/lib/systemd/system-sleep/docker-sleep-handler
+
+# Verify after sleep/wake
+journalctl -t docker-sleep-handler --since "1 hour ago"
 ```
 
 ### Quick Commands
@@ -77,7 +117,7 @@ ligahessen/
 
 ## Notes
 
-- **Old Dashboard hidden**: `DashboardView.vue` still exists but is not linked in the sidebar. `/dashboard` redirects to `/uebersicht`. The new Übersicht page replaces it with a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list. The old Dashboard can be deleted if no longer needed.
+- **Übersicht is the main dashboard**: `/dashboard` redirects to `/uebersicht`. The Übersicht page provides a central time period switch, stats cards, priority bar, topic word cloud, source donut chart, and recent items list.
 
 ## Key Components
 
@@ -86,6 +126,9 @@ ligahessen/
 - **Pipeline** (`services/pipeline.py`) - Item processing and deduplication
 - **LLM Worker** (`services/llm_worker.py`) - Async LLM analysis
 - **Classifier Worker** (`services/classifier_worker.py`) - ML classification
+- **Article Extractor** (`services/article_extractor.py`) - Content extraction (httpx+trafilatura → Wayback → Playwright SPA fallback)
+- **Browser Pool** (`services/browser_pool.py`) - Shared Playwright instance (singleton, max 4 concurrent)
+- **GPU1 Power Manager** (`services/gpu1_power.py`) - Wake-on-LAN for LLM processing
 
 ### Data Flow
 1. **Fetch**: Scheduler triggers connectors to fetch from sources

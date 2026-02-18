@@ -4,6 +4,7 @@ import type { Item } from '@/types'
 import PriorityBadge from '@/components/PriorityBadge.vue'
 import SourceIcon from '@/components/SourceIcon.vue'
 import { CheckCircleIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/vue/24/solid'
+import { ClockIcon } from '@heroicons/vue/24/outline'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 
@@ -103,6 +104,13 @@ const formatTime = (date: string | null) => {
           >
             +{{ item.duplicates.length }}
           </span>
+
+          <!-- Dedup pending indicator -->
+          <ClockIcon
+            v-if="item.dedup_pending && !item.duplicates?.length"
+            class="h-3 w-3 text-gray-300 flex-shrink-0 mx-0.5"
+            title="Dublettenprüfung ausstehend"
+          />
 
           <!-- Metadata -->
           <span class="flex items-center gap-1.5 text-[10px] text-gray-600 flex-shrink-0 ml-2">

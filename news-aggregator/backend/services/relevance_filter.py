@@ -4,7 +4,6 @@ Calls the GPU-accelerated classifier service on gpu1.
 """
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -35,7 +34,7 @@ class RelevanceFilter:
         self.timeout = timeout
         # Singleton HTTP client with connection pooling
         # limits: max 100 connections, 20 per host (prevents exhaustion)
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the singleton HTTP client."""
@@ -84,7 +83,7 @@ class RelevanceFilter:
         title: str,
         content: str,
         source: str = "",
-    ) -> tuple[bool, Optional[dict]]:
+    ) -> tuple[bool, dict | None]:
         """
         Determine if an article should be processed by LLM.
 
@@ -121,7 +120,7 @@ class RelevanceFilter:
             logger.debug(f"Classifier not available: {e}")
             return False
 
-    async def get_health(self) -> Optional[dict]:
+    async def get_health(self) -> dict | None:
         """Get classifier health info."""
         try:
             client = await self._get_client()
@@ -132,7 +131,7 @@ class RelevanceFilter:
             logger.debug(f"Failed to get classifier health: {e}")
             return None
 
-    async def get_storage_stats(self) -> Optional[dict]:
+    async def get_storage_stats(self) -> dict | None:
         """Get storage statistics from classifier API."""
         try:
             client = await self._get_client()
@@ -148,7 +147,7 @@ class RelevanceFilter:
         item_id: str,
         title: str,
         content: str,
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> bool:
         """
         Index an item in the vector store for semantic search.
@@ -208,7 +207,7 @@ class RelevanceFilter:
         self,
         query: str,
         n_results: int = 10,
-        source: Optional[str] = None,
+        source: str | None = None,
     ) -> list[dict]:
         """
         Semantic search for items matching a query.
@@ -277,6 +276,7 @@ class RelevanceFilter:
         title: str,
         content: str,
         threshold: float = 0.75,
+        fetched_after: str | None = None,
     ) -> list[dict]:
         """
         Find semantically similar items that may be duplicates.
@@ -289,19 +289,23 @@ class RelevanceFilter:
             title: Item title
             content: Item content
             threshold: Similarity threshold (default 0.75)
+            fetched_after: ISO timestamp - only match items fetched after this time
 
         Returns:
             List of duplicate candidates with id, title, score, metadata
         """
         try:
             client = await self._get_client()
+            payload = {
+                "title": title,
+                "content": content,
+                "threshold": threshold,
+            }
+            if fetched_after:
+                payload["fetched_after"] = fetched_after
             response = await client.post(
                 f"{self.base_url}/find-duplicates",
-                json={
-                    "title": title,
-                    "content": content,
-                    "threshold": threshold,
-                },
+                json=payload,
             )
             response.raise_for_status()
             result = response.json()
@@ -368,7 +372,7 @@ class RelevanceFilter:
             return 0, 0
 
 
-async def create_relevance_filter() -> Optional[RelevanceFilter]:
+async def create_relevance_filter() -> RelevanceFilter | None:
     """
     Create a RelevanceFilter instance from settings.
 

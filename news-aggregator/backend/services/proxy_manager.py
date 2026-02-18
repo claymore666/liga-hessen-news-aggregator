@@ -50,7 +50,7 @@ class ProxyManager:
         "https://vakhov.github.io/fresh-proxy-list/http.txt",
         "https://vakhov.github.io/fresh-proxy-list/https.txt",
         "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
-        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
     ]
 
     # Validation settings
@@ -62,8 +62,9 @@ class ProxyManager:
         "http://ident.me",
     ]
     MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds
-    BATCH_SIZE = 100  # Test this many proxies per batch
-    REVALIDATION_INTERVAL = 300  # Seconds between health checks (5 min)
+    BATCH_SIZE = 25  # Test this many proxies per batch (keep low to avoid CPU spikes)
+    BATCH_COOLDOWN = 5  # Seconds between batches to avoid hammering
+    REVALIDATION_INTERVAL = 600  # Seconds between health checks (10 min)
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
     KNOWN_PROXIES_TO_TRY_FIRST = 20  # Try this many from known list first
 
@@ -376,15 +377,23 @@ class ProxyManager:
 
     async def _fill_pools(self):
         """Fill both pools until they meet their minimums."""
-        max_batches = 30  # Limit search to avoid infinite loops
+        max_batches = 10  # Limit search to avoid excessive CPU usage
         batches_tried = 0
+        empty_batches = 0
 
         while not self._pools_filled() and batches_tried < max_batches:
             http_found, https_found = await self._search_batch()
             batches_tried += 1
 
             if http_found == 0 and https_found == 0:
-                await asyncio.sleep(1)
+                empty_batches += 1
+                # Give up early if we keep finding nothing
+                if empty_batches >= 3:
+                    logger.info("3 consecutive empty batches, stopping search")
+                    break
+
+            # Cooldown between batches to avoid CPU spikes
+            await asyncio.sleep(self.BATCH_COOLDOWN)
 
             logger.info(f"Pools: HTTP {len(self.http_proxies)}/{self.min_http_proxies}, "
                        f"HTTPS {len(self.https_proxies)}/{self.min_https_proxies}")
@@ -457,6 +466,7 @@ class ProxyManager:
             self._initial_fill_complete = True
             logger.info(f"✅ Initial fill complete: HTTP={len(self.http_proxies)}, "
                        f"HTTPS={len(self.https_proxies)}")
+            await self._sync_status_to_db()
 
             # Phase 2: Maintenance mode
             while self._running:
@@ -466,6 +476,8 @@ class ProxyManager:
                 if not self._pools_filled():
                     logger.info("Pool below minimum, refilling...")
                     await self._fill_pools()
+
+                await self._sync_status_to_db()
 
         except asyncio.CancelledError:
             logger.info("Proxy manager stopped")
@@ -570,6 +582,32 @@ class ProxyManager:
     def working_proxies(self) -> list[dict]:
         """Combined list of all working proxies (for backward compatibility)."""
         return self.http_proxies + self.https_proxies
+
+    async def _sync_status_to_db(self) -> None:
+        """Write proxy pool status to Redis (fast) with DB fallback."""
+        status = {
+            "http_count": len(self.http_proxies),
+            "https_count": len(self.https_proxies),
+            "http_min_required": self.min_http_proxies,
+            "https_min_required": self.min_https_proxies,
+            "background_running": self._running,
+            "initial_fill_complete": self._initial_fill_complete,
+        }
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                await r.set("proxy:status", json.dumps(status))
+                return
+        except Exception as e:
+            logger.debug(f"Redis proxy status write failed: {e}")
+
+        # DB fallback
+        try:
+            from services.worker_status import write_stats
+            await write_stats("proxy_manager", status)
+        except Exception as e:
+            logger.debug(f"Failed to sync proxy status to DB: {e}")
 
     def get_status(self) -> dict:
         """Get current proxy pool status."""

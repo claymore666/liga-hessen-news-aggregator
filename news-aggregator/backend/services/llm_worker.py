@@ -11,14 +11,12 @@ Fresh items always take priority over backlog processing.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
-from sqlalchemy import and_, or_
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +55,9 @@ class LLMWorker:
         # Worker state
         self._running = False
         self._paused = False
-        self._task: Optional[asyncio.Task] = None
-        self._poll_task: Optional[asyncio.Task] = None
-        self._sync_task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
+        self._sync_task: asyncio.Task | None = None
         self._processor = None
 
         # Statistics (protected by _stats_lock for thread-safe updates)
@@ -156,6 +154,14 @@ class LLMWorker:
             "stats": stats_copy,
         }
 
+    async def _on_success(self):
+        """Clear degraded state on successful processing."""
+        if self._stopped_due_to_errors:
+            self._stopped_due_to_errors = False
+            logger.info("LLM worker recovered from degraded state")
+            from services.worker_status import write_state
+            await write_state("llm", running=True, stopped_due_to_errors=False)
+
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""
         from services.gpu1_power import get_power_manager
@@ -164,6 +170,15 @@ class LLMWorker:
         # Always check if gpu1 is available (even if processor is cached)
         power_mgr = get_power_manager()
         if power_mgr is not None:
+            # Outside active hours: don't use gpu1 at all (free VRAM for local use)
+            if not power_mgr.is_within_active_hours():
+                logger.debug(
+                    "Outside active hours, skipping LLM processing "
+                    "(gpu1 VRAM reserved for local use)"
+                )
+                self._processor = None
+                return None
+
             if await power_mgr.is_available():
                 logger.debug("gpu1 available, proceeding with LLM processing")
             else:
@@ -198,14 +213,16 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
+                    await self._on_success()
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
+                    await self._on_success()
                     self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
                     continue
@@ -226,19 +243,17 @@ class LLMWorker:
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.critical(
-                        f"LLM worker exceeded {max_consecutive_errors} consecutive errors, stopping. "
-                        "Manual restart required after fixing the issue."
+                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                    logger.warning(
+                        f"LLM worker in degraded state after {consecutive_errors} errors. "
+                        "Will keep retrying with backoff."
                     )
                     self._stopped_due_to_errors = True
-                    self._running = False
                     from services.worker_status import write_state
-                    await write_state("llm", running=False, stopped_due_to_errors=True)
-                    break
+                    await write_state("llm", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 5s, 10s, 20s, 40s, ... up to 60s
-                backoff = min(60.0, 5.0 * (2 ** (consecutive_errors - 1)))
+                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
                 logger.info(f"Backing off for {backoff:.0f}s before retry")
                 await asyncio.sleep(backoff)
 
@@ -562,7 +577,10 @@ class LLMWorker:
                 if analysis.get("relevant") is False:
                     llm_priority = None
 
-                if llm_priority == "high":
+                if llm_priority == "critical":
+                    new_priority = Priority.HIGH
+                    new_score = max(item_data["priority_score"], 95)
+                elif llm_priority == "high":
                     new_priority = Priority.HIGH
                     new_score = max(item_data["priority_score"], 90)
                 elif llm_priority == "medium":
@@ -711,10 +729,10 @@ class LLMWorker:
 
 
 # Global worker instance
-_worker: Optional[LLMWorker] = None
+_worker: LLMWorker | None = None
 
 
-def get_worker() -> Optional[LLMWorker]:
+def get_worker() -> LLMWorker | None:
     """Get the global worker instance."""
     return _worker
 

@@ -14,7 +14,7 @@ from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, unquote
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Channel, Item, Priority, ProcessingStepType, Rule, RuleType
+from models import Channel, Item, Priority, Rule, RuleType
 from config import settings
 
 if TYPE_CHECKING:
@@ -283,11 +283,16 @@ class Pipeline:
                     # Strip boilerplate before embedding to avoid false positive similarity
                     clean_title = _strip_boilerplate(normalized.title)
                     clean_content = _strip_boilerplate(normalized.content)
+                    # Limit to recent items (same window as dedup worker)
+                    import os
+                    check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
+                    fetched_after = (datetime.now(UTC) - timedelta(days=check_days)).isoformat() if check_days > 0 else None
                     # Use lower threshold to catch "maybe duplicates" for LLM review
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=clean_title,
                         content=clean_content,
                         threshold=DUPLICATE_THRESHOLD_MAYBE,  # 0.60 - catches edge cases
+                        fetched_after=fetched_after,
                     )
                     if duplicates:
                         best_match = duplicates[0]
@@ -295,7 +300,6 @@ class Pipeline:
                         match_id = int(best_match["id"])
 
                         # Verify the candidate item still exists (vector index may be out of sync)
-                        from sqlalchemy import select
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
                         try:
                             existing = await self.db.scalar(

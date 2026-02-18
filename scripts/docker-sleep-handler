@@ -1,0 +1,37 @@
+#!/bin/bash
+# /usr/lib/systemd/system-sleep/docker-sleep-handler
+#
+# Gracefully stop/start the classifier container around system sleep
+# to ensure ChromaDB data is properly flushed to disk.
+
+LOG_TAG="docker-sleep-handler"
+
+# Only the classifier needs graceful shutdown (ChromaDB persistence)
+# Ollama is stateless - models reload from disk on restart
+CONTAINER="liga-classifier"
+TIMEOUT=30
+
+log() {
+    logger -t "$LOG_TAG" "$1"
+}
+
+case "$1" in
+    pre)
+        if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+            log "Stopping $CONTAINER before sleep..."
+            docker stop "$CONTAINER" --time "$TIMEOUT" 2>/dev/null
+            log "$CONTAINER stopped"
+        fi
+        ;;
+    post)
+        if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+            if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+                log "Starting $CONTAINER after wake..."
+                docker start "$CONTAINER" 2>/dev/null
+                log "$CONTAINER started"
+            fi
+        fi
+        ;;
+esac
+
+exit 0

@@ -43,7 +43,7 @@ CHANNEL_FETCH_TIMEOUTS = {
     "linkedin": 180,  # 3 min - browser-based
     "html": 120,  # 2 min - may need JS rendering
     "pdf": 120,  # 2 min - large file downloads
-    "rss": 60,  # 1 min - lightweight
+    "rss": 90,  # 1.5 min - some feeds (e.g. RKI) are slow
     "bluesky": 60,
     "mastodon": 60,
     "telegram": 60,

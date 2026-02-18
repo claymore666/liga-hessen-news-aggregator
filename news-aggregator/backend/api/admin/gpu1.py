@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -15,13 +14,17 @@ class GPU1Status(BaseModel):
     """GPU1 power management status."""
 
     enabled: bool
-    available: bool
-    was_sleeping: bool
-    wake_time: Optional[str] = None
-    last_activity: Optional[float] = None
-    idle_time: Optional[float] = None
+    available: bool  # Host reachable (SSH port)
+    ollama_available: bool  # Ollama API reachable
+    was_sleeping: bool | None = None  # None when unavailable
+    wake_time: str | None = None
+    last_activity: float | None = None
+    idle_time: float | None = None
     auto_shutdown: bool
     idle_timeout: int
+    wake_interval: int
+    last_wol_time: float | None = None
+    seconds_until_next_wake: int | None = None
     pending_shutdown: bool
     active_hours_start: int
     active_hours_end: int
@@ -50,12 +53,16 @@ async def get_gpu1_status() -> GPU1Status:
         return GPU1Status(
             enabled=False,
             available=False,
+            ollama_available=False,
             was_sleeping=False,
             wake_time=None,
             last_activity=None,
             idle_time=None,
             auto_shutdown=False,
             idle_timeout=0,
+            wake_interval=0,
+            last_wol_time=None,
+            seconds_until_next_wake=None,
             pending_shutdown=False,
             active_hours_start=0,
             active_hours_end=0,
@@ -101,13 +108,17 @@ async def get_gpu1_status() -> GPU1Status:
             logger.debug(f"Failed to get logged-in users: {e}")
         return []
 
-    # Run availability check and SSH user check concurrently
-    available, logged_in_users = await asyncio.gather(
+    # Run all checks concurrently
+    host_reachable, ollama_available, logged_in_users = await asyncio.gather(
+        power_mgr.is_host_reachable(),
         power_mgr.is_available(),
         check_logged_in_users(),
     )
 
-    # If gpu1 is not available, discard SSH results (may be stale)
+    # Host is available if reachable OR Ollama responds (Ollama implies host is up)
+    available = host_reachable or ollama_available
+
+    # If gpu1 host is not reachable, discard SSH results (may be stale)
     if not available:
         logged_in_users = []
 
@@ -121,15 +132,24 @@ async def get_gpu1_status() -> GPU1Status:
         and len(logged_in_users) == 0
     )
 
+    # Get wake interval status
+    last_wol_time = power_mgr._last_wol_time
+    seconds_until = power_mgr._seconds_until_next_wake(last_wol_time)
+
     return GPU1Status(
         enabled=True,
         available=available,
-        was_sleeping=power_mgr._was_sleeping,
-        wake_time=power_mgr._wake_time.isoformat() if power_mgr._wake_time else None,
-        last_activity=power_mgr._last_activity,
-        idle_time=idle_time if idle_time != float("inf") else None,
+        ollama_available=ollama_available,
+        # Only show wake state when gpu1 is available; otherwise it's meaningless
+        was_sleeping=power_mgr._was_sleeping if available else None,
+        wake_time=power_mgr._wake_time.isoformat() if available and power_mgr._wake_time else None,
+        last_activity=power_mgr._last_activity if available else None,
+        idle_time=idle_time if available and idle_time != float("inf") else None,
         auto_shutdown=power_mgr.auto_shutdown,
         idle_timeout=power_mgr.idle_timeout,
+        wake_interval=power_mgr.wake_interval,
+        last_wol_time=last_wol_time,
+        seconds_until_next_wake=seconds_until if seconds_until > 0 else None,
         pending_shutdown=pending_shutdown,
         active_hours_start=power_mgr.active_hours_start,
         active_hours_end=power_mgr.active_hours_end,

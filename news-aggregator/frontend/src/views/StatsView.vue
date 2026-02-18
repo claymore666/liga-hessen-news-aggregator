@@ -305,7 +305,7 @@ onUnmounted(() => {
     <!-- Status Tab -->
     <template v-else-if="activeTab === 'status'">
       <!-- Service Availability Cards -->
-      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
+      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <!-- Database -->
         <div class="card">
           <div class="flex items-center gap-3">
@@ -320,6 +320,26 @@ onUnmounted(() => {
                 />
                 <span :class="health?.database_ok ? 'text-green-600' : 'text-red-600'">
                   {{ health?.database_ok ? 'Verbunden' : 'Fehler' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Redis -->
+        <div class="card">
+          <div class="flex items-center gap-3">
+            <ServerIcon class="h-8 w-8 text-gray-400" />
+            <div>
+              <div class="text-sm font-medium text-gray-500">Redis</div>
+              <div class="flex items-center gap-1">
+                <component
+                  :is="health?.redis_available ? CheckCircleIcon : XCircleIcon"
+                  class="h-5 w-5"
+                  :class="health?.redis_available ? 'text-green-500' : 'text-red-500'"
+                />
+                <span :class="health?.redis_available ? 'text-green-600' : 'text-red-600'">
+                  {{ health?.redis_available ? 'Verbunden' : 'Offline' }}
                 </span>
               </div>
             </div>
@@ -361,6 +381,10 @@ onUnmounted(() => {
                 <span :class="gpu1Status?.available ? 'text-green-600' : 'text-red-600'">
                   {{ gpu1Status?.available ? 'Läuft' : 'Aus' }}
                 </span>
+              </div>
+              <div v-if="gpu1Status?.available && !gpu1Status?.ollama_available" class="flex items-center gap-1 mt-0.5">
+                <ExclamationTriangleIcon class="h-4 w-4 text-yellow-500" />
+                <span class="text-xs text-yellow-600">Ollama gestoppt</span>
               </div>
             </div>
           </div>
@@ -434,13 +458,22 @@ onUnmounted(() => {
             <BoltIcon class="mr-1 inline h-5 w-5" />
             GPU1 Power Management
           </h2>
-          <span
-            class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium"
-            :class="gpu1Status.available ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'"
-          >
-            <component :is="gpu1Status.available ? SunIcon : MoonIcon" class="h-4 w-4" />
-            {{ gpu1Status.available ? 'Wach' : 'Schläft' }}
-          </span>
+          <div class="flex items-center gap-2">
+            <span
+              v-if="gpu1Status.available && !gpu1Status.ollama_available"
+              class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-700"
+            >
+              <ExclamationTriangleIcon class="h-4 w-4" />
+              Ollama aus
+            </span>
+            <span
+              class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium"
+              :class="gpu1Status.available ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'"
+            >
+              <component :is="gpu1Status.available ? SunIcon : MoonIcon" class="h-4 w-4" />
+              {{ gpu1Status.available ? 'Wach' : 'Schläft' }}
+            </span>
+          </div>
         </div>
 
         <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -449,12 +482,18 @@ onUnmounted(() => {
             <div class="text-xs font-medium text-gray-500">Wake-on-LAN</div>
             <div class="mt-1 flex items-center gap-1">
               <component
-                :is="gpu1Status.was_sleeping ? CheckCircleIcon : XCircleIcon"
+                :is="gpu1Status.was_sleeping === true ? CheckCircleIcon : XCircleIcon"
                 class="h-4 w-4"
-                :class="gpu1Status.was_sleeping ? 'text-blue-500' : 'text-gray-400'"
+                :class="gpu1Status.was_sleeping === true ? 'text-blue-500' : 'text-gray-400'"
               />
               <span class="text-sm">
-                {{ gpu1Status.was_sleeping ? 'Von uns geweckt' : 'War bereits wach' }}
+                {{
+                  gpu1Status.was_sleeping === null
+                    ? '-'
+                    : gpu1Status.was_sleeping
+                      ? 'Von uns geweckt'
+                      : 'War bereits wach'
+                }}
               </span>
             </div>
             <div v-if="gpu1Status.wake_time" class="mt-1 text-xs text-gray-400">
@@ -516,7 +555,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Worker Status Cards -->
-      <div v-if="stats" class="grid gap-4 md:grid-cols-3">
+      <div v-if="stats" class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <!-- Scheduler -->
         <div class="card">
           <div class="flex items-center justify-between">
@@ -639,23 +678,24 @@ onUnmounted(() => {
             <span
               class="flex items-center gap-1 text-sm"
               :class="{
-                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused,
+                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available === true,
                 'text-yellow-600': stats.classifier_worker.paused,
-                'text-red-600': !stats.classifier_worker.running
+                'text-red-600': !stats.classifier_worker.running || stats.classifier_worker.service_available === false
               }"
             >
               <component
-                :is="stats.classifier_worker.running ? (stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon) : XCircleIcon"
+                :is="!stats.classifier_worker.running || stats.classifier_worker.service_available === false ? XCircleIcon : stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon"
                 class="h-4 w-4"
               />
-              {{ !stats.classifier_worker.running ? 'Gestoppt' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
+              {{ !stats.classifier_worker.running ? 'Worker gestoppt' : stats.classifier_worker.service_available === false ? 'Classifier nicht erreichbar' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
             </span>
           </div>
 
           <div class="mt-2 space-y-1 text-sm text-gray-500">
-            <div>Klassifizierung: {{ stats.processing_queue.awaiting_classifier }}</div>
-            <div>Duplikat-Check: {{ stats.processing_queue.awaiting_dedup }}</div>
-            <div>VectorDB-Index: {{ stats.processing_queue.awaiting_vectordb }}</div>
+            <div>Ausstehend: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div v-if="stats.classifier_worker.service_available !== null">
+              API: <span :class="stats.classifier_worker.service_available ? 'text-green-600' : 'text-red-600'">{{ stats.classifier_worker.service_available ? 'Erreichbar' : 'Nicht erreichbar' }}</span>
+            </div>
           </div>
 
           <div class="mt-4 flex gap-2">
@@ -695,6 +735,76 @@ onUnmounted(() => {
                 class="btn btn-sm btn-secondary"
                 :disabled="actionLoading === 'clf-stop'"
                 @click="controlAction(adminApi.stopClassifierWorker, 'clf-stop')"
+              >
+                <StopIcon class="h-4 w-4" />
+                Stop
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <!-- Dedup Worker -->
+        <div class="card">
+          <div class="flex items-center justify-between">
+            <h2 class="font-medium text-gray-900">Dedup</h2>
+            <span
+              class="flex items-center gap-1 text-sm"
+              :class="{
+                'text-green-600': stats.dedup_worker.running && !stats.dedup_worker.paused,
+                'text-yellow-600': stats.dedup_worker.paused,
+                'text-red-600': !stats.dedup_worker.running
+              }"
+            >
+              <component
+                :is="stats.dedup_worker.running ? (stats.dedup_worker.paused ? PauseIcon : CheckCircleIcon) : XCircleIcon"
+                class="h-4 w-4"
+              />
+              {{ !stats.dedup_worker.running ? 'Gestoppt' : stats.dedup_worker.paused ? 'Pausiert' : 'Läuft' }}
+            </span>
+          </div>
+
+          <div class="mt-2 space-y-1 text-sm text-gray-500">
+            <div>Ausstehend: {{ stats.processing_queue.awaiting_dedup }}</div>
+            <div>VectorDB: {{ stats.processing_queue.awaiting_vectordb }}</div>
+          </div>
+
+          <div class="mt-4 flex gap-2">
+            <button
+              v-if="!stats.dedup_worker.running"
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="actionLoading === 'dedup-start'"
+              @click="controlAction(adminApi.startDedupWorker, 'dedup-start')"
+            >
+              <PlayIcon class="h-4 w-4" />
+              Start
+            </button>
+            <template v-else>
+              <button
+                v-if="!stats.dedup_worker.paused"
+                type="button"
+                class="btn btn-sm btn-secondary"
+                :disabled="actionLoading === 'dedup-pause'"
+                @click="controlAction(adminApi.pauseDedupWorker, 'dedup-pause')"
+              >
+                <PauseIcon class="h-4 w-4" />
+                Pause
+              </button>
+              <button
+                v-else
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="actionLoading === 'dedup-resume'"
+                @click="controlAction(adminApi.resumeDedupWorker, 'dedup-resume')"
+              >
+                <PlayIcon class="h-4 w-4" />
+                Fortsetzen
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-secondary"
+                :disabled="actionLoading === 'dedup-stop'"
+                @click="controlAction(adminApi.stopDedupWorker, 'dedup-stop')"
               >
                 <StopIcon class="h-4 w-4" />
                 Stop

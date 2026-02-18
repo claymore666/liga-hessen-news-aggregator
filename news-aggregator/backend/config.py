@@ -86,6 +86,9 @@ class Settings(BaseSettings):
 
         return {"type": "unknown"}
 
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
     # LLM - General
     llm_enabled: bool = True  # Set to False to disable all LLM processing
 
@@ -115,7 +118,8 @@ class Settings(BaseSettings):
     gpu1_ssh_user: str = "ligahessen"  # SSH user for shutdown (dedicated user)
     gpu1_ssh_key_path: str = "/app/ssh/id_ed25519"  # SSH key path in container
     gpu1_auto_shutdown: bool = True  # Shutdown after idle if we woke it
-    gpu1_idle_timeout: int = 300  # Seconds idle before auto-shutdown (5 min)
+    gpu1_idle_timeout: int = 60  # Seconds idle before auto-shutdown (1 min)
+    gpu1_wake_interval: int = 3600  # Minimum seconds between WoL wakes (1 hour)
     gpu1_wake_timeout: int = 120  # Max seconds to wait for Ollama after WoL
     gpu1_active_hours_start: int = 7  # Hour (0-23) when gpu1 usage allowed (default 7 AM)
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)
@@ -129,13 +133,17 @@ class Settings(BaseSettings):
     # Workers
     llm_worker_enabled: bool = True  # Set to False to disable LLM worker on startup
     classifier_worker_enabled: bool = True  # Set to False to disable classifier on startup
+    dedup_worker_enabled: bool = True  # Set to False to disable dedup worker on startup
     worker_status_poll_interval: int = 10  # Seconds between DB status sync/command polls
+
+    # Browser Pool
+    browser_pool_max: int = 2  # Max concurrent Playwright browsers (match CPU cores)
 
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
     proxy_pool_max: int = 25  # Maximum working proxies (buffer)
     proxy_known_max: int = 100  # Maximum known good proxies to store
-    proxy_https_pool_min: int = 5  # Minimum HTTPS-capable proxies for X scraper
+    proxy_https_pool_min: int = 0  # HTTPS proxies optional; X scraper falls back to direct connection
 
     # API
     api_prefix: str = "/api"

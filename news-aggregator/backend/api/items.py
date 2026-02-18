@@ -41,10 +41,26 @@ def _build_item_response(item: Item) -> ItemResponse:
     # Create base response
     response = ItemResponse.model_validate(item)
     response.duplicates = duplicates
+
+    # Set dedup_pending: true if not yet fully dedup-checked (Phase 2 not done)
+    meta = item.metadata_ or {}
+    response.dedup_pending = (
+        item.similar_to_id is None
+        and not meta.get("dedup_phase2")
+    )
+
     return response
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _safe_priority(value: str) -> Priority:
+    """Coerce a raw priority string to a Priority enum, defaulting to NONE."""
+    try:
+        return Priority(value)
+    except (ValueError, KeyError):
+        return Priority.NONE
 
 
 def get_client_ip(request: Request) -> str | None:
@@ -307,11 +323,13 @@ async def get_items_by_topic(
     rows = result.fetchall()
 
     def _make_brief(row, offset=0) -> TopicItemBrief:
+        # Raw SQL returns priority as string; coerce unknown values to "none"
+        priority = _safe_priority(row[3 + offset])
         return TopicItemBrief(
             id=row[0 + offset],
             title=row[1 + offset],
             url=row[2 + offset],
-            priority=row[3 + offset],
+            priority=priority,
             published_at=row[4 + offset],
             summary=row[5 + offset],
             source_name=row[6 + offset],
@@ -392,7 +410,7 @@ async def get_items_by_topic(
                 id=row[1],
                 title=row[2],
                 url=row[3],
-                priority=row[4],
+                priority=_safe_priority(row[4]),
                 source=source_brief,
                 published_at=row[6],
             ))
@@ -1055,6 +1073,9 @@ async def refetch_item(
 
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if not item.channel:
+        raise HTTPException(status_code=400, detail="Item has no channel, cannot re-fetch")
 
     connector_type = item.channel.connector_type
 

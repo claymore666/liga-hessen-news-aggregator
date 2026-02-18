@@ -183,6 +183,7 @@ export interface WorkerStatus {
   running: boolean
   paused: boolean
   stopped_due_to_errors?: boolean
+  service_available?: boolean | null
   stats: Record<string, unknown>
 }
 
@@ -215,6 +216,7 @@ export interface SystemStatsResponse {
   scheduler: SchedulerStatus
   llm_worker: WorkerStatus
   classifier_worker: WorkerStatus
+  dedup_worker: WorkerStatus
   processing_queue: ProcessingQueueStats
   items: ItemStats
   timestamp: string
@@ -269,13 +271,17 @@ export interface StorageStats {
 // GPU1 Status Types
 export interface GPU1Status {
   enabled: boolean
-  available: boolean
-  was_sleeping: boolean
+  available: boolean  // Host reachable (SSH port)
+  ollama_available: boolean  // Ollama API reachable
+  was_sleeping: boolean | null  // null when gpu1 unavailable
   wake_time: string | null
   last_activity: number | null
   idle_time: number | null
   auto_shutdown: boolean
   idle_timeout: number
+  wake_interval: number
+  last_wol_time: number | null
+  seconds_until_next_wake: number | null
   pending_shutdown: boolean
   active_hours_start: number
   active_hours_end: number
@@ -330,6 +336,7 @@ export interface HealthCheckResponse {
     database?: string
     path?: string
   }
+  redis_available: boolean
   items_count: number
   sources_count: number
 }
@@ -364,6 +371,12 @@ export const adminApi = {
   stopClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/stop'),
   pauseClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/pause'),
   resumeClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/resume'),
+
+  // Dedup Worker controls
+  startDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/start'),
+  stopDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/stop'),
+  pauseDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/pause'),
+  resumeDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/resume'),
 
   // Housekeeping / Data Management
   getHousekeeping: () => api.get<HousekeepingConfig>('/admin/housekeeping'),

@@ -6,9 +6,13 @@
 # Sends WoL packets to gpu1 for LLM processing during active hours.
 #
 # Environment files:
-#   - docker-compose.yml      -> gpu1 (QA) - workers disabled
-#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled
+#   - docker-compose.yml      -> gpu1 (QA) - workers disabled, includes classifier
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled, NO classifier
 #   - docker-compose.training.yml -> classifier training
+#
+# NOTE: The classifier API requires an NVIDIA GPU and runs on gpu1, not here.
+# Backend connects to it remotely via CLASSIFIER_URL=http://gpu1.fritz.box:8082.
+# To rebuild the classifier, use docker-compose.yml on gpu1.
 # =============================================================================
 
 # Network for LAN access (Wake-on-LAN)
@@ -26,10 +30,42 @@ networks:
           ip_range: 192.168.0.200/30  # Reserve 200-203 for containers
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: liga-news-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
   db:
     image: postgres:17-alpine
     container_name: liga-news-db
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=30
+      - -c
+      - random_page_cost=1.1
     environment:
       POSTGRES_DB: liga_news
       POSTGRES_USER: liga
@@ -52,7 +88,7 @@ services:
     restart: unless-stopped
     ulimits:
       core: 0  # Disable core dumps to prevent disk exhaustion
-    pids_limit: 1000  # Prevent runaway Chrome processes - 4 browsers × ~100 PIDs each + headroom
+    pids_limit: 500  # Prevent runaway Chrome processes - 2 browsers × ~100 PIDs each + headroom
     environment:
       - TZ=Europe/Berlin
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
@@ -75,7 +111,8 @@ services:
       - GPU1_SSH_USER=${GPU1_SSH_USER:-ligahessen}
       - GPU1_SSH_KEY_PATH=/app/ssh/id_ed25519
       - GPU1_AUTO_SHUTDOWN=${GPU1_AUTO_SHUTDOWN:-true}
-      - GPU1_IDLE_TIMEOUT=${GPU1_IDLE_TIMEOUT:-300}
+      - GPU1_IDLE_TIMEOUT=${GPU1_IDLE_TIMEOUT:-60}
+      - GPU1_WAKE_INTERVAL=${GPU1_WAKE_INTERVAL:-3600}
       - GPU1_WAKE_TIMEOUT=${GPU1_WAKE_TIMEOUT:-120}
       - GPU1_ACTIVE_HOURS_START=${GPU1_ACTIVE_HOURS_START:-7}
       - GPU1_ACTIVE_HOURS_END=${GPU1_ACTIVE_HOURS_END:-16}
@@ -85,6 +122,8 @@ services:
       - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}
       - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-true}
       - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
+      - REDIS_URL=redis://redis:6379/0
+      - BROWSER_POOL_MAX=${BROWSER_POOL_MAX:-2}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - backend-data:/app/data
@@ -94,6 +133,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -116,6 +162,11 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:80/"]
       interval: 30s

@@ -17,16 +17,27 @@ class ProxyResponse(BaseModel):
 class ProxyStatus(BaseModel):
     """Proxy pool status response."""
 
-    working_count: int
-    min_required: int
+    http_count: int
+    https_count: int
+    http_min_required: int
+    https_min_required: int
+    http_max: int
+    https_max: int
     max_latency_ms: int
-    proxies: list[dict]
+    http_proxies: list[dict]
+    https_proxies: list[dict]
     last_refresh: str | None
-    current_index: int
     background_running: bool
     initial_fill_complete: bool
     tested_count: int
     total_available: int
+    known_proxies_count: int
+    reserved_http: dict
+    reserved_https: dict
+    # Legacy fields
+    working_count: int
+    min_required: int
+    min_https_required: int
 
 
 class RefreshResponse(BaseModel):
