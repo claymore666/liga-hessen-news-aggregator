@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db
-from models import Item, ItemProcessingLog, ProcessingStepType
+from models import Channel, Item, ItemProcessingLog, ProcessingStepType
 
 router = APIRouter(prefix="/analytics")
 
@@ -250,20 +250,23 @@ async def get_low_confidence_items(
     result = await db.execute(query)
     rows = result.fetchall()
 
-    # Get source names for items
+    # Get source names (batch load to avoid N+1)
+    item_ids = [row.item_id for row in rows]
+    source_names: dict[int, str | None] = {}
+    if item_ids:
+        items_result = await db.execute(
+            select(Item)
+            .where(Item.id.in_(item_ids))
+            .options(selectinload(Item.channel).selectinload(Channel.source))
+        )
+        for item in items_result.scalars().all():
+            source_name = None
+            if item.channel and item.channel.source:
+                source_name = item.channel.source.name
+            source_names[item.id] = source_name
+
     items = []
     for row in rows:
-        # Fetch source name
-        item_result = await db.execute(
-            select(Item)
-            .where(Item.id == row.item_id)
-            .options(selectinload(Item.channel))
-        )
-        item = item_result.scalar_one_or_none()
-        source_name = None
-        if item and item.channel and hasattr(item.channel, "source"):
-            source_name = item.channel.source.name if item.channel.source else None
-
         items.append(
             LowConfidenceItem(
                 id=row.item_id,
@@ -273,7 +276,7 @@ async def get_low_confidence_items(
                 step_type=row.step_type,
                 ak_primary=row.ak_primary,
                 fetched_at=row.fetched_at,
-                source_name=source_name,
+                source_name=source_names.get(row.item_id),
             )
         )
 
@@ -351,19 +354,23 @@ async def get_classifier_llm_disagreements(
     result = await db.execute(query)
     rows = result.fetchall()
 
-    # Get source names
+    # Get source names (batch load to avoid N+1)
+    item_ids = [row.id for row in rows]
+    source_names: dict[int, str | None] = {}
+    if item_ids:
+        items_result = await db.execute(
+            select(Item)
+            .where(Item.id.in_(item_ids))
+            .options(selectinload(Item.channel).selectinload(Channel.source))
+        )
+        for item in items_result.scalars().all():
+            source_name = None
+            if item.channel and item.channel.source:
+                source_name = item.channel.source.name
+            source_names[item.id] = source_name
+
     items = []
     for row in rows:
-        item_result = await db.execute(
-            select(Item)
-            .where(Item.id == row.id)
-            .options(selectinload(Item.channel))
-        )
-        item = item_result.scalar_one_or_none()
-        source_name = None
-        if item and item.channel and hasattr(item.channel, "source"):
-            source_name = item.channel.source.name if item.channel.source else None
-
         items.append(
             DisagreementItem(
                 id=row.id,
@@ -375,7 +382,7 @@ async def get_classifier_llm_disagreements(
                 classifier_confidence=row.clf_confidence,
                 llm_relevance_score=row.llm_relevance,
                 fetched_at=row.fetched_at,
-                source_name=source_name,
+                source_name=source_names.get(row.id),
             )
         )
 
@@ -396,7 +403,7 @@ async def get_item_processing_history(
     result = await db.execute(
         select(Item)
         .where(Item.id == item_id)
-        .options(selectinload(Item.channel))
+        .options(selectinload(Item.channel).selectinload(Channel.source))
     )
     item = result.scalar_one_or_none()
 
@@ -413,8 +420,8 @@ async def get_item_processing_history(
     logs = logs_result.scalars().all()
 
     source_name = None
-    if item.channel and hasattr(item.channel, "source"):
-        source_name = item.channel.source.name if item.channel.source else None
+    if item.channel and item.channel.source:
+        source_name = item.channel.source.name
 
     priority_value = item.priority.value if hasattr(item.priority, "value") else str(item.priority)
 
