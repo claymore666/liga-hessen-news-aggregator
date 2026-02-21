@@ -117,11 +117,13 @@ API_URL=http://localhost:9000/api python scripts/export_training_data.py --dry-r
 
 | Item Type | Condition | Label |
 |-----------|-----------|-------|
-| Relevant | `priority` in [low, medium, high] | `relevant=true`, priority + AK labels |
-| Irrelevant | `priority = "none"` | `relevant=false` |
-| Skipped | Items with `needs_llm_processing=true` or no summary | Not exported |
+| Relevant | LLM-processed, `priority` in [low, medium, high] | `relevant=true`, priority + AK labels |
+| Irrelevant (classifier false positives) | LLM-processed, `priority = "none"`, has summary | `relevant=false` — these are items the classifier let through but the LLM rejected |
+| Skipped | Items with `needs_llm_processing=true` or no summary | Not exported (no reliable ground truth) |
 | Skipped | Items with `similar_to_id` (duplicates) | Not exported |
-| Tagged | Classifier-LLM disagreements | `provenance.is_disagreement=true`, forced into training split |
+| Tagged | Classifier-LLM disagreements (from processing logs) | `provenance.is_disagreement=true`, forced into training split |
+
+The majority of irrelevant training data (~3,700 items) consists of classifier false positives — items the classifier wrongly classified as relevant but the LLM correctly rejected. This is the most valuable training signal for improving the classifier.
 
 #### Training Data Format (JSONL)
 
@@ -148,7 +150,24 @@ Each line is a JSON object:
 }
 ```
 
-### Step 2: Train Classifier
+### Step 2: Evaluate Current Model (Baseline)
+
+Before training a new model, evaluate the **current deployed model** against the new test set. This gives a fair apples-to-apples comparison.
+
+```bash
+# Copy current model from classifier container
+docker cp liga-classifier:/app/models/embedding_classifier_nomic-v2.pkl \
+  models/embedding/embedding_classifier_nomic-v2.pkl.old
+
+# Evaluate old model on new test data
+EMBEDDING_BACKEND=nomic-v2 python scripts/evaluate_model.py \
+  --model models/embedding/embedding_classifier_nomic-v2.pkl.old \
+  --label baseline
+```
+
+This saves baseline metrics to `models/embedding/metrics.json` for later comparison.
+
+### Step 3: Train Classifier
 
 **CRITICAL**: Always set `EMBEDDING_BACKEND=nomic-v2`! The default backend (`ollama`) uses a completely different embedding model with incompatible vectors.
 
@@ -177,7 +196,7 @@ EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
 - Example predictions on test cases
 - Comparison with previous training runs
 
-### Step 3: Deploy to Classifier Container
+### Step 4: Deploy to Classifier Container
 
 The classifier API container on gpu1 volume-mounts `/app/models/`. Copy the new model in:
 
@@ -197,7 +216,7 @@ docker cp models/embedding/metrics.json \
 
 The classifier API hot-reloads the model on the next classification request — no container restart needed.
 
-### Step 4: Verify
+### Step 5: Verify
 
 ```bash
 # Health check (should show search_index_items count)
@@ -218,7 +237,7 @@ curl -s -X POST http://localhost:8082/classify \
 - Kita article → `relevant: true`, priority `high`, AK `AK5`
 - Bayern article → `relevant: false`
 
-### Step 5: Monitor in Production
+### Step 6: Monitor in Production
 
 After deployment, monitor the classifier's performance on real items:
 
