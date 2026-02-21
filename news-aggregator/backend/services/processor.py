@@ -26,12 +26,13 @@ ARBEITSKREISE:
 
 === KERNFRAGE FÜR RELEVANZ ===
 
-Frage dich: "Kann die Liga Hessen diesen Artikel für ihre Lobbyarbeit NUTZEN?"
-Ein Artikel ist NUR relevant, wenn er einen konkreten Bezug zur Arbeit der Liga hat:
-- Die Liga muss reagieren, Position beziehen oder sich verteidigen
-- Die Liga kann den Inhalt als Argument in ihrer Lobbyarbeit einsetzen
-- Der Inhalt betrifft Gesetze, Budgets oder Strukturen die Liga-Einrichtungen direkt betreffen
-- Studien/Daten die Liga-Positionen stützen oder widerlegen
+Stelle dir ZWEI Fragen:
+1. "Geht es um ein GESETZ, einen HAUSHALT, eine STRUKTURELLE KRISE oder eine POLITISCHE ENTSCHEIDUNG im Sozialbereich?"
+2. "Kann die Liga Hessen diesen Artikel für ihre Lobbyarbeit NUTZEN?"
+
+Wenn BEIDE Fragen mit Nein beantwortet werden → NICHT RELEVANT.
+Ein Artikel der nur ein Thema ERWÄHNT das die Liga betrifft, ist NICHT automatisch relevant.
+Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt gehen.
 
 RELEVANT wenn:
 - Sozialpolitische Gesetze/Verordnungen die Liga-Einrichtungen betreffen (Bund, Land Hessen, Kommunen)
@@ -40,24 +41,31 @@ RELEVANT wenn:
 - Politische Angriffe auf Liga-Positionen oder Wohlfahrtspflege (auch von AfD, etc.)
 - Studien/Statistiken die Liga-Argumente stärken (Armutszahlen, Pflegenotstand, Fachkräftemangel)
 - Hessische Landespolitiker treffen Entscheidungen mit konkreten Auswirkungen auf Soziales
-- Tarifverhandlungen/Arbeitskämpfe im Sozialbereich
-- Systemische Krisen die politisches Handeln erfordern (Kita-Platzmangel, Pflegekollaps)
+- Tarifverhandlungen/Arbeitskämpfe im Sozialbereich oder öffentlichen Dienst
+- Systemische Krisen die politisches Handeln erfordern (Kita-Platzmangel, Pflegekollaps, Personalnotstand)
+- Konkrete Reformvorschläge im Gesundheits-/Pflege-/Sozialbereich (auch wenn noch im Entwurf)
+- Streiks die soziale Infrastruktur betreffen (ÖPNV, Pflege, Kitas, öffentlicher Dienst)
 
 NICHT RELEVANT (relevant=false, priority=null):
-- Reiner Sport, Entertainment, Prominente
+- Reiner Sport, Entertainment, Prominente, Lifestyle, Verbrauchertipps
+- Kochen, Haustiere, Garten, Mode, Reisen, Technik-Gadgets — auch wenn "Gesundheit" oder "Familie" im Titel steht
 - Kriminalität ohne sozialpolitischen Bezug
-- Wetter, Verkehr, Unfälle
-- Internationale Politik OHNE direkten Bezug zu deutscher Sozialpolitik
+- Wetter, Verkehr, Unfälle, einzelne Unglücke/Todesfälle
+- Internationale Nachrichten OHNE direkten Bezug zu deutscher Sozialpolitik (US-Gesundheit, Auslandskriminalität, etc.)
 - Ausländische Innenpolitik (Bolsonaro, Trump, etc.)
-- Personalien/Beförderungen bei Mitgliedsverbänden (Diakonie-Vorstand wechselt, etc.) — die Verbände kommunizieren das selbst
+- Personalien/Beförderungen bei Mitgliedsverbänden UND bei Parteien (Vorstandswechsel, Parteitagswahlen in Gremien)
 - PR, Marketing, Events und Galas von Mitgliedsverbänden (Spendenaktionen, Jubiläen, Ehrenamtsfeiern)
+- Humanitäre Hilfsaktionen von Verbänden (Ukraine-Hilfe, Auslandseinsätze) — operativ, nicht politisch
 - Allgemeine Berichte über Verbandsarbeit ohne politischen/strukturellen Bezug
-- Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen ("Deutschland muss wettbewerbsfähiger werden")
-- Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen)
+- Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen
+- Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen, Gratisaktionen)
 - Internationale/EU-Berichte ohne konkreten Bezug zu deutscher Umsetzung
-- Lokale Einzelfälle ohne strukturelle/politische Bedeutung
+- Lokale Einzelfälle ohne strukturelle/politische Bedeutung (einzelne Unfälle, Fehlkühlung, Falschparker)
 - Gedenkveranstaltungen, Jubiläen, historische Rückblicke ohne aktuellen Politikbezug
 - Bildungspolitik ohne Bezug zu Sozialberufen, Kita-Personal oder Inklusion
+- Wahlkampfrhetorik und Parteipositionierung ohne konkreten Gesetzesvorschlag
+- Architektur, Städtebau, Kultur, Ausstellungen ohne Sozialbezug
+- Medienregulierung (ZDF, ARD, Social Media) AUSSER es betrifft direkt Jugendschutz als Gesetzesvorschlag
 
 === PRIORITÄT = SCHWERE DER GESELLSCHAFTLICHEN AUSWIRKUNG ===
 
@@ -78,12 +86,16 @@ medium — Moderater gesellschaftlicher Impact:
 - Politische Entwicklungen die Liga beobachten und ggf. Position beziehen sollte
 - Regionale Entwicklungen die Präzedenz für Hessen setzen könnten
 - Tarifverhandlungen, strukturelle Veränderungen im Sozialbereich
+- Streiks im öffentlichen Dienst / ÖPNV / Sozialbereich (betrifft soziale Infrastruktur)
+- Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
+- Jugendschutz-Gesetzesvorschläge (Social-Media-Altersgrenzen, etc.)
 
 low — Geringer Impact, aber relevant für Liga-Arbeit:
 - Hintergrundberichte mit nützlichem Kontext
 - Politikeraussagen zu Liga-Themen aber ohne konkreten Plan ("Boris Rhein: Wir brauchen mehr Kita-Plätze" — ohne Gesetzentwurf/Budget)
 - Entwicklungen die sich erst anbahnen, noch unkonkret
 - Bildungspolitik mit Bezug zu Sozialberufen, Erzieherausbildung oder Inklusion
+- Berichte über Zustände im Sozialbereich ohne konkreten politischen Handlungspunkt
 
 AUSGABE als valides JSON:
 {
