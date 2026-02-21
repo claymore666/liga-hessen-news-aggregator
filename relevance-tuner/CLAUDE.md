@@ -55,9 +55,8 @@ Fine-tuning pipeline for Liga Hessen news relevance classification.
 | File | Purpose |
 |------|---------|
 | `README.md` | Quick start, project structure, current stats |
+| `docs/TRAINING_GUIDE.md` | Complete training guide — export, train, deploy, rollback |
 | `LABELING_PROMPT.md` | Detailed labeling criteria for the LLM |
-| `DATA_CREATION.md` | Full data pipeline documentation |
-| `RETRAINING.md` | Complete retraining guide with all steps |
 
 ## Common Tasks
 
@@ -102,7 +101,7 @@ cd models/qwen3-trained/gguf
 ollama create liga-relevance -f Modelfile
 ```
 
-See `RETRAINING.md` for complete documentation.
+See `docs/TRAINING_GUIDE.md` for complete documentation.
 
 ## Automation Scripts
 
@@ -150,20 +149,24 @@ python scripts/label_with_ollama.py --all --model qwen3:70b
 
 ### Train Embedding Classifier
 
+See `docs/TRAINING_GUIDE.md` for the complete step-by-step guide. Quick version:
+
 ```bash
-cd /home/kamienc/claude.ai/relevance-tuner/relevance-tuner
+cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
 source venv/bin/activate
 
-# Export training data (with recommended filters for higher quality)
-python scripts/export_training_data.py --min-content-length 200 --min-confidence 0.6
+# Export training data from production
+ssh -L 9000:localhost:8000 docker-ai -N -f
+API_URL=http://localhost:9000/api python scripts/export_training_data.py --min-content-length 200
+pkill -f "ssh -L 9000:localhost:8000"
 
 # Train classifier - MUST set EMBEDDING_BACKEND!
 EMBEDDING_BACKEND=nomic-v2 python train_embedding_classifier.py
-```
 
-**Filtering options** (see `scripts/export_training_data.py --help`):
-- `--min-content-length 200`: Filters Eurostat items with sparse content (~139 chars)
-- `--min-confidence 0.6`: Uses only high-confidence LLM labels
+# Deploy
+docker cp models/embedding/embedding_classifier_nomic-v2.pkl \
+  liga-classifier:/app/models/embedding_classifier_nomic-v2.pkl
+```
 
 ## Current Dataset
 
