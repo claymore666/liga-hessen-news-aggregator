@@ -1,0 +1,28 @@
+[
+  {
+    "label": "baseline-jan20",
+    "model_path": "models/embedding/embedding_classifier_nomic-v2.pkl.old",
+    "model_fingerprint": "48d57fa6652a",
+    "test_size": 647,
+    "embed_speed_items_per_sec": 46.1,
+    "timestamp": "2026-02-21T12:20:05.872975",
+    "relevance_accuracy": 0.6553,
+    "relevance_f1": 0.5142,
+    "priority_accuracy": 0.303,
+    "priority_within_one": 0.8561,
+    "ak_accuracy": 0.7634
+  },
+  {
+    "label": "retrained-feb21",
+    "model_path": "models/embedding/embedding_classifier_nomic-v2.pkl",
+    "model_fingerprint": "a9baa3b88af5",
+    "test_size": 647,
+    "embed_speed_items_per_sec": 47.1,
+    "timestamp": "2026-02-21T12:21:29.820291",
+    "relevance_accuracy": 0.7852,
+    "relevance_f1": 0.5971,
+    "priority_accuracy": 0.6667,
+    "priority_within_one": 1.0,
+    "ak_accuracy": 0.6947
+  }
+]
