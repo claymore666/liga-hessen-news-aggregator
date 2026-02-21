@@ -68,6 +68,11 @@ Production DB (docker-ai) → SSH tunnel → Export script → train/val/test JS
 
 Training data comes from the production database on docker-ai. Items processed by the LLM already have curated relevance, priority, and AK labels — no manual labeling needed.
 
+The export script automatically:
+- **Excludes items not yet LLM-processed** (items with `needs_llm_processing=true` or no summary)
+- **Fetches classifier-vs-LLM disagreements** from `/api/analytics/disagreements` and tags them
+- **Forces disagreement items into the training split** (not val/test) so the classifier learns from its mistakes
+
 **Option A: Via SSH tunnel (recommended)**
 
 ```bash
@@ -99,7 +104,7 @@ API_URL=http://localhost:9000/api python scripts/export_training_data.py --dry-r
 
 **Output**: `data/final/train.jsonl`, `data/final/validation.jsonl`, `data/final/test.jsonl`, `data/final/stats.json`
 
-**Splits**: 70% train / 15% validation / 15% test (stratified by relevance)
+**Splits**: 70% train / 15% validation / 15% test (stratified by relevance). Classifier-LLM disagreements are forced into the training split to maximize learning signal.
 
 #### Export Filtering Options
 
@@ -114,7 +119,9 @@ API_URL=http://localhost:9000/api python scripts/export_training_data.py --dry-r
 |-----------|-----------|-------|
 | Relevant | `priority` in [low, medium, high] | `relevant=true`, priority + AK labels |
 | Irrelevant | `priority = "none"` | `relevant=false` |
+| Skipped | Items with `needs_llm_processing=true` or no summary | Not exported |
 | Skipped | Items with `similar_to_id` (duplicates) | Not exported |
+| Tagged | Classifier-LLM disagreements | `provenance.is_disagreement=true`, forced into training split |
 
 #### Training Data Format (JSONL)
 
