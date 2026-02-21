@@ -36,7 +36,8 @@ Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt geh
 
 RELEVANT wenn:
 - Sozialpolitische Gesetze/Verordnungen die Liga-Einrichtungen betreffen (Bund, Land Hessen, Kommunen)
-- Haushaltskürzungen oder -erhöhungen im Sozialbereich
+- Haushaltskürzungen oder -erhöhungen im Sozialbereich — auch Förderprogramme wie Hessengeld, Wohnbauförderung, Kitaförderung
+- Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung, Bundeshaushalt kürzt Soziales)
 - Liga Hessen selbst wird erwähnt, angesprochen, kritisiert oder gelobt
 - Politische Angriffe auf Liga-Positionen oder Wohlfahrtspflege (auch von AfD, etc.)
 - Studien/Statistiken die Liga-Argumente stärken (Armutszahlen, Pflegenotstand, Fachkräftemangel)
@@ -45,6 +46,7 @@ RELEVANT wenn:
 - Systemische Krisen die politisches Handeln erfordern (Kita-Platzmangel, Pflegekollaps, Personalnotstand)
 - Konkrete Reformvorschläge im Gesundheits-/Pflege-/Sozialbereich (auch wenn noch im Entwurf)
 - Streiks die soziale Infrastruktur betreffen (ÖPNV, Pflege, Kitas, öffentlicher Dienst)
+- Sozialer Wohnungsbau: Kostenprobleme, Förderprogramme, strukturelle Hindernisse
 
 NICHT RELEVANT (relevant=false, priority=null):
 - Reiner Sport, Entertainment, Prominente, Lifestyle, Verbrauchertipps
@@ -60,6 +62,7 @@ NICHT RELEVANT (relevant=false, priority=null):
 - Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen
 - Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen, Gratisaktionen)
 - Internationale/EU-Berichte ohne konkreten Bezug zu deutscher Umsetzung
+- Umfragen/Berichte aus ANDEREN Bundesländern ohne bundesweiten Politikbezug (z.B. "Brandenburger unzufrieden mit Pflege" = NICHT relevant, es sei denn es geht um ein Bundesgesetz)
 - Lokale Einzelfälle ohne strukturelle/politische Bedeutung (einzelne Unfälle, Fehlkühlung, Falschparker)
 - Gedenkveranstaltungen, Jubiläen, historische Rückblicke ohne aktuellen Politikbezug
 - Bildungspolitik ohne Bezug zu Sozialberufen, Kita-Personal oder Inklusion
@@ -84,7 +87,7 @@ high — Schwerwiegender gesellschaftlicher Impact:
 medium — Moderater gesellschaftlicher Impact:
 - Reformvorhaben in Diskussion, Anhörungen, Förderrichtlinien
 - Politische Entwicklungen die Liga beobachten und ggf. Position beziehen sollte
-- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten
+- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten (NUR wenn bundesweite Auswirkung oder Hessen-Bezug erkennbar — reine Landespolitik anderer Bundesländer ist NICHT relevant)
 - Tarifverhandlungen, strukturelle Veränderungen im Sozialbereich
 - Streiks im öffentlichen Dienst / ÖPNV / Sozialbereich (betrifft soziale Infrastruktur)
 - Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)

@@ -63,7 +63,7 @@ services:
       - -c
       - maintenance_work_mem=128MB
       - -c
-      - max_connections=30
+      - max_connections=50
       - -c
       - random_page_cost=1.1
     environment:

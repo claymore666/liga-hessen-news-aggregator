@@ -190,6 +190,8 @@ Markiere einen Artikel als RELEVANT (true), wenn er:
 3. HAUSHALT UND FINANZEN:
    - Haushaltskürzungen oder -erhöhungen im Sozialbereich
    - Förderprogramme für soziale Einrichtungen (neu, geändert, gestrichen)
+   - Landesprogramme mit Sozialbezug (Hessengeld, Wohnbauförderung, Kitaförderung, etc.)
+   - Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung)
    - Finanzierung von Kitas, Pflege, Beratungsstellen
    - Tarifverhandlungen im öffentlichen Dienst/Sozialbereich
 
@@ -198,17 +200,21 @@ Markiere einen Artikel als RELEVANT (true), wenn er:
    - Berichte die systemische Probleme im Sozialbereich belegen
    - Daten die Liga in Stellungnahmen und Positionspapieren zitieren kann
 
-5. SYSTEMISCHE KRISEN die politisches Handeln erfordern:
+5. SOZIALER WOHNUNGSBAU:
+   - Kostenprobleme, Förderprogramme, strukturelle Hindernisse
+   - Sozialbindungen, Belegungsrechte, Wohnraumförderung
+
+6. SYSTEMISCHE KRISEN die politisches Handeln erfordern:
    - Kita-Platzmangel, Pflegekollaps, Personalnotstand im Sozialbereich
    - Einrichtungsschließungen mit struktureller Bedeutung (nicht Einzelfälle)
    - Politische Kehrtwenden die Liga-Errungenschaften gefährden
 
-6. ARBEITSMARKT mit strukturellem Sozialbezug:
+7. ARBEITSMARKT mit strukturellem Sozialbezug:
    - Fachkräftemangel in sozialen Berufen (politisch adressierbar)
    - Tarifpolitik, Mindestlohn mit Auswirkung auf Sozialbereich
    - Armut und soziale Ungleichheit als politisches Thema
 
-7. BILDUNGSPOLITIK mit Bezug zu Sozialbereich:
+8. BILDUNGSPOLITIK mit Bezug zu Sozialbereich:
    - Ausbildung in sozialen Berufen (Erzieher, Pfleger, Sozialarbeiter)
    - Inklusion in Schulen (betrifft AK4)
    - Schulpolitik wenn sie Schulsozialarbeit oder Jugendhilfe betrifft (AK5)
@@ -228,6 +234,7 @@ Markiere einen Artikel als NICHT RELEVANT (false), wenn er:
 - Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen
 - Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen, Gratisaktionen)
 - Internationale/EU-Berichte ohne konkreten Bezug zu deutscher Umsetzung
+- Umfragen/Berichte aus ANDEREN Bundesländern ohne bundesweiten Politikbezug (z.B. "Brandenburger unzufrieden mit Pflege" = NICHT relevant, es sei denn es geht um ein Bundesgesetz)
 - Lokale Einzelfälle ohne strukturelle/politische Bedeutung (einzelne Unfälle, Falschparker)
 - Gedenkveranstaltungen, Jubiläen, historische Rückblicke ohne aktuellen Politikbezug
 - Wirtschaftsnachrichten ohne Bezug zu Sozialbereich
@@ -277,7 +284,7 @@ BEISPIELE:
 - "Ministerin kündigt Reform der Eingliederungshilfe an" (noch unkonkret, aber wichtig zu beobachten)
 - "Neue Förderrichtlinie für Beratungsstellen" (betrifft Liga-Einrichtungen)
 - Tarifverhandlungen im Sozialbereich
-- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten
+- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten (NUR wenn bundesweite Auswirkung oder Hessen-Bezug erkennbar — reine Landespolitik anderer Bundesländer ist NICHT relevant)
 - Gesetzesänderungen im Sozialbereich in Vorbereitung
 - Streiks im öffentlichen Dienst / ÖPNV / Sozialbereich (betrifft soziale Infrastruktur)
 - Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
