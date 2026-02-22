@@ -351,8 +351,6 @@ class LLMWorker:
                 return 0
 
             processed = await self._process_items(item_ids, processor, is_fresh=True)
-            async with self._stats_lock:
-                self._stats["fresh_processed"] += processed
 
         except Exception as e:
             logger.error(f"Error processing fresh items: {e}")
@@ -428,8 +426,6 @@ class LLMWorker:
 
         try:
             processed = await self._process_items(item_ids, processor, is_fresh=False)
-            async with self._stats_lock:
-                self._stats["backlog_processed"] += processed
         except Exception as e:
             logger.error(f"Error processing backlog items: {e}")
             async with self._stats_lock:
@@ -717,6 +713,9 @@ class LLMWorker:
                 processed += 1
                 async with self._stats_lock:
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+                    # Increment per-item so stats sync picks up progress mid-batch
+                    stats_key = "fresh_processed" if is_fresh else "backlog_processed"
+                    self._stats[stats_key] += 1
 
                 logger.info(f"LLM {item_type}: {item_data['title'][:40]}... -> {llm_priority}")
 

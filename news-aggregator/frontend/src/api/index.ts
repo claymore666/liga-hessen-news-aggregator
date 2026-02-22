@@ -273,6 +273,7 @@ export interface GPU1Status {
   enabled: boolean
   available: boolean  // Host reachable (SSH port)
   ollama_available: boolean  // Ollama API reachable
+  force_active: boolean  // Manual override for active hours
   was_sleeping: boolean | null  // null when gpu1 unavailable
   wake_time: string | null
   last_activity: number | null
@@ -348,8 +349,9 @@ export const adminApi = {
   // Health
   getHealth: () => api.get<HealthCheckResponse>('/admin/health'),
 
-  // GPU1 Status
+  // GPU1 Status & Control
   getGpu1Status: () => api.get<GPU1Status>('/admin/gpu1/status'),
+  forceProcessGpu1: () => api.post<{ status: string; message: string }>('/admin/gpu1/force-process'),
 
   // Logs
   getLogs: (params?: { page?: number; page_size?: number; level?: string; logger?: string; search?: string }) =>

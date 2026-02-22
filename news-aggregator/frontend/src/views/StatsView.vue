@@ -53,6 +53,37 @@ const logsSearch = ref('')
 // Active tab
 const activeTab = ref<'status' | 'logs'>('status')
 
+// Force process state
+const forceProcessing = ref(false)
+const forceProcessMessage = ref('')
+const forceProcessError = ref(false)
+
+const triggerForceProcess = async () => {
+  forceProcessing.value = true
+  forceProcessMessage.value = ''
+  forceProcessError.value = false
+  try {
+    const response = await adminApi.forceProcessGpu1()
+    const data = response.data
+    if (data.status === 'started') {
+      forceProcessMessage.value = 'GPU1 geweckt, Verarbeitung gestartet'
+    } else if (data.status === 'already_active') {
+      forceProcessMessage.value = 'GPU1 bereits aktiv'
+    } else {
+      forceProcessMessage.value = data.message
+      forceProcessError.value = true
+    }
+    // Refresh GPU1 status to show force_active badge
+    await fetchGpu1Status()
+  } catch (e) {
+    forceProcessMessage.value = 'Fehler beim Starten'
+    forceProcessError.value = true
+    console.error('Force process failed:', e)
+  } finally {
+    forceProcessing.value = false
+  }
+}
+
 // Fetch functions
 const fetchStats = async () => {
   try {
@@ -460,6 +491,13 @@ onUnmounted(() => {
           </h2>
           <div class="flex items-center gap-2">
             <span
+              v-if="gpu1Status.force_active"
+              class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-purple-100 text-purple-700"
+            >
+              <BoltIcon class="h-4 w-4" />
+              Manuell aktiv
+            </span>
+            <span
               v-if="gpu1Status.available && !gpu1Status.ollama_available"
               class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-700"
             >
@@ -508,7 +546,13 @@ onUnmounted(() => {
               <ClockIcon class="h-4 w-4 text-gray-400" />
               <span class="text-sm">{{ gpu1ActiveHoursFormatted }}</span>
             </div>
-            <div class="mt-1 text-xs" :class="gpu1Status.within_active_hours ? 'text-green-600' : 'text-gray-400'">
+            <div
+              v-if="gpu1Status.force_active"
+              class="mt-1 text-xs text-purple-600"
+            >
+              Manuell überschrieben
+            </div>
+            <div v-else class="mt-1 text-xs" :class="gpu1Status.within_active_hours ? 'text-green-600' : 'text-gray-400'">
               {{ gpu1Status.within_active_hours ? 'Aktiv (WoL erlaubt)' : 'Inaktiv (kein WoL)' }}
             </div>
           </div>
@@ -537,6 +581,25 @@ onUnmounted(() => {
               Shutdown blockiert
             </div>
           </div>
+        </div>
+
+        <!-- Force Process Button -->
+        <div
+          v-if="!gpu1Status.within_active_hours || gpu1Status.force_active"
+          class="mt-4 flex items-center gap-3"
+        >
+          <button
+            v-if="!gpu1Status.force_active"
+            class="inline-flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+            :disabled="forceProcessing"
+            @click="triggerForceProcess"
+          >
+            <BoltIcon class="h-4 w-4" />
+            {{ forceProcessing ? 'Wird gestartet...' : 'Jetzt verarbeiten' }}
+          </button>
+          <span v-if="forceProcessMessage" class="text-sm" :class="forceProcessError ? 'text-red-600' : 'text-green-600'">
+            {{ forceProcessMessage }}
+          </span>
         </div>
 
         <!-- Pending Shutdown Warning -->
