@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { TopicGroup, TopicItemBrief } from '@/api'
 import type { Priority } from '@/types'
 import PriorityBadge from '@/components/PriorityBadge.vue'
@@ -7,11 +7,36 @@ import { ChevronDownIcon, ChevronRightIcon } from '@heroicons/vue/24/solid'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
 
-defineProps<{
+const props = defineProps<{
   topics: TopicGroup[]
   ungroupedItems: TopicItemBrief[]
   selectedId: number | null
+  sortBy?: string
+  sortOrder?: string
 }>()
+
+const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 }
+
+function sortItems(items: TopicItemBrief[]): TopicItemBrief[] {
+  if (props.sortBy !== 'priority') return items
+  const asc = props.sortOrder === 'asc'
+  return [...items].sort((a, b) => {
+    const ra = priorityRank[a.priority ?? ''] ?? 4
+    const rb = priorityRank[b.priority ?? ''] ?? 4
+    const cmp = ra - rb
+    if (cmp !== 0) return asc ? -cmp : cmp
+    // Secondary sort by date desc
+    const da = a.published_at ? new Date(a.published_at).getTime() : 0
+    const db = b.published_at ? new Date(b.published_at).getTime() : 0
+    return db - da
+  })
+}
+
+const sortedTopics = computed(() =>
+  props.topics.map(group => ({ ...group, items: sortItems(group.items) }))
+)
+
+const sortedUngroupedItems = computed(() => sortItems(props.ungroupedItems))
 
 const emit = defineEmits<{
   (e: 'select', id: number): void
@@ -35,12 +60,12 @@ const formatTime = (date: string | null) => {
 
 <template>
   <div class="overflow-y-auto flex-1">
-    <div v-if="topics.length === 0 && ungroupedItems.length === 0" class="py-8 text-center text-gray-500 bg-blue-50">
+    <div v-if="sortedTopics.length === 0 && sortedUngroupedItems.length === 0" class="py-8 text-center text-gray-500 bg-blue-50">
       Keine Nachrichten gefunden
     </div>
     <div v-else>
       <!-- Topic groups -->
-      <div v-for="group in topics" :key="group.topic" :data-topic="group.topic" class="mb-0.5">
+      <div v-for="group in sortedTopics" :key="group.topic" :data-topic="group.topic" class="mb-0.5">
         <!-- Topic header -->
         <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 border-l-4 border-l-indigo-400 sticky top-0 z-10">
           <span class="font-semibold text-xs text-indigo-800 truncate">{{ group.topic }}</span>
@@ -130,16 +155,16 @@ const formatTime = (date: string | null) => {
       </div>
 
       <!-- Sonstiges group -->
-      <div v-if="ungroupedItems.length > 0" class="mb-0.5">
+      <div v-if="sortedUngroupedItems.length > 0" class="mb-0.5">
         <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 border-l-4 border-l-gray-400 sticky top-0 z-10">
           <span class="font-semibold text-xs text-gray-600 truncate">Sonstiges</span>
           <span class="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 flex-shrink-0">
-            {{ ungroupedItems.length }}
+            {{ sortedUngroupedItems.length }}
           </span>
         </div>
         <ul>
           <li
-            v-for="(item, idx) in ungroupedItems"
+            v-for="(item, idx) in sortedUngroupedItems"
             :key="item.id"
             :data-item-id="item.id"
           >

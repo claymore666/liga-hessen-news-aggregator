@@ -477,6 +477,8 @@ onMounted(async () => {
           :topics="topicGroups"
           :ungrouped-items="topicUngroupedItems"
           :selected-id="selectedItemId"
+          :sort-by="itemsStore.filters.sort_by"
+          :sort-order="itemsStore.filters.sort_order"
           @select="selectItem"
         />
 
