@@ -98,15 +98,42 @@ class GPU1PowerManager:
         """Whether force-active override is enabled."""
         return self._force_active
 
-    def set_force_active(self):
+    async def _get_force_active(self) -> bool:
+        """Read force-active flag from Redis (shared across workers)."""
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                val = await r.get("gpu1:force_active")
+                self._force_active = val == "1"
+        except Exception as e:
+            logger.debug(f"Failed to read force_active from Redis: {e}")
+        return self._force_active
+
+    async def set_force_active(self):
         """Enable force-active override (bypasses active hours check)."""
         self._force_active = True
+        try:
+            from services.redis_client import get_redis
+            r = await get_redis()
+            if r is not None:
+                await r.set("gpu1:force_active", "1")
+        except Exception as e:
+            logger.debug(f"Failed to write force_active to Redis: {e}")
         logger.info("Force-active override ENABLED — active hours check bypassed")
 
-    def clear_force_active(self):
+    async def clear_force_active(self):
         """Disable force-active override (restores normal active hours check)."""
-        if self._force_active:
+        was_active = await self._get_force_active()
+        if was_active:
             self._force_active = False
+            try:
+                from services.redis_client import get_redis
+                r = await get_redis()
+                if r is not None:
+                    await r.delete("gpu1:force_active")
+            except Exception as e:
+                logger.debug(f"Failed to delete force_active from Redis: {e}")
             logger.info("Force-active override CLEARED — normal active hours restored")
 
     async def _get_last_wol_time(self) -> float | None:
@@ -142,16 +169,17 @@ class GPU1PowerManager:
         remaining = self.wake_interval - elapsed
         return max(0, int(remaining))
 
-    def is_within_active_hours(self) -> bool:
+    async def is_within_active_hours(self) -> bool:
         """
         Check if current time is within the allowed active hours.
 
         Returns True if force_active override is set (manual trigger).
+        Reads from Redis to share state across gunicorn workers.
 
         Returns:
             True if gpu1 usage is allowed now, False otherwise
         """
-        if self._force_active:
+        if await self._get_force_active():
             return True
 
         now = datetime.now()
@@ -297,7 +325,7 @@ class GPU1PowerManager:
             self.reset_state()
 
         # Check if we're allowed to wake it (active hours)
-        if not self.is_within_active_hours():
+        if not await self.is_within_active_hours():
             now = datetime.now()
             day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
             weekday_str = f" ({day_names[now.weekday()]})" if self.active_weekdays_only else ""

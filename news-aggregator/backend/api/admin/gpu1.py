@@ -142,7 +142,7 @@ async def get_gpu1_status() -> GPU1Status:
         enabled=True,
         available=available,
         ollama_available=ollama_available,
-        force_active=power_mgr.force_active,
+        force_active=await power_mgr._get_force_active(),
         # Only show wake state when gpu1 is available; otherwise it's meaningless
         was_sleeping=power_mgr._was_sleeping if available else None,
         wake_time=power_mgr._wake_time.isoformat() if available and power_mgr._wake_time else None,
@@ -156,7 +156,7 @@ async def get_gpu1_status() -> GPU1Status:
         pending_shutdown=pending_shutdown,
         active_hours_start=power_mgr.active_hours_start,
         active_hours_end=power_mgr.active_hours_end,
-        within_active_hours=power_mgr.is_within_active_hours(),
+        within_active_hours=await power_mgr.is_within_active_hours(),
         logged_in_users=logged_in_users,
         mac_address=power_mgr.mac_address,
         ssh_host=power_mgr.ssh_host,
@@ -189,7 +189,7 @@ async def force_process() -> ForceProcessResponse:
         )
 
     # If already within active hours (naturally or via force), just confirm
-    if power_mgr.is_within_active_hours() and await power_mgr.is_available():
+    if await power_mgr.is_within_active_hours() and await power_mgr.is_available():
         return ForceProcessResponse(
             status="already_active",
             message="gpu1 is already active and processing",
@@ -197,7 +197,7 @@ async def force_process() -> ForceProcessResponse:
 
     # Set force-active flag before ensure_available so the active hours
     # check inside ensure_available passes
-    power_mgr.set_force_active()
+    await power_mgr.set_force_active()
 
     if await power_mgr.ensure_available():
         return ForceProcessResponse(
@@ -207,7 +207,7 @@ async def force_process() -> ForceProcessResponse:
         )
 
     # Wake failed — clear the flag
-    power_mgr.clear_force_active()
+    await power_mgr.clear_force_active()
     return ForceProcessResponse(
         status="wake_failed",
         message="Failed to wake gpu1. Force-active override cleared.",
