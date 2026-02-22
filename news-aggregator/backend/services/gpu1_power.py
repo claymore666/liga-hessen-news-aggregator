@@ -86,11 +86,28 @@ class GPU1PowerManager:
         self._wake_time: datetime | None = None
         self._last_activity: float | None = None
         self._last_wol_time: float | None = None  # Timestamp of last WoL packet
+        self._force_active = False  # Manual override for active hours
 
     @property
     def was_sleeping(self) -> bool:
         """Whether gpu1 was sleeping when we last checked."""
         return self._was_sleeping
+
+    @property
+    def force_active(self) -> bool:
+        """Whether force-active override is enabled."""
+        return self._force_active
+
+    def set_force_active(self):
+        """Enable force-active override (bypasses active hours check)."""
+        self._force_active = True
+        logger.info("Force-active override ENABLED — active hours check bypassed")
+
+    def clear_force_active(self):
+        """Disable force-active override (restores normal active hours check)."""
+        if self._force_active:
+            self._force_active = False
+            logger.info("Force-active override CLEARED — normal active hours restored")
 
     async def _get_last_wol_time(self) -> float | None:
         """Get last WoL time from Redis (persists across restarts)."""
@@ -129,9 +146,14 @@ class GPU1PowerManager:
         """
         Check if current time is within the allowed active hours.
 
+        Returns True if force_active override is set (manual trigger).
+
         Returns:
             True if gpu1 usage is allowed now, False otherwise
         """
+        if self._force_active:
+            return True
+
         now = datetime.now()
         current_hour = now.hour
 
@@ -486,6 +508,7 @@ class GPU1PowerManager:
 
         if await self.shutdown():
             self.reset_state()
+            self.clear_force_active()
             return True
 
         return False
@@ -500,6 +523,7 @@ class GPU1PowerManager:
         """Get current power manager status."""
         seconds_until = self._seconds_until_next_wake(self._last_wol_time)
         return {
+            "force_active": self._force_active,
             "was_sleeping": self._was_sleeping,
             "wake_time": self._wake_time.isoformat() if self._wake_time else None,
             "last_activity": self._last_activity,
