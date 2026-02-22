@@ -14,6 +14,7 @@ A news aggregation system for Liga der Freien Wohlfahrtspflege Hessen that fetch
 | **Analytics** | [docs/architecture/PROCESSING_ANALYTICS.md](news-aggregator/docs/architecture/PROCESSING_ANALYTICS.md) | Processing logs and model comparison |
 | **Browser Pool** | [docs/services/BROWSER_POOL.md](news-aggregator/docs/services/BROWSER_POOL.md) | Shared Playwright instance management |
 | **Article Extractor** | [docs/services/ARTICLE_EXTRACTOR.md](news-aggregator/docs/services/ARTICLE_EXTRACTOR.md) | Content extraction with SPA fallback |
+| **Evaluation** | [docs/services/PROMPT_TUNING.md](news-aggregator/docs/services/PROMPT_TUNING.md) | Prompt tuning, eval framework, iteration workflow |
 
 ## Environments
 

@@ -57,6 +57,7 @@ Fine-tuning pipeline for Liga Hessen news relevance classification.
 | `README.md` | Quick start, project structure, current stats |
 | `docs/TRAINING_GUIDE.md` | Complete training guide — export, train, deploy, rollback |
 | `LABELING_PROMPT.md` | Detailed labeling criteria for the LLM |
+| `evaluations/eval_set.json` | Fixed 150+ item eval set with haiku ground truth |
 
 ## Common Tasks
 
@@ -111,6 +112,11 @@ See `docs/TRAINING_GUIDE.md` for complete documentation.
 | `scripts/auto_train_pipeline.sh` | Train → GGUF → deploy (skips relabeling) | ~1h |
 | `scripts/label_with_ollama.py` | Relabel training data with specified model | ~3h |
 | `scripts/create_splits.py` | Create train/val/test splits from labeled data | <1min |
+| `scripts/backup_iteration.sh` | Snapshot DB, model, ChromaDB, prompt + git tag | ~2min |
+| `scripts/curate_eval_set.py` | Build fixed eval set with haiku ground truth | ~30min |
+| `scripts/run_llm_eval.py` | Run Ollama LLM against fixed eval set | varies |
+| `scripts/run_classifier_eval.py` | Run ML classifier against fixed eval set | ~1min |
+| `scripts/compare_eval_results.py` | Compare eval results across runs | instant |
 
 ### Usage Examples
 
@@ -191,7 +197,9 @@ docker cp models/embedding/embedding_classifier_nomic-v2.pkl \
 | `data/reviewed/ollama_results/` | Labeled output |
 | `data/final/` | Train/val/test splits |
 | `models/qwen3-trained/` | Fine-tuned model |
-| `scripts/` | Labeling and data scripts |
+| `scripts/` | Labeling, evaluation, and data scripts |
+| `evaluations/` | Fixed eval set and result files |
+| `evaluations/results/` | Per-run eval results (committed) |
 
 ## Ollama Models
 

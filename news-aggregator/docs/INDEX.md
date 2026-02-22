@@ -13,6 +13,7 @@ This documentation is organized in layers from high-level architecture to specif
 - [SCHEDULER.md](services/SCHEDULER.md) - Parallel fetching scheduler
 - [LLM_PIPELINE.md](services/LLM_PIPELINE.md) - LLM analysis pipeline
 - [CLASSIFIER.md](services/CLASSIFIER.md) - ML classifier integration
+- [PROMPT_TUNING.md](services/PROMPT_TUNING.md) - LLM prompt evolution, quality metrics, and model benchmarks
 - [BROWSER_POOL.md](services/BROWSER_POOL.md) - Shared Playwright instance management
 - [ARTICLE_EXTRACTOR.md](services/ARTICLE_EXTRACTOR.md) - Content extraction with SPA fallback
 
