@@ -34,10 +34,12 @@ Wenn BEIDE Fragen mit Nein beantwortet werden → NICHT RELEVANT.
 Ein Artikel der nur ein Thema ERWÄHNT das die Liga betrifft, ist NICHT automatisch relevant.
 Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt gehen.
 
+HINWEIS: Social-Media-Posts von Politikern, Fraktionen oder Advocacy-Organisationen nach INHALT bewerten, nicht nach Format. Kurze Posts mit politischen Forderungen, Statistiken oder Positionierungen sind genauso relevant wie ausführliche Artikel.
+
 RELEVANT wenn:
 - Sozialpolitische Gesetze/Verordnungen die Liga-Einrichtungen betreffen (Bund, Land Hessen, Kommunen)
 - Haushaltskürzungen oder -erhöhungen im Sozialbereich — auch Förderprogramme wie Hessengeld, Wohnbauförderung, Kitaförderung
-- Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung, Bundeshaushalt kürzt Soziales)
+- Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung, Bundeshaushalt kürzt Soziales, Rentenreform, Schuldenbremse mit Sozialauswirkungen, Elterngeld-Änderungen)
 - Liga Hessen selbst wird erwähnt, angesprochen, kritisiert oder gelobt
 - Politische Angriffe auf Liga-Positionen oder Wohlfahrtspflege (auch von AfD, etc.)
 - Studien/Statistiken die Liga-Argumente stärken (Armutszahlen, Pflegenotstand, Fachkräftemangel)
@@ -45,7 +47,7 @@ RELEVANT wenn:
 - Tarifverhandlungen/Arbeitskämpfe im Sozialbereich oder öffentlichen Dienst
 - Systemische Krisen die politisches Handeln erfordern (Kita-Platzmangel, Pflegekollaps, Personalnotstand)
 - Konkrete Reformvorschläge im Gesundheits-/Pflege-/Sozialbereich (auch wenn noch im Entwurf)
-- Streiks die soziale Infrastruktur betreffen (ÖPNV, Pflege, Kitas, öffentlicher Dienst)
+- Streiks NUR wenn Sozialeinrichtungen direkt betroffen sind (Kita-Schließungen, Pflege-Streik, Sozialarbeit) — NICHT generische Verdi/ÖPNV-Streiks
 - Sozialer Wohnungsbau: Kostenprobleme, Förderprogramme, strukturelle Hindernisse
 
 NICHT RELEVANT (relevant=false, priority=null):
@@ -89,7 +91,7 @@ medium — Moderater gesellschaftlicher Impact:
 - Politische Entwicklungen die Liga beobachten und ggf. Position beziehen sollte
 - Regionale Entwicklungen die Präzedenz für Hessen setzen könnten (NUR wenn bundesweite Auswirkung oder Hessen-Bezug erkennbar — reine Landespolitik anderer Bundesländer ist NICHT relevant)
 - Tarifverhandlungen, strukturelle Veränderungen im Sozialbereich
-- Streiks im öffentlichen Dienst / ÖPNV / Sozialbereich (betrifft soziale Infrastruktur)
+- Streiks im Sozialbereich wenn Einrichtungen schließen müssen (Kitas, Pflege)
 - Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
 - Jugendschutz-Gesetzesvorschläge (Social-Media-Altersgrenzen, etc.)
 

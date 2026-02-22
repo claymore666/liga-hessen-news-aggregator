@@ -59,13 +59,14 @@ def get_system_prompt() -> str:
     return match.group(1).strip()
 
 
-def call_ollama(model: str, prompt: str, system: str) -> dict:
+def call_ollama(model: str, prompt: str, system: str, think: bool = True) -> dict:
     """Call Ollama API and return response with timing info."""
     payload = {
         "model": model,
         "prompt": prompt,
         "system": system,
         "stream": False,
+        "think": think,
         "options": {"temperature": 0.3, "num_predict": 4096},
     }
 
@@ -249,6 +250,8 @@ def main():
                         help="Label for this eval run (default: auto from git)")
     parser.add_argument("--eval-set", type=str, default=None,
                         help=f"Path to eval set JSON (default: {EVAL_SET_PATH})")
+    parser.add_argument("--no-think", action="store_true",
+                        help="Disable Qwen3 thinking mode (append /no_think)")
     parser.add_argument("--limit", type=int, default=None,
                         help="Only evaluate first N items (for testing)")
     args = parser.parse_args()
@@ -295,6 +298,7 @@ def main():
     print(f"  Tag: {tag}")
     print(f"  Eval set: {eval_path} (v{eval_version})")
     print(f"  Items: {len(items)} (with ground truth)")
+    print(f"  Thinking: {'disabled' if args.no_think else 'enabled'}")
     print(f"  Ollama: {OLLAMA_URL}")
 
     # Run evaluation
@@ -313,7 +317,7 @@ def main():
         user_prompt = f"Analysiere diesen Nachrichtenartikel:\n\nTitel: {item['title']}\n\nInhalt: {content}"
 
         # Call Ollama
-        r = call_ollama(model, user_prompt, system_prompt)
+        r = call_ollama(model, user_prompt, system_prompt, think=not args.no_think)
         cls = parse_classification(r["response"])
 
         got_relevant = cls["relevant"] if cls["relevant"] is not None else False

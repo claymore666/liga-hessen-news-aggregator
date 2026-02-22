@@ -153,14 +153,54 @@ The feed went from 707 items (overwhelming) to 145 items (manageable). The FP/FN
 
 ---
 
-## The 72% Accuracy Ceiling
+### v5 — Targeted recall improvements (2026-02-22)
 
-A striking finding: overall accuracy has stayed at exactly 72% across all prompt versions. The improvements change *what types* of errors occur (FP vs FN), but the total error rate remains constant.
+**Git tag:** `prompts-v5` | **Branch:** `dev`
 
-**Why the ceiling exists:**
+Analysis of v4's 9 false negatives on the fixed eval set revealed three patterns:
+
+1. **Social media posts** — Short posts from politicians/advocacy orgs (hashtags, informal language) were being rejected because they lacked article structure, even when the content was policy-relevant
+2. **Federal policy gaps** — Rentenreform, Schuldenbremse impact on social budgets, and Elterngeld changes weren't explicitly listed as relevant
+3. **Overly broad strike inclusion** — ÖPNV/generic Verdi strikes were marked relevant but aren't in Liga's scope; only strikes causing Sozialeinrichtungen closures (Kitas, Pflege) matter
+
+**Changes:**
+- Added social media evaluation hint: "nach INHALT bewerten, nicht nach Format"
+- Expanded federal policy examples: Rentenreform, Schuldenbremse, Elterngeld
+- Narrowed strike relevance: "NUR wenn Sozialeinrichtungen direkt betroffen" — NOT generic Verdi/ÖPNV
+- Updated medium priority strikes: "wenn Einrichtungen schließen müssen (Kitas, Pflege)"
+
+**What we tried and reverted:**
+- Softening the dual-question gate to "MINDESTENS EINE Frage Ja → RELEVANT" gained +3% recall but lost **-14% precision** (too many FPs). The gate was reverted to keep precision.
+
+**Fixed eval set results (130 items, haiku ground truth):**
+
+| Metric | v4 | v5 (loose gate) | v5b (final) |
+|--------|----|--------------------|-------------|
+| Accuracy | 88% | 84% | **90%** |
+| Precision | 80% | 66% | **79%** |
+| Recall | 73% | 76% | **82%** |
+| F1 | 76% | 70% | **81%** |
+| Priority exact | 38% | 48% | 37% |
+
+**Key learning:** The precision/recall tradeoff is real. Loosening the gate broadly hurts precision more than it helps recall. Targeted fixes (social media hint, specific policy examples) are more effective than changing the gate logic.
+
+**Thinking mode experiment:**
+- Qwen3 with thinking enabled: 10-25s/item, better accuracy
+- Qwen3 with `think: false`: 35-44s/item (slower!), worse accuracy
+- Thinking mode is clearly better — the model generates more verbose JSON without thinking, wasting tokens on summary/analysis for irrelevant items
+
+---
+
+## The 72% Accuracy Ceiling (ad-hoc sampling)
+
+*Note: The 72% figure below was measured with ad-hoc 50-item sampling before the fixed eval set existed. The fixed eval set (130 items) shows 88% accuracy for v4 — the discrepancy is due to different sample composition and size.*
+
+The original ad-hoc evaluation showed overall accuracy staying at exactly 72% across prompt versions v1-v4. The improvements changed *what types* of errors occur (FP vs FN), but the total error rate appeared constant.
+
+**Why a ceiling exists:**
 
 The task requires nuanced judgment calls that a general-purpose LLM struggles with via prompting alone:
-- Is a Hessen education budget dispute "social policy" or "education policy"? (Liga's scope is ambiguous here)
+- Is a Hessen education budget dispute "social policy" or "education policy"?
 - Is a federal care study from Brandenburg relevant because it reveals systemic issues, or irrelevant because it's another state?
 - Is an SPD proposal for social media age limits "youth protection policy" or "media regulation"?
 
@@ -262,11 +302,14 @@ Reprocess production items via `/api/items/{id}/reprocess`, monitor disagreement
 
 ### Evaluation methodology
 
-- **Fixed eval set** (`evaluations/eval_set.json`): 150+ items with snapshotted content
+- **Fixed eval set** (`evaluations/eval_set.json`): 181 items with snapshotted content from production
 - **Ground truth**: Haiku-verified labels (relevant, priority, AKs, reasoning)
-- **Categories**: 50 positives, 50 negatives, 50 edge cases
+- **Categories**: 50 positives, 48 negatives, 83 edge cases (47 relevant, 134 irrelevant per haiku)
+- **22+ unique sources**, balanced across priorities and AKs
+- **Edge cases include**: classifier/LLM disagreements, other-state Pflege, federal policy borderlines, social media posts, Kommunalwahl, Eurostat datasets
 - **Reproducible**: Same items, same content — metrics are directly comparable across runs
 - **Results stored**: `evaluations/results/` — committed to repo for history
+- **KPIs**: Accuracy, precision, recall, F1, priority exact + within-1-level, AK exact + overlap, FP/FN by subcategory
 
 ---
 
