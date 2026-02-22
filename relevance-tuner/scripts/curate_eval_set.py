@@ -197,7 +197,7 @@ def select_negatives(count: int = 50) -> list[dict]:
 
     print(f"  {len(items)} LLM-confirmed irrelevant items available")
 
-    # Diversity: max 3 per source, spread across topic areas
+    # Diversity: max 8 per source (negatives have less source variety than positives)
     source_counts = Counter()
     selected = []
 
@@ -211,7 +211,7 @@ def select_negatives(count: int = 50) -> list[dict]:
             break
 
         source = item.get("source", {}).get("name", "Unknown")
-        if source_counts[source] >= 3:
+        if source_counts[source] >= 8:
             continue
 
         # Infer subcategory from title keywords
@@ -431,12 +431,15 @@ def verify_with_haiku(item: dict) -> dict | None:
     )
 
     try:
+        # Remove CLAUDECODE env var to allow nested claude CLI invocation
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         result = subprocess.run(
             ["claude", "-p", "--model", HAIKU_MODEL, "--output-format", "text"],
             input=prompt,
             capture_output=True,
             text=True,
             timeout=60,
+            env=env,
         )
 
         if result.returncode != 0:
