@@ -15,10 +15,15 @@ Filtering options (recommended for better training data quality):
 
 Note: Eurostat dataset notifications often have minimal content (~139 chars) and
 contribute noise to training data. Using --min-content-length 200 filters these out.
+
+Items not yet processed by the LLM are always excluded (needs_llm_processing=true
+or no summary). Classifier-vs-LLM disagreements are automatically fetched and
+forced into the training split for maximum learning signal.
 """
 
 import argparse
 import json
+import os
 import random
 import sys
 from collections import Counter
@@ -27,7 +32,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 
 # Configuration
-API_URL = "http://localhost:8000/api"
+API_URL = os.environ.get("API_URL", "http://localhost:8000/api")
 PAGE_SIZE = 100
 RANDOM_SEED = 42
 
@@ -68,26 +73,59 @@ def fetch_all_items(relevant_only: bool = False) -> list[dict]:
     return items
 
 
+def fetch_disagreement_ids() -> set[int]:
+    """Fetch all item IDs where classifier and LLM disagree on priority or AK."""
+    ids = set()
+    offset = 0
+    limit = 200  # Max allowed by API
+
+    while True:
+        url = f"{API_URL}/analytics/disagreements?limit={limit}&offset={offset}"
+        try:
+            req = Request(url)
+            with urlopen(req, timeout=30) as resp:
+                data = json.load(resp)
+                if not data:
+                    break
+                for item in data:
+                    ids.add(item["id"])
+                print(f"  Disagreements page {offset // limit + 1}: {len(data)} items")
+                if len(data) < limit:
+                    break
+                offset += limit
+        except Exception as e:
+            print(f"Warning: Could not fetch disagreements: {e}")
+            break
+
+    return ids
+
+
 def convert_to_training_format(
     item: dict,
     min_content_length: int = 0,
-    min_confidence: float = 0.0
-) -> dict | None:
+    min_confidence: float = 0.0,
+    disagreement_ids: set[int] | None = None,
+) -> tuple[dict | None, str | None]:
     """Convert API item to training data format.
 
     Args:
         item: API item dict
         min_content_length: Minimum content length (chars). Items below are skipped.
         min_confidence: Minimum LLM confidence score (0.0-1.0). Items below are skipped.
+        disagreement_ids: Set of item IDs where classifier and LLM disagree.
 
     Returns:
-        Training data dict, or None if item should be filtered out.
+        Tuple of (training data dict or None, filter reason or None).
     """
+    # Filter out items not yet processed by LLM
+    if item.get("needs_llm_processing", True) or not item.get("summary"):
+        return None, "no_llm"
+
     content = item.get("content", "")
 
     # Filter by content length
     if min_content_length > 0 and len(content) < min_content_length:
-        return None
+        return None, "quality"
 
     # Filter by LLM confidence score
     if min_confidence > 0:
@@ -95,7 +133,7 @@ def convert_to_training_format(
         llm_analysis = metadata.get("llm_analysis", {})
         relevance_score = llm_analysis.get("relevance_score", 0.0)
         if relevance_score < min_confidence:
-            return None
+            return None, "quality"
 
     # Determine relevance from priority
     priority = item.get("priority", "none")
@@ -117,6 +155,9 @@ def convert_to_training_format(
     if not all_aks and primary_ak:
         all_aks = [primary_ak]
 
+    item_id = item.get("id")
+    is_disagreement = bool(disagreement_ids and item_id in disagreement_ids)
+
     return {
         "input": {
             "title": item.get("title", ""),
@@ -133,19 +174,38 @@ def convert_to_training_format(
         },
         "provenance": {
             "source_type": "news",
-            "item_id": item.get("id"),
+            "item_id": item_id,
+            "is_disagreement": is_disagreement,
             "exported_at": datetime.now().isoformat()
         }
-    }
+    }, None
 
 
-def create_splits(items: list[dict], train_ratio: float = 0.7, val_ratio: float = 0.15):
-    """Create stratified train/val/test splits."""
+def create_splits(
+    items: list[dict],
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15,
+    disagreement_ids: set[int] | None = None,
+):
+    """Create stratified train/val/test splits.
+
+    Disagreement items (where classifier got it wrong vs LLM) are forced into the
+    training split so the classifier learns from its mistakes. Non-disagreement items
+    get the standard stratified 70/15/15 split.
+    """
     random.seed(RANDOM_SEED)
 
-    # Separate relevant and irrelevant
-    relevant = [i for i in items if i["labels"]["relevant"]]
-    irrelevant = [i for i in items if not i["labels"]["relevant"]]
+    # Separate disagreements (always go to training)
+    if disagreement_ids:
+        disagreements = [i for i in items if i["provenance"].get("item_id") in disagreement_ids]
+        non_disagreements = [i for i in items if i["provenance"].get("item_id") not in disagreement_ids]
+    else:
+        disagreements = []
+        non_disagreements = items
+
+    # Stratified split on non-disagreement items only
+    relevant = [i for i in non_disagreements if i["labels"]["relevant"]]
+    irrelevant = [i for i in non_disagreements if not i["labels"]["relevant"]]
 
     random.shuffle(relevant)
     random.shuffle(irrelevant)
@@ -159,7 +219,8 @@ def create_splits(items: list[dict], train_ratio: float = 0.7, val_ratio: float 
     rel_train, rel_val, rel_test = split_list(relevant, train_ratio, val_ratio)
     irr_train, irr_val, irr_test = split_list(irrelevant, train_ratio, val_ratio)
 
-    train = rel_train + irr_train
+    # All disagreements go to training
+    train = rel_train + irr_train + disagreements
     val = rel_val + irr_val
     test = rel_test + irr_test
 
@@ -194,6 +255,7 @@ def main():
     print("=" * 60)
     print("Export Training Data from News-Aggregator")
     print("=" * 60)
+    print(f"API: {API_URL}")
 
     # Show filter settings
     if args.min_content_length > 0 or args.min_confidence > 0:
@@ -211,23 +273,38 @@ def main():
         print("No items found!")
         sys.exit(1)
 
-    # Convert to training format (with optional filtering)
+    # Fetch classifier-vs-LLM disagreements
+    print("\nFetching classifier-LLM disagreements...")
+    disagreement_ids = fetch_disagreement_ids()
+    print(f"  Found {len(disagreement_ids)} disagreement items")
+
+    # Convert to training format (with filtering)
     print("\nConverting to training format...")
     training_data = []
-    filtered_count = 0
+    llm_filtered = 0
+    quality_filtered = 0
     for item in all_items:
-        converted = convert_to_training_format(
+        converted, reason = convert_to_training_format(
             item,
             min_content_length=args.min_content_length,
-            min_confidence=args.min_confidence
+            min_confidence=args.min_confidence,
+            disagreement_ids=disagreement_ids,
         )
         if converted is not None:
             training_data.append(converted)
+        elif reason == "no_llm":
+            llm_filtered += 1
         else:
-            filtered_count += 1
+            quality_filtered += 1
 
-    if filtered_count > 0:
-        print(f"  Filtered out: {filtered_count} items ({filtered_count/len(all_items)*100:.1f}%)")
+    if llm_filtered > 0:
+        print(f"  Excluded: {llm_filtered} items without LLM processing")
+    if quality_filtered > 0:
+        print(f"  Excluded: {quality_filtered} items below content/confidence thresholds")
+
+    if not training_data:
+        print("No training data after filtering!")
+        sys.exit(1)
 
     # Stats
     relevant = [i for i in training_data if i["labels"]["relevant"]]
@@ -239,6 +316,14 @@ def main():
     print(f"Total items:     {len(training_data)}")
     print(f"Relevant:        {len(relevant)} ({len(relevant)/len(training_data)*100:.1f}%)")
     print(f"Irrelevant:      {len(irrelevant)} ({len(irrelevant)/len(training_data)*100:.1f}%)")
+
+    # Disagreement stats
+    disagreement_items = [i for i in training_data if i["provenance"].get("is_disagreement")]
+    print(f"\nClassifier-LLM disagreements:")
+    print(f"  Found:           {len(disagreement_ids)}")
+    print(f"  In training data: {len(disagreement_items)} (after filters)")
+    if len(disagreement_ids) > len(disagreement_items):
+        print(f"  Excluded:         {len(disagreement_ids) - len(disagreement_items)} (filtered by content/confidence)")
 
     # Priority distribution (relevant only)
     priority_dist = Counter(i["labels"]["priority"] for i in relevant)
@@ -262,9 +347,10 @@ def main():
         print("\n[DRY RUN] No files written")
         return
 
-    # Create splits
-    print("\nCreating train/val/test splits (70/15/15, stratified)...")
-    train, val, test = create_splits(training_data)
+    # Create splits (disagreements forced into training)
+    print(f"\nCreating train/val/test splits (70/15/15, stratified)...")
+    print(f"  ({len(disagreement_items)} disagreement items forced into training split)")
+    train, val, test = create_splits(training_data, disagreement_ids=disagreement_ids)
 
     # Save
     output_dir = Path(args.output)
@@ -282,9 +368,12 @@ def main():
     # Save stats
     stats = {
         "total": len(training_data),
-        "filtered_out": filtered_count,
+        "filtered_no_llm": llm_filtered,
+        "filtered_quality": quality_filtered,
         "relevant": len(relevant),
         "irrelevant": len(irrelevant),
+        "disagreements_found": len(disagreement_ids),
+        "disagreements_in_training": len(disagreement_items),
         "train_size": len(train),
         "validation_size": len(val),
         "test_size": len(test),

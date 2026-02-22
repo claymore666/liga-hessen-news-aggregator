@@ -16,6 +16,7 @@ class GPU1Status(BaseModel):
     enabled: bool
     available: bool  # Host reachable (SSH port)
     ollama_available: bool  # Ollama API reachable
+    force_active: bool  # Manual override for active hours
     was_sleeping: bool | None = None  # None when unavailable
     wake_time: str | None = None
     last_activity: float | None = None
@@ -54,6 +55,7 @@ async def get_gpu1_status() -> GPU1Status:
             enabled=False,
             available=False,
             ollama_available=False,
+            force_active=False,
             was_sleeping=False,
             wake_time=None,
             last_activity=None,
@@ -140,6 +142,7 @@ async def get_gpu1_status() -> GPU1Status:
         enabled=True,
         available=available,
         ollama_available=ollama_available,
+        force_active=power_mgr.force_active,
         # Only show wake state when gpu1 is available; otherwise it's meaningless
         was_sleeping=power_mgr._was_sleeping if available else None,
         wake_time=power_mgr._wake_time.isoformat() if available and power_mgr._wake_time else None,
@@ -157,4 +160,55 @@ async def get_gpu1_status() -> GPU1Status:
         logged_in_users=logged_in_users,
         mac_address=power_mgr.mac_address,
         ssh_host=power_mgr.ssh_host,
+    )
+
+
+class ForceProcessResponse(BaseModel):
+    """Response for force-process trigger."""
+
+    status: str  # started, already_active, wake_failed, not_enabled
+    message: str
+
+
+@router.post("/admin/gpu1/force-process", response_model=ForceProcessResponse)
+async def force_process() -> ForceProcessResponse:
+    """Trigger a one-time LLM queue drain outside active hours.
+
+    Sets force-active override on the power manager and wakes gpu1.
+    The LLM worker will naturally pick up queued items. When the queue
+    is drained and gpu1 goes idle, the override auto-resets.
+    """
+    from services.gpu1_power import get_power_manager
+
+    power_mgr = get_power_manager()
+
+    if power_mgr is None:
+        return ForceProcessResponse(
+            status="not_enabled",
+            message="GPU1 power management is not enabled",
+        )
+
+    # If already within active hours (naturally or via force), just confirm
+    if power_mgr.is_within_active_hours() and await power_mgr.is_available():
+        return ForceProcessResponse(
+            status="already_active",
+            message="gpu1 is already active and processing",
+        )
+
+    # Set force-active flag before ensure_available so the active hours
+    # check inside ensure_available passes
+    power_mgr.set_force_active()
+
+    if await power_mgr.ensure_available():
+        return ForceProcessResponse(
+            status="started",
+            message="gpu1 woken with force-active override. "
+            "Will process queue and auto-shutdown when idle.",
+        )
+
+    # Wake failed — clear the flag
+    power_mgr.clear_force_active()
+    return ForceProcessResponse(
+        status="wake_failed",
+        message="Failed to wake gpu1. Force-active override cleared.",
     )

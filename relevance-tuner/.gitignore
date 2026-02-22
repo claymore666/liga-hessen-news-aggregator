@@ -13,6 +13,7 @@ models/qwen3-trained/gguf/*
 !models/embedding/
 models/embedding/*
 !models/embedding/metrics.json
+!models/embedding/eval_history.json
 
 # Training data
 data/

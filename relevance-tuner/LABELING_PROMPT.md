@@ -22,6 +22,8 @@ Zusammen betreiben diese Verbände in Hessen:
 - 113.000 Beschäftigte
 - 160.000 Ehrenamtliche
 
+Die Liga ist eine LOBBY- UND ADVOCACY-ORGANISATION. Ihre Kernaufgabe ist die Interessenvertretung der Freien Wohlfahrtspflege gegenüber Politik und Öffentlichkeit in Hessen. Die einzelnen Mitgliedsverbände haben ihre eigene Öffentlichkeitsarbeit — die Liga kümmert sich um das politische Gesamtbild.
+
 === ARBEITSKREISE (AK) DER LIGA ===
 
 AK1 - GRUNDSATZ UND SOZIALPOLITIK:
@@ -134,8 +136,8 @@ QAG KLIMASCHUTZ:
 ÜBERGREIFENDE THEMEN (können mehrere AKs/QAGs betreffen):
 - Bürgergeld (früher Hartz IV) - betrifft AK1, AK2, AK5
 - Fachkräftemangel im Sozialbereich - betrifft alle AKs
-- Ehrenamtliches Engagement - Liga hat 160.000 Ehrenamtliche
-- Tafeln und Lebensmittelausgaben
+- Ehrenamtliches Engagement - NUR relevant wenn politisch/strukturell (Ehrenamtspolitik, Förderung, Rahmenbedingungen), NICHT wenn reine Berichterstattung über Ehrenamtliche
+- Tafeln und Lebensmittelausgaben - NUR relevant wenn politisch/strukturell (Finanzierung, Armutspolitik), NICHT wenn reine Eventmeldung
 - Gemeinnützigkeitsrecht und Steuerrecht für NPOs
 - Tarifpolitik TVöD/TV-L Sozial- und Erziehungsdienst
 
@@ -154,179 +156,167 @@ Die Liga vertritt die Interessen von:
 - Suchtkranke
 - Überschuldete Menschen
 
+WICHTIG: Die bloße Erwähnung einer Zielgruppe macht einen Artikel NICHT automatisch relevant! Es muss ein politischer, struktureller oder finanzieller Handlungsbezug für die Liga bestehen. Beispiel: "Geflüchtete feiern Kulturfest" = NICHT relevant. "Geflüchtete verlieren Zugang zu Migrationsberatung nach Kürzungen" = RELEVANT.
+
+=== KERNFRAGE FÜR RELEVANZ ===
+
+Stelle dir ZWEI Fragen:
+1. "Geht es um ein GESETZ, einen HAUSHALT, eine STRUKTURELLE KRISE oder eine POLITISCHE ENTSCHEIDUNG im Sozialbereich?"
+2. "Kann die Liga Hessen diesen Artikel für ihre Lobbyarbeit NUTZEN?"
+
+Wenn BEIDE Fragen mit Nein beantwortet werden → NICHT RELEVANT.
+
+WICHTIG: Ein Artikel der nur ein Thema ERWÄHNT das die Liga betrifft, ist NICHT automatisch relevant!
+- Dass ein Wohlfahrtsverband namentlich erwähnt wird → NICHT automatisch relevant
+- Dass "Gesundheit", "Kinder" oder "Pflege" im Titel steht → NICHT automatisch relevant
+- Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt gehen
+- Die einzelnen Verbände haben eigene Öffentlichkeitsarbeit — die Liga braucht nur Nachrichten die ihre politische Advocacy-Arbeit betreffen
+
 === RELEVANZKRITERIEN ===
 
 Markiere einen Artikel als RELEVANT (true), wenn er:
 
-1. DIREKTE LIGA-THEMEN betrifft:
-   - Einen der sechs Wohlfahrtsverbände namentlich erwähnt
-   - Soziale Einrichtungen in Hessen betrifft (Kitas, Pflegeheime, Beratungsstellen...)
-   - Sozialpolitische Maßnahmen der Landesregierung
-   - Gesetze und Verordnungen im Sozialbereich
+1. LIGA DIREKT BETROFFEN:
+   - Liga Hessen selbst wird erwähnt, angesprochen, kritisiert oder gelobt
+   - Liga-Preis, Liga-Veranstaltungen, Liga-Stellungnahmen werden referenziert
+   - Politische Angriffe auf die Freie Wohlfahrtspflege oder Liga-Positionen (jede Partei)
 
-2. HAUSHALT UND FINANZEN behandelt:
-   - Bundeshaushalt (Sozialausgaben, Kürzungen, Förderungen)
-   - Landeshaushalt Hessen
-   - Kommunale Haushalte mit Auswirkungen auf Soziales
-   - Förderprogramme für soziale Einrichtungen
+2. GESETZE UND POLITIK die Liga-Einrichtungen betreffen:
+   - Sozialpolitische Gesetze/Verordnungen (Bund, Land Hessen, Kommunen)
+   - Entscheidungen der Landesregierung mit konkreten Auswirkungen auf Soziales
+   - Hessische MdL/Politiker mit Aussagen die legislative Konsequenzen haben
+   - Koalitionsverhandlungen/-vereinbarungen mit Sozialbezug
+
+3. HAUSHALT UND FINANZEN:
+   - Haushaltskürzungen oder -erhöhungen im Sozialbereich
+   - Förderprogramme für soziale Einrichtungen (neu, geändert, gestrichen)
+   - Landesprogramme mit Sozialbezug (Hessengeld, Wohnbauförderung, Kitaförderung, etc.)
+   - Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung)
    - Finanzierung von Kitas, Pflege, Beratungsstellen
    - Tarifverhandlungen im öffentlichen Dienst/Sozialbereich
 
-3. ZIELGRUPPEN DER LIGA betrifft:
-   - Nachrichten über Pflegebedürftige, Behinderte, Geflüchtete, Kinder, Familien, Arme
-   - Auch: Statistiken, Studien, Berichte über diese Gruppen
-   - Lebenssituation dieser Gruppen in Hessen
+4. STUDIEN UND DATEN die Liga-Positionen stärken:
+   - Armutszahlen, Pflegestatistiken, Fachkräftemangel-Erhebungen
+   - Berichte die systemische Probleme im Sozialbereich belegen
+   - Daten die Liga in Stellungnahmen und Positionspapieren zitieren kann
 
-4. HESSISCHE POLITIK mit Sozialbezug:
-   - Entscheidungen der Landesregierung zu Sozialthemen
-   - Ministerin für Soziales (aktuell: Heike Hofmann, SPD, HMAIJS)
-   - Landtagsdebatten zu sozialen Themen
-   - Koalitionsverhandlungen/-vereinbarungen mit Sozialbezug
-   - Kommunalwahlen mit Auswirkungen auf Sozialpolitik
+5. SOZIALER WOHNUNGSBAU:
+   - Kostenprobleme, Förderprogramme, strukturelle Hindernisse
+   - Sozialbindungen, Belegungsrechte, Wohnraumförderung
 
-5. ARBEITSMARKT UND WIRTSCHAFT mit Sozialbezug:
-   - Arbeitslosigkeit und Beschäftigungspolitik
-   - Fachkräftemangel in sozialen Berufen
-   - Mindestlohn und Tarifpolitik
-   - Armut und soziale Ungleichheit
-   - Soziale Ungerechtigkeit und Verteilungsfragen
-   - Wirtschaftskrisen mit Auswirkungen auf Soziales
-   - Inflation und Preissteigerungen (belasten arme Haushalte)
-   - Energiearmut und Energiekosten
+6. SYSTEMISCHE KRISEN die politisches Handeln erfordern:
+   - Kita-Platzmangel, Pflegekollaps, Personalnotstand im Sozialbereich
+   - Einrichtungsschließungen mit struktureller Bedeutung (nicht Einzelfälle)
+   - Politische Kehrtwenden die Liga-Errungenschaften gefährden
 
-6. BILDUNGSPOLITIK:
-   - Schulpolitik (betrifft Kinder und Jugendliche)
+7. ARBEITSMARKT mit strukturellem Sozialbezug:
+   - Fachkräftemangel in sozialen Berufen (politisch adressierbar)
+   - Tarifpolitik, Mindestlohn mit Auswirkung auf Sozialbereich
+   - Armut und soziale Ungleichheit als politisches Thema
+
+8. BILDUNGSPOLITIK mit Bezug zu Sozialbereich:
    - Ausbildung in sozialen Berufen (Erzieher, Pfleger, Sozialarbeiter)
-   - Inklusion in Schulen
+   - Inklusion in Schulen (betrifft AK4)
+   - Schulpolitik wenn sie Schulsozialarbeit oder Jugendhilfe betrifft (AK5)
+   - NICHT: Allgemeine Schulpolitik ohne Sozialbezug (Lehrpläne, Digitalisierung an Schulen)
 
 Markiere einen Artikel als NICHT RELEVANT (false), wenn er:
-- Reine Sport-Nachrichten ohne Sozialbezug
-- Reine Kultur-/Entertainment-Nachrichten
-- Kriminalität ohne Sozialbezug (normaler Diebstahl, Verkehrsunfälle)
-- Wetter und Natur ohne Sozialbezug
-- Internationale Politik ohne Hessen/Deutschland-Bezug
-- Wirtschaftsnachrichten ohne Bezug zu Armut/Beschäftigung/Soziales
-- Lokale Ereignisse ohne übergeordnete Bedeutung (Flohmärkte, Feste)
+- Reiner Sport, Entertainment, Prominente, Lifestyle, Verbrauchertipps
+- Kochen, Haustiere, Garten, Mode, Reisen, Technik-Gadgets — auch wenn "Gesundheit" oder "Familie" im Titel steht
+- Kriminalität ohne sozialpolitischen Bezug
+- Wetter, Verkehr, Unfälle, einzelne Unglücke/Todesfälle
+- Internationale Nachrichten OHNE direkten Bezug zu deutscher Sozialpolitik (US-Gesundheit, Auslandskriminalität, etc.)
+- Ausländische Innenpolitik (Bolsonaro, Trump, etc.)
+- Personalien/Beförderungen bei Mitgliedsverbänden UND bei Parteien (Vorstandswechsel, Parteitagswahlen in Gremien)
+- PR, Marketing, Events und Galas von Mitgliedsverbänden (Spendenaktionen, Jubiläen, Ehrenamtsfeiern)
+- Humanitäre Hilfsaktionen von Verbänden (Ukraine-Hilfe, Auslandseinsätze) — operativ, nicht politisch
+- Allgemeine Berichte über Verbandsarbeit ohne politischen/strukturellen Bezug
+- Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen
+- Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen, Gratisaktionen)
+- Internationale/EU-Berichte ohne konkreten Bezug zu deutscher Umsetzung
+- Umfragen/Berichte aus ANDEREN Bundesländern ohne bundesweiten Politikbezug (z.B. "Brandenburger unzufrieden mit Pflege" = NICHT relevant, es sei denn es geht um ein Bundesgesetz)
+- Lokale Einzelfälle ohne strukturelle/politische Bedeutung (einzelne Unfälle, Falschparker)
+- Gedenkveranstaltungen, Jubiläen, historische Rückblicke ohne aktuellen Politikbezug
+- Wirtschaftsnachrichten ohne Bezug zu Sozialbereich
+- Bildungspolitik ohne Bezug zu Sozialberufen (Erzieher, Pfleger), Kita-Fachkräften oder Inklusion
+- Wahlkampfrhetorik und Parteipositionierung ohne konkreten Gesetzesvorschlag
+- Architektur, Städtebau, Kultur, Ausstellungen ohne Sozialbezug
+- Medienregulierung (ZDF, ARD, Social Media) AUSSER es betrifft direkt Jugendschutz als Gesetzesvorschlag
 
-=== GRENZFÄLLE - EHER RELEVANT ===
+=== GRENZFÄLLE ===
 
-Im Zweifel RELEVANT markieren bei:
-- DRK im Kontext von Rettungseinsätzen (DRK ist Liga-Mitglied)
-- Angriffe auf Rettungskräfte (betrifft DRK-Personal)
-- Antisemitismus-Berichte (Jüdische Gemeinden sind Liga-Mitglied)
-- Gewalt gegen Frauen (Frauenhäuser sind Liga-Thema)
-- Obdachlose im Winter (Kältehilfe ist Liga-Thema)
-- Silvesterkrawalle wenn Rettungskräfte betroffen
-- Babynahrung-Rückrufe (betrifft Familien - AK5)
-- Schulschließungen (betrifft Kinder - AK5)
+EHER RELEVANT (politischer/struktureller Bezug prüfen):
+- Antisemitismus-Berichte MIT politischer Dimension (Jüdische Gemeinden sind Liga-Mitglied)
+- Gewalt gegen Frauen wenn es um Frauenhaus-Finanzierung oder Schutzkonzepte geht
+- Obdachlose im Winter wenn es um Kältehilfe-Politik oder Finanzierung geht
+- Angriffe auf Rettungskräfte wenn es eine politische Debatte auslöst
 
-=== PRIORITÄTEN - ENTSCHEIDUNGSBAUM ===
+EHER NICHT RELEVANT (kein Lobbying-Nutzen):
+- DRK-Rettungseinsätze als Routinemeldung (operativ, nicht politisch)
+- Einzelne Babynahrung-Rückrufe (Verbraucherschutz, nicht Liga-Thema)
+- Einzelne Schulschließungen ohne bildungspolitische Debatte
 
-Frage dich: "Muss die Liga JETZT handeln?"
+=== PRIORITÄT = SCHWERE DER GESELLSCHAFTLICHEN AUSWIRKUNG ===
 
-CRITICAL (kritisch) - Liga muss SOFORT reagieren (24-48h):
-TRIGGER-WÖRTER: Kürzung, Streichung, Haushaltssperre, Schließung, Insolvenz, Notfall
+Priorität richtet sich nach der SCHWERE des gesellschaftlichen Impacts, NICHT primär nach Zeitdruck.
+Ein Haushaltskürzung die erst in 3 Monaten greift ist trotzdem HIGH weil der Impact schwerwiegend ist.
+Eine vage Politikeraussage von heute ist LOW auch wenn sie aktuell ist.
+
+HIGH — Schwerwiegender gesellschaftlicher Impact:
 BEISPIELE:
-- "Land Hessen kürzt Mittel für Migrationsberatung um 30%"
-- "Kita-Träger meldet Insolvenz an"
-- "Gesetzentwurf zur Pflegereform eingebracht" (Stellungnahmefrist!)
-- "Haushaltssperre für Sozialministerium"
-- Existenzbedrohung für Einrichtungen oder Dienste
-- Neue Gesetze mit kurzer Frist für Stellungnahmen
-ENTSCHEIDUNGSREGEL: Wenn Liga eine Pressemitteilung oder Stellungnahme innerhalb von 2 Tagen abgeben müsste → CRITICAL
+- "Land Hessen kürzt Mittel für Migrationsberatung um 30%" (schwerer Impact auf Beratungsstruktur)
+- "Kita-Träger meldet Insolvenz an" (Versorgungslücke für Familien)
+- "Gesetzentwurf zur Pflegereform eingebracht" (strukturelle Veränderung)
+- Liga Hessen selbst wird erwähnt, angesprochen, angegriffen oder in Frage gestellt
+- Liga-Preis, Liga-Veranstaltungen — Liga ist direkt beteiligt
+- Studien/Daten die Liga-Positionen stark untermauern ("Armutsbericht: 20% der Kinder in Hessen betroffen")
+- Hessische MdL/Politiker mit Aussagen die konkrete legislative Konsequenzen haben
+- Politische Angriffe auf Wohlfahrtspflege oder Liga-Positionen (jede Partei, inkl. AfD)
+- Politische Kehrtwenden die Liga-Errungenschaften gefährden (Abschiebemoratorium aufgehoben, etc.)
+- Haushaltskürzungen bei MBE, JMD, PSZ, Freiwilligendiensten
+- Einrichtungsschließungen mit struktureller Bedeutung
+- Förderprogramme die auslaufen oder gestrichen werden
+- Anhörungen im Landtag/Bundestag zu Sozialgesetzen (konkreter Interventionspunkt für Liga)
+ENTSCHEIDUNGSREGEL: Der Impact ist schwerwiegend für Gesellschaft/Liga-Zielgruppen, ODER Liga ist direkt betroffen/angesprochen
 
-HIGH (hoch) - Liga sollte zeitnah reagieren (1-2 Wochen):
-TRIGGER-WÖRTER: Entwurf, Anhörung, Reform, Förderprogramm, Stellenabbau, Änderung
+MEDIUM — Moderater gesellschaftlicher Impact:
 BEISPIELE:
-- "Referentenentwurf zum Kita-Gesetz veröffentlicht"
-- "Anhörung im Landtag zu Pflegegesetz"
-- "Neue Förderrichtlinie für Beratungsstellen"
-- "Tarifverhandlungen im Sozialbereich gestartet"
-- Strukturelle Veränderungen die Liga-Arbeit betreffen
-- Politische Entscheidungen in Vorbereitung
-ENTSCHEIDUNGSREGEL: Wenn Liga in den nächsten 2 Wochen Position beziehen sollte → HIGH
+- "Ministerin kündigt Reform der Eingliederungshilfe an" (noch unkonkret, aber wichtig zu beobachten)
+- "Neue Förderrichtlinie für Beratungsstellen" (betrifft Liga-Einrichtungen)
+- Tarifverhandlungen im Sozialbereich
+- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten (NUR wenn bundesweite Auswirkung oder Hessen-Bezug erkennbar — reine Landespolitik anderer Bundesländer ist NICHT relevant)
+- Gesetzesänderungen im Sozialbereich in Vorbereitung
+- Streiks im öffentlichen Dienst / ÖPNV / Sozialbereich (betrifft soziale Infrastruktur)
+- Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
+- Jugendschutz-Gesetzesvorschläge (Social-Media-Altersgrenzen, etc.)
+- Konkrete Vorschläge zur Gesundheitsversorgung (Rezeptänderungen, Versorgungsstrukturen)
+ENTSCHEIDUNGSREGEL: Liga sollte das beobachten und ggf. Position beziehen, aber der Impact ist noch nicht gravierend
 
-MEDIUM (mittel) - Liga sollte beobachten:
-TRIGGER-WÖRTER: Debatte, Diskussion, Forderung, Kritik, Studie, Bericht, plant
+LOW — Geringer Impact, aber relevant für Liga-Arbeit:
 BEISPIELE:
-- "Ministerin kündigt Reform der Eingliederungshilfe an"
-- "Studie zeigt: Fachkräftemangel in Pflege verschärft sich"
-- "Opposition fordert mehr Geld für Kitas"
-- "Bericht: Kinderarmut in Hessen gestiegen"
-- Politische Aussagen und Positionierungen
-- Statistische Berichte und Studien
-- Ankündigungen ohne konkreten Zeitplan
-ENTSCHEIDUNGSREGEL: Wenn Liga das Thema im Blick behalten sollte, aber keine sofortige Aktion nötig → MEDIUM
-
-LOW (niedrig) - Zur Kenntnis nehmen:
-TRIGGER-WÖRTER: Hintergrund, Porträt, Jahresrückblick, allgemein
-BEISPIELE:
-- "Porträt einer Altenpflegerin"
-- "Geschichte der AWO in Hessen"
-- "Ehrenamtliche berichten von ihrer Arbeit"
-- Positive Berichterstattung über Liga-Arbeit
-- Hintergrundinformationen ohne Handlungsbedarf
-- Lokale Einzelfälle ohne übergeordnete Bedeutung
-ENTSCHEIDUNGSREGEL: Wenn relevant für Liga, aber keine Aktion erforderlich → LOW
-
-=== LIGA DRINGLICHKEITSSTUFEN (aus interner Dokumentation) ===
-
-🔴 EILIG (= CRITICAL):
-- Haushaltskürzungen die Sozialeinrichtungen betreffen
-- Gesetzeseinbringungen mit kurzen Fristen
-- Reaktionszeit: unter 24 Stunden
-- Liga muss sofort Pressemitteilung oder Stellungnahme vorbereiten
-
-🟠 WICHTIG (= HIGH):
-- Anhörungsfristen im Landtag/Bundestag
-- Richtlinienentwürfe der Ministerien
-- Reaktionszeit: innerhalb 1 Woche
-- Liga sollte Position erarbeiten
-
-🟡 BEOBACHTEN (= MEDIUM):
-- Politische Aussagen und Parteipositionierungen
-- Studien und Berichte
-- Entwicklungen die sich anbahnen
-- Liga sollte Thema verfolgen
-
-🔵 INFORMATION (= LOW):
-- Hintergrundberichte
-- Zur Kenntnis, keine Aktion nötig
-- Positive Berichterstattung
+- Hintergrundberichte mit nützlichem Kontext
+- Politikeraussagen zu Liga-Themen aber ohne konkreten Plan ("Boris Rhein: Wir brauchen mehr Kita-Plätze" — ohne Gesetzentwurf/Budget)
+- Allgemeine politische Debatten ohne konkreten Handlungspunkt
+- Entwicklungen die sich erst anbahnen, noch unkonkret
+- Bildungspolitik mit Bezug zu Sozialberufen, Erzieherausbildung oder Inklusion
+ENTSCHEIDUNGSREGEL: Relevant für Liga-Kontext, aber kein konkreter Handlungsbedarf und geringer gesellschaftlicher Impact
+ABGRENZUNG ZU NICHT RELEVANT: LOW = der Artikel hat konkreten thematischen Bezug zu Liga-Themen (Kita, Pflege, Migration, etc.) auch wenn keine Aktion nötig ist. NICHT RELEVANT = der Artikel hat keinen oder nur oberflächlichen Bezug zu Liga-Arbeit.
 
 === PRIORITÄTS-SCHNELLTEST ===
 
-1. Enthält "Kürzung", "Streichung", "Schließung", "Insolvenz"? → CRITICAL
-2. Enthält "Gesetzentwurf", "Anhörung", "Frist", "Reform"? → CRITICAL oder HIGH
-3. Enthält "Haushalt", "Etat", "Förderung"? → Meist HIGH oder CRITICAL
-4. Ist es eine politische Ankündigung/Forderung? → Meist MEDIUM
-5. Ist es ein Bericht/Studie/Statistik? → Meist MEDIUM oder LOW
-6. Ist es ein Einzelfall/Porträt ohne strukturelle Bedeutung? → LOW
-
-=== WICHTIGE KONTEXTE FÜR PRIORITÄT ===
-
-IMMER CRITICAL wenn:
-- Bundeshaushalt: Kürzungen bei MBE, JMD, PSZ, Freiwilligendiensten
-- Landeshaushalt Hessen: Sozialausgaben betroffen
-- Einrichtungsschließungen drohen
-- Förderprogramme auslaufen/gestrichen werden
-
-IMMER HIGH wenn:
-- Gesetzesänderungen im Sozialbereich (SGB, BTHG, Pflegegesetz, KJHG)
-- Tarifverhandlungen TVöD/TV-L Sozial- und Erziehungsdienst
-- Neue Förderrichtlinien erscheinen
-- Ministerin/Minister kündigt konkrete Maßnahmen an
-
-EHER MEDIUM:
-- Allgemeine politische Debatten
-- Oppositionsforderungen ohne Mehrheit
-- Studien und Statistiken
-- Berichte über Zustände (ohne konkrete politische Maßnahmen)
+1. Wird Liga Hessen direkt erwähnt/angesprochen/angegriffen? → HIGH
+2. Enthält Kürzung, Streichung, Schließung, Insolvenz im Sozialbereich? → HIGH
+3. Studie/Statistik die Liga-Position stark stützt (mit konkreten Zahlen)? → HIGH
+4. Gesetzentwurf, Anhörung, Reform im Sozialbereich? → HIGH oder MEDIUM
+5. Haushalt, Etat, Förderung mit Auswirkung auf Soziales? → Meist HIGH
+6. Politische Ankündigung mit konkretem Plan? → MEDIUM
+7. Politische Aussage ohne konkreten Plan? → LOW
+8. Hintergrundbericht? → LOW
 
 === OUTPUT FORMAT ===
 
 Für jeden Artikel ausgeben (eine JSON-Zeile):
-{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|"AK2"|"AK3"|"AK4"|"AK5"|"QAG_DIGITALISIERUNG"|"QAG_WOHNEN"|"QAG_KLIMASCHUTZ"|null, "priority": "critical"|...|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}
+{"title": "Originaltitel", "relevant": true/false, "ak": "AK1"|"AK2"|"AK3"|"AK4"|"AK5"|"QAG_DIGITALISIERUNG"|"QAG_WOHNEN"|"QAG_KLIMASCHUTZ"|null, "priority": "high"|"medium"|"low"|null, "summary": "...", "detailed_analysis": "...", "argumentationskette": [...], "reasoning": "..."}
 
 === FELDER summary, detailed_analysis UND argumentationskette ===
 
