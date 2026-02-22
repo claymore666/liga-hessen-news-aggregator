@@ -66,7 +66,7 @@ def call_ollama(model: str, prompt: str, system: str) -> dict:
         "prompt": prompt,
         "system": system,
         "stream": False,
-        "options": {"temperature": 0.3, "num_predict": 2048},
+        "options": {"temperature": 0.3, "num_predict": 4096},
     }
 
     start = time.time()
@@ -80,8 +80,13 @@ def call_ollama(model: str, prompt: str, system: str) -> dict:
         prompt_eval_duration = data.get("prompt_eval_duration", 0)
         tok_per_sec = eval_count / (eval_duration / 1e9) if eval_duration > 0 else 0
 
+        # Qwen3 thinking mode: response may be empty with content in "thinking"
+        response = data.get("response", "")
+        if not response and data.get("thinking"):
+            response = data["thinking"]
+
         return {
-            "response": data.get("response", ""),
+            "response": response,
             "wall_time_s": round(elapsed, 1),
             "tokens_generated": eval_count,
             "tok_per_sec": round(tok_per_sec, 1),
