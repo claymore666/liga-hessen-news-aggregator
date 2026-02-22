@@ -84,6 +84,29 @@ const triggerForceProcess = async () => {
   }
 }
 
+const cancelForceProcess = async () => {
+  forceProcessing.value = true
+  forceProcessMessage.value = ''
+  forceProcessError.value = false
+  try {
+    const response = await adminApi.cancelForceProcessGpu1()
+    const data = response.data
+    if (data.status === 'cleared') {
+      forceProcessMessage.value = 'Manueller Modus beendet'
+    } else {
+      forceProcessMessage.value = data.message
+      forceProcessError.value = data.status !== 'not_active'
+    }
+    await fetchGpu1Status()
+  } catch (e) {
+    forceProcessMessage.value = 'Fehler beim Beenden'
+    forceProcessError.value = true
+    console.error('Cancel force process failed:', e)
+  } finally {
+    forceProcessing.value = false
+  }
+}
+
 // Fetch functions
 const fetchStats = async () => {
   try {
@@ -596,6 +619,14 @@ onUnmounted(() => {
           >
             <BoltIcon class="h-4 w-4" />
             {{ forceProcessing ? 'Wird gestartet...' : 'Jetzt verarbeiten' }}
+          </button>
+          <button
+            v-if="gpu1Status.force_active"
+            class="inline-flex items-center gap-1.5 rounded-lg bg-gray-200 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-300 disabled:opacity-50"
+            :disabled="forceProcessing"
+            @click="cancelForceProcess"
+          >
+            {{ forceProcessing ? 'Wird gestoppt...' : 'Manuellen Modus beenden' }}
           </button>
           <span v-if="forceProcessMessage" class="text-sm" :class="forceProcessError ? 'text-red-600' : 'text-green-600'">
             {{ forceProcessMessage }}

@@ -352,6 +352,7 @@ export const adminApi = {
   // GPU1 Status & Control
   getGpu1Status: () => api.get<GPU1Status>('/admin/gpu1/status'),
   forceProcessGpu1: () => api.post<{ status: string; message: string }>('/admin/gpu1/force-process'),
+  cancelForceProcessGpu1: () => api.post<{ status: string; message: string }>('/admin/gpu1/cancel-force-process'),
 
   // Logs
   getLogs: (params?: { page?: number; page_size?: number; level?: string; logger?: string; search?: string }) =>

@@ -212,3 +212,29 @@ async def force_process() -> ForceProcessResponse:
         status="wake_failed",
         message="Failed to wake gpu1. Force-active override cleared.",
     )
+
+
+@router.post("/admin/gpu1/cancel-force-process", response_model=ForceProcessResponse)
+async def cancel_force_process() -> ForceProcessResponse:
+    """Cancel the force-active override, restoring normal active hours behavior."""
+    from services.gpu1_power import get_power_manager
+
+    power_mgr = get_power_manager()
+
+    if power_mgr is None:
+        return ForceProcessResponse(
+            status="not_enabled",
+            message="GPU1 power management is not enabled",
+        )
+
+    if not await power_mgr._get_force_active():
+        return ForceProcessResponse(
+            status="not_active",
+            message="Force-active override is not enabled",
+        )
+
+    await power_mgr.clear_force_active()
+    return ForceProcessResponse(
+        status="cleared",
+        message="Force-active override cleared. Normal active hours restored.",
+    )
