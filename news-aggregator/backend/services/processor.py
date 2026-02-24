@@ -34,6 +34,15 @@ Wenn BEIDE Fragen mit Nein beantwortet werden → NICHT RELEVANT.
 Ein Artikel der nur ein Thema ERWÄHNT das die Liga betrifft, ist NICHT automatisch relevant.
 Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt gehen.
 
+=== GEOGRAFISCHER FILTER (VOR Relevanzprüfung anwenden!) ===
+
+Die Liga ist NUR in HESSEN aktiv. Prüfe ZUERST den geografischen Bezug:
+- Lokale Nachrichten aus ANDEREN Bundesländern (Northeim, Sachsen, Brandenburg, Bayern, etc.) → NICHT RELEVANT
+- Auch wenn es um Pflege, Kitas, Soziales geht: Ein Seniorenheim in Niedersachsen oder Pflegekräfte in Sachsen betrifft die Liga NICHT
+- AUSNAHME: Bundesgesetze/-politik die ALLE Bundesländer betreffen (Rentenreform, Bürgergeld, BAMF) → relevant
+- AUSNAHME: Bundesweite Studien/Statistiken (Pflege-Übersicht Deutschland, Armutsbericht) → relevant
+- FAUSTREGEL: Wenn der Artikel nur über ein anderes Bundesland berichtet und kein Bundesgesetz thematisiert → NICHT RELEVANT
+
 HINWEIS: Social-Media-Posts von Politikern, Fraktionen oder Advocacy-Organisationen nach INHALT bewerten, nicht nach Format. Kurze Posts mit politischen Forderungen, Statistiken oder Positionierungen sind genauso relevant wie ausführliche Artikel.
 
 RELEVANT wenn:
