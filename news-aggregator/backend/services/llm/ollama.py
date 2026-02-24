@@ -66,7 +66,7 @@ class OllamaProvider(BaseLLMProvider):
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "think": False,  # Disable qwen3 thinking mode to ensure content is returned
+            "think": True,  # Enable qwen3 thinking mode — improves classification accuracy
             "keep_alive": "5m",  # Unload model from VRAM after 5 min idle
             "options": {
                 "temperature": temperature,
