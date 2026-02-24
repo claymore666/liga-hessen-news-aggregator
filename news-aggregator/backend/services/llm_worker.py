@@ -552,6 +552,35 @@ class LLMWorker:
                 # 2b. Main item analysis (with conversation messages for topic extraction)
                 analysis, conversation_messages = await processor.analyze_from_data_with_messages(item_data)
 
+                # 2b-post. Override self-contradictory LLM output
+                # Qwen3 sometimes says relevant=true but reasoning says "nicht politisch" / "eher operativ"
+                if (
+                    analysis.get("relevant") is True
+                    and (analysis.get("relevance_score") or 0) < 0.7
+                ):
+                    reasoning_lower = (analysis.get("reasoning") or "").lower()
+                    contradiction_phrases = [
+                        "nicht direkt politisch", "nicht politisch",
+                        "eher operativ", "rein operativ",
+                        "keine politische", "ohne politischen bezug",
+                        "ohne strukturellen bezug",
+                        "nicht direkt relevant", "nur bedingt relevant",
+                    ]
+                    if any(phrase in reasoning_lower for phrase in contradiction_phrases):
+                        matched = next(p for p in contradiction_phrases if p in reasoning_lower)
+                        logger.warning(
+                            f"LLM override for item {item_id}: reasoning contains '{matched}' "
+                            f"but relevant=True (score={analysis.get('relevance_score')}). "
+                            f"Flipping to irrelevant."
+                        )
+                        analysis["relevant"] = False
+                        analysis["priority"] = None
+                        analysis["priority_suggestion"] = None
+                        analysis["reasoning"] = (
+                            f"[AUTO-OVERRIDE: reasoning contradicts relevance decision — '{matched}'] "
+                            + (analysis.get("reasoning") or "")
+                        )
+
                 # 2c. Topic extraction via follow-up chat turn
                 topic = "Sonstiges"
                 topic_suggestion = None
