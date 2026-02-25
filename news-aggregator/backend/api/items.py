@@ -1225,18 +1225,26 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                 if analysis.get("detailed_analysis"):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
-                # New model returns "priority", old model used "priority_suggestion"
-                # Map LLM output to new priority system: critical→high, high→medium, medium→low, low→none
+                # Map LLM priority directly (matches llm_worker mapping)
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+                if analysis.get("relevant") is False:
+                    llm_priority = None
+
                 if llm_priority == "critical":
                     item.priority = Priority.HIGH
+                    item.priority_score = max(item.priority_score or 0, 95)
                 elif llm_priority == "high":
-                    item.priority = Priority.MEDIUM
+                    item.priority = Priority.HIGH
+                    item.priority_score = max(item.priority_score or 0, 90)
                 elif llm_priority == "medium":
+                    item.priority = Priority.MEDIUM
+                    item.priority_score = max(item.priority_score or 0, 70)
+                elif llm_priority == "low":
                     item.priority = Priority.LOW
+                    item.priority_score = max(item.priority_score or 0, 40)
                 else:
-                    # null or "low" = NONE (not relevant)
                     item.priority = Priority.NONE
+                    item.priority_score = min(item.priority_score or 100, 20)
 
                 # Set assigned_aks from LLM analysis
                 llm_aks = analysis.get("assigned_aks", [])

@@ -739,6 +739,9 @@ class LLMWorker:
                     except Exception as log_err:
                         logger.warning(f"Failed to log LLM analysis for item {item_id}: {log_err}")
 
+                    # Commit events and processing log
+                    await db.commit()
+
                 processed += 1
                 async with self._stats_lock:
                     self._stats["last_processed_at"] = datetime.utcnow().isoformat()
