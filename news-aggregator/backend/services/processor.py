@@ -41,6 +41,7 @@ Die Liga ist NUR in HESSEN aktiv. Prüfe ZUERST den geografischen Bezug:
 - Auch wenn es um Pflege, Kitas, Soziales geht: Ein Seniorenheim in Niedersachsen oder Pflegekräfte in Sachsen betrifft die Liga NICHT
 - AUSNAHME: Bundesgesetze/-politik die ALLE Bundesländer betreffen (Rentenreform, Bürgergeld, BAMF) → relevant
 - AUSNAHME: Bundesweite Studien/Statistiken (Pflege-Übersicht Deutschland, Armutsbericht) → relevant
+- AUSNAHME: Wenn Wohlfahrtsverbände (AWO, Caritas, Diakonie, DRK, Paritätischer) bundesweit Position beziehen oder strukturelle Forderungen stellen → relevant (Liga muss wissen was ihre Bundesverbände tun)
 - FAUSTREGEL: Wenn der Artikel nur über ein anderes Bundesland berichtet und kein Bundesgesetz thematisiert → NICHT RELEVANT
 
 HINWEIS: Social-Media-Posts von Politikern, Fraktionen oder Advocacy-Organisationen nach INHALT bewerten, nicht nach Format. Kurze Posts mit politischen Forderungen, Statistiken oder Positionierungen sind genauso relevant wie ausführliche Artikel.
@@ -49,13 +50,18 @@ RELEVANT wenn:
 - Sozialpolitische Gesetze/Verordnungen die Liga-Einrichtungen betreffen (Bund, Land Hessen, Kommunen)
 - Haushaltskürzungen oder -erhöhungen im Sozialbereich — auch Förderprogramme wie Hessengeld, Wohnbauförderung, Kitaförderung
 - Bundespolitische Entscheidungen die Kommunen/Wohlfahrt direkt betreffen (z.B. BAMF streicht Integrationskurs-Förderung, Bundeshaushalt kürzt Soziales, Rentenreform, Schuldenbremse mit Sozialauswirkungen, Elterngeld-Änderungen)
+- Bundesgesetze mit Kostenfolgen für Sozialeinrichtungen (z.B. Heizungsgesetz → Betriebskosten von Pflegeheimen, Kitas; Tariftreuegesetz → Vergaberecht)
 - Liga Hessen selbst wird erwähnt, angesprochen, kritisiert oder gelobt
 - Politische Angriffe auf Liga-Positionen oder Wohlfahrtspflege (auch von AfD, etc.)
-- Studien/Statistiken die Liga-Argumente stärken (Armutszahlen, Pflegenotstand, Fachkräftemangel)
+- Wohlfahrtsverbände (AWO, Caritas, Diakonie, DRK, Paritätischer) beziehen bundesweit Position zu Gesetzen/Reformen — Liga muss wissen was ihre Dachverbände fordern
+- Studien/Statistiken die Liga-Argumente stärken (Armutszahlen, Pflegenotstand, Fachkräftemangel) — auch bundesweit
+- Hessen-spezifische Daten und Statistiken im Sozialbereich (Lohnlücke Hessen, Ausweisungszahlen Hessen, Armutszahlen Hessen)
+- Aktivitäten von Liga-Mitgliedsverbänden IN HESSEN mit struktureller Bedeutung (z.B. AWO eröffnet Demenz-Angebot, Tafel eröffnet neuen Standort, Diakonie startet Projekt) — zeigt Liga-Arbeit vor Ort
 - Hessische Landespolitiker treffen Entscheidungen mit konkreten Auswirkungen auf Soziales
 - Tarifverhandlungen/Arbeitskämpfe im Sozialbereich oder öffentlichen Dienst
 - Systemische Krisen die politisches Handeln erfordern (Kita-Platzmangel, Pflegekollaps, Personalnotstand)
 - Konkrete Reformvorschläge im Gesundheits-/Pflege-/Sozialbereich (auch wenn noch im Entwurf)
+- Bundesweite Debatten zu Rente, Altersarmut, Pflegefinanzierung, Fachkräftemangel — diese betreffen Liga-Einrichtungen direkt
 - Streiks NUR wenn Sozialeinrichtungen direkt betroffen sind (Kita-Schließungen, Pflege-Streik, Sozialarbeit) — NICHT generische Verdi/ÖPNV-Streiks
 - Sozialer Wohnungsbau: Kostenprobleme, Förderprogramme, strukturelle Hindernisse
 
@@ -67,9 +73,9 @@ NICHT RELEVANT (relevant=false, priority=null):
 - Internationale Nachrichten OHNE direkten Bezug zu deutscher Sozialpolitik (US-Gesundheit, Auslandskriminalität, etc.)
 - Ausländische Innenpolitik (Bolsonaro, Trump, etc.)
 - Personalien/Beförderungen bei Mitgliedsverbänden UND bei Parteien (Vorstandswechsel, Parteitagswahlen in Gremien)
-- PR, Marketing, Events und Galas von Mitgliedsverbänden (Spendenaktionen, Jubiläen, Ehrenamtsfeiern)
+- PR, Marketing, Events und Galas von Mitgliedsverbänden (Spendenaktionen, Jubiläen, Ehrenamtsfeiern) — ABER: Neue Einrichtungen/Angebote von Liga-Mitgliedern IN HESSEN sind relevant (zeigt strukturelle Entwicklung)
 - Humanitäre Hilfsaktionen von Verbänden (Ukraine-Hilfe, Auslandseinsätze) — operativ, nicht politisch
-- Allgemeine Berichte über Verbandsarbeit ohne politischen/strukturellen Bezug
+- Allgemeine Berichte über Verbandsarbeit ohne politischen/strukturellen Bezug — ABER: Wenn Bundesverbände politische Positionen zu Gesetzen/Reformen beziehen → relevant
 - Generische Politiker-Aussagen ohne jeglichen Bezug zu Liga-Themen
 - Operative Nachrichten von Verbänden (Kleidercontainer, Blutspendetermine, Veranstaltungen, Gratisaktionen)
 - Internationale/EU-Berichte ohne konkreten Bezug zu deutscher Umsetzung
