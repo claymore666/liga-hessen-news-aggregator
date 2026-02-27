@@ -26,11 +26,13 @@ ARBEITSKREISE:
 
 === KERNFRAGE FÜR RELEVANZ ===
 
-Stelle dir ZWEI Fragen:
+Stelle dir DREI Fragen:
 1. "Geht es um ein GESETZ, einen HAUSHALT, eine STRUKTURELLE KRISE oder eine POLITISCHE ENTSCHEIDUNG im Sozialbereich?"
 2. "Kann die Liga Hessen diesen Artikel für ihre Lobbyarbeit NUTZEN?"
+3. "Betrifft es einen Liga-Mitgliedsverband (AWO, Caritas, Diakonie, DRK, Paritätischer) oder ein Liga-Kernthema (Pflege, Armut, Fachkräfte, Rente) auf Bundesebene?"
 
-Wenn BEIDE Fragen mit Nein beantwortet werden → NICHT RELEVANT.
+Wenn ALLE DREI Fragen mit Nein beantwortet werden → NICHT RELEVANT.
+Wenn Frage 3 mit JA: Prüfe genauer — bundesweite Pflege-/Renten-/Armutsdebatten und Positionen der Wohlfahrtsverbände sind oft relevant, auch ohne direkten Hessen-Bezug.
 Ein Artikel der nur ein Thema ERWÄHNT das die Liga betrifft, ist NICHT automatisch relevant.
 Es muss um Politik, Gesetze, Budgets, strukturelle Probleme oder Liga direkt gehen.
 
