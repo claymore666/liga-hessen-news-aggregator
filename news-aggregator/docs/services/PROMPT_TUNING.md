@@ -313,6 +313,123 @@ Reprocess production items via `/api/items/{id}/reprocess`, monitor disagreement
 
 ---
 
+### v6 — Topic taxonomy merge + relevance broadening (2026-02-27)
+
+**Commits:** `3782d5e`, `c58d265`, `2416df3` | **Branch:** `dev`
+
+Two parallel workstreams in one session: improving topic assignment accuracy and fixing false negatives in relevance classification.
+
+#### Part A: Topic taxonomy merge (46 → 39 topics)
+
+**Problem:** The topic eval baseline showed 70.5% accuracy (93/132) with systematic confusion between closely related topics. Several topic pairs were indistinguishable even for Haiku.
+
+**Changes to `topic_taxonomy.py`:**
+
+| Removed topic | Merged into | Reason |
+|--------------|-------------|--------|
+| Abschiebung | Migration und Flucht | All AK2, constantly confused |
+| Asylpolitik | Migration und Flucht | All AK2, constantly confused |
+| Krankenhausreform | Gesundheitsversorgung | Subset |
+| Pflegepersonal | Pflege | 0% recall, always absorbed |
+| Pflegefinanzierung | Pflege | Subtopic |
+| Humanitäre Hilfe | *(removed)* | Always absorbed by Migration |
+| Menschenrechte | *(removed)* | Always absorbed by actual policy area |
+
+**Changes to topic prompt in `processor.py`:**
+
+Added disambiguation hints after the taxonomy list:
+
+```
+WICHTIGE UNTERSCHEIDUNGEN:
+- Sozialpolitik = NUR wenn kein spezifischeres Thema passt
+- Pflege = umfasst auch Pflegepersonal, Pflegefinanzierung, Pflegeausbildung
+- Migration und Flucht = umfasst auch Abschiebung, Asylpolitik, Asylverfahren
+- Gesundheitsversorgung = umfasst auch Krankenhausreform, Klinikschließungen
+(+ Fachkräftemangel, Senioren und Alter, Kinderschutz distinctions)
+```
+
+**Also updated:** `backfill_topics.py` TAG_TO_TOPIC mappings, `topic_eval_set.json` ground truth labels.
+
+**Topic eval results:**
+
+| Metric | Baseline (46 topics) | Merged v1 (39 topics) | Change |
+|--------|---------------------|----------------------|--------|
+| Accuracy | 70.5% (93/132) | **75.8% (100/132)** | **+5.3pp** |
+| Migration und Flucht recall | mixed | **100% (17/17)** | Fixed |
+| Pflege recall | mixed | 73% (8/11) | Good |
+
+Remaining weakness: Sozialpolitik over-prediction (10 predictions, 1 correct). The model uses it as a catch-all despite the disambiguation hint.
+
+#### Part B: Relevance false negative analysis and fix
+
+**Problem:** Edge case analysis of 1,278 items from the last 3 days found ~14 items incorrectly marked irrelevant. Two were LLM processing failures ("Automatische Analyse nicht verfügbar") — reprocessing fixed those immediately. The remaining 12 were systematic rejections by the LLM.
+
+**Root cause analysis (3 patterns):**
+
+1. **Liga member activities in Hessen rejected as "operative"** — AWO Rödermark dementia program, Tafel Fulda new location. The prompt's NICHT RELEVANT list included "PR, Marketing, Events von Mitgliedsverbänden" which was too broad — new facilities and programs *in Hessen* show structural development.
+
+2. **Bundesweit policy rejected for "no Hessen connection"** — Wohlfahrtsverbände criticizing Heizungsgesetz, vdek demanding Pflege reform, Diakonie conference on digital care. The geographic filter was too aggressive: Liga needs to know what their federal umbrella organizations are doing and demanding.
+
+3. **Hessen-specific data rejected as "just statistics"** — Ausweisungszahlen Hessen, Lohnlücke Hessen data. These are directly useful for Liga positioning but the LLM treated them as informational rather than actionable.
+
+**Prompt changes (two iterations):**
+
+*Iteration 1 (`c58d265`):* Added to RELEVANT list:
+- Bundesgesetze mit Kostenfolgen für Sozialeinrichtungen (Heizungsgesetz, Tariftreuegesetz)
+- Wohlfahrtsverbände beziehen bundesweit Position zu Gesetzen/Reformen
+- Hessen-spezifische Daten und Statistiken im Sozialbereich
+- Aktivitäten von Liga-Mitgliedsverbänden IN HESSEN mit struktureller Bedeutung
+- Bundesweite Debatten zu Rente, Altersarmut, Pflegefinanzierung, Fachkräftemangel
+
+Added exception to geographic filter: Wohlfahrtsverbände bundesweit positions → relevant.
+
+Softened NICHT RELEVANT overrides: Liga-Mitglieder new facilities in Hessen = relevant; Bundesverband political positions = relevant.
+
+**Result:** Fixed 3/14 (Wohlfahrtsverbände Heizungsgesetz → high, Grüne Hessen GEG → medium, AWO Demenz → low).
+
+*Iteration 2 (`2416df3`):* Changed the core relevance gate from two questions to three:
+
+```
+1. "Geht es um ein GESETZ, HAUSHALT, STRUKTURELLE KRISE oder POLITISCHE ENTSCHEIDUNG?"
+2. "Kann die Liga Hessen diesen Artikel für ihre Lobbyarbeit NUTZEN?"
+3. "Betrifft es einen Liga-Mitgliedsverband oder ein Liga-Kernthema
+   (Pflege, Armut, Fachkräfte, Rente) auf Bundesebene?"
+
+Wenn ALLE DREI mit Nein → NICHT RELEVANT.
+Wenn Frage 3 JA → genauer prüfen.
+```
+
+This was the key change. The original two-question gate was too binary — items scoring 0.3 (soft no) couldn't be rescued by the RELEVANT list additions alone. Adding the third question gives the model explicit permission to reconsider items involving Liga members or core topics.
+
+**Result:** Fixed 8 more (total 11/14). Final scorecard:
+
+| ID | Title | Before | After |
+|----|-------|--------|-------|
+| 30618 | Wohlfahrtsverbände kritisieren Heizungsgesetz | none (0.3) | **high (0.9)** |
+| 29913 | vdek: Pflege-Reformen 2026 | none (0.3) | **high (0.9)** |
+| 30774 | Grüne Hessen: GEG-Folgen | none (0.3) | **medium (0.85)** |
+| 30877 | Bundestariftreuegesetz | none (0.3) | **medium (0.8)** |
+| 30654 | Diakonie: Digitalisierung Pflege | none (0.5) | **medium (0.75)** |
+| 30620 | Ausweisungen Hessen | none (0.3) | **medium (0.75)** |
+| 30648 | Heizungsgesetz Hessen-Reaktionen | none (0.3) | **medium (0.75)** |
+| 30135 | Heizungsgesetz Osthessen | none (0.3) | **medium (0.75)** |
+| 30227 | AWO Rödermark Demenz | none (0.3) | **low (0.6)** |
+| 31159 | BMBFSFJ Fachkräftemangel | none (0.3) | **low (0.6)** |
+| 30548 | Tafel Fulda Eröffnung | none (0.3) | **low (0.6)** |
+| 30124 | Pflege Hochrisikogeschäft | none (0.3) | none (0.3) |
+| 30379 | Altersarmut Niedersachsen | none (0.3) | none (0.3) |
+| 30451 | Rente mit 63 (Lanz/Niedersachsen) | none (0.3) | none (0.2) |
+
+The 3 unfixed items are defensible: paywalled content (531 chars), Niedersachsen-specific bündnis, TV talk show without federal policy substance.
+
+**Key learnings:**
+- The relevance gate structure matters more than the RELEVANT/NICHT RELEVANT lists. Adding items to the list doesn't help if the gate rejects them first.
+- Three-question gate with "reconsider if Liga-relevant topic" is more effective than two-question binary gate.
+- Items at score 0.3 represent a "soft no" — the model recognizes topic relevance but rejects on geographic/policy grounds. These are the items prompt tuning can rescue.
+- Items at score 0.0 with "Automatische Analyse nicht verfügbar" are LLM processing failures, not prompt issues — reprocessing fixes them immediately.
+
+---
+
 ## Path Forward
 
 ### Short term: ML classifier retraining (next step)
