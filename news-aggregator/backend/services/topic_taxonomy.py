@@ -21,16 +21,11 @@ TOPIC_TAXONOMY: list[str] = [
 
     # AK2: Migration/Flucht
     "Migration und Flucht",
-    "Asylpolitik",
     "Integration",
-    "Abschiebung",
 
     # AK3: Gesundheit/Pflege/Senioren
     "Pflege",
-    "Pflegefinanzierung",
-    "Pflegepersonal",
     "Gesundheitsversorgung",
-    "Krankenhausreform",
     "Psychische Gesundheit",
     "Sucht und Prävention",
     "Senioren und Alter",
@@ -63,8 +58,6 @@ TOPIC_TAXONOMY: list[str] = [
     "Gleichstellung",
     "Gewalt und Gewaltschutz",
     "Demokratie und Extremismus",
-    "Menschenrechte",
-    "Humanitäre Hilfe",
     "Klimaschutz und Soziales",
     "Recht und Gesetzgebung",
 ]
