@@ -430,6 +430,19 @@ The 3 unfixed items are defensible: paywalled content (531 chars), Niedersachsen
 
 ---
 
+## Open Issues
+
+### Sozialpolitik over-prediction (topic assignment)
+
+The model uses "Sozialpolitik" as a catch-all when it can't find a more specific topic. In the topic eval (v6, 75.8% accuracy), Sozialpolitik had 10 predictions but only 1 correct — the model assigned it to items about Rente, Haushalt, Tarifpolitik, etc.
+
+The v6 disambiguation hint ("Sozialpolitik = NUR wenn kein spezifischeres Thema passt") reduced this somewhat but didn't eliminate it. Possible next steps:
+- Add few-shot examples showing Sozialpolitik misclassifications with corrections
+- Make the disambiguation more aggressive (e.g., "Sozialpolitik darf HÖCHSTENS 5% aller Artikel bekommen")
+- Consider removing Sozialpolitik entirely and forcing the model to always pick a specific subtopic
+
+---
+
 ## Path Forward
 
 ### Short term: ML classifier retraining (next step)
