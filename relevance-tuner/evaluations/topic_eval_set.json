@@ -16,12 +16,10 @@
       "priority": "medium",
       "current_topic": "Haushalt und Finanzen",
       "ground_truth": {
-        "topic": "Bürokratieabbau",
-        "reasoning": "Die VhU kritisiert das neue Tariftreuegesetz als ‚Bürokratiemonster' und die mangelnde Umsetzung von Bürokratieabbau-Versprechen. Für die Liga Hessen als Dachverband der Wohlfahrtspflege ist Bürokratieabbau ein zentrales Anliegen, da Sozialträger stark unter regulatorischer Last leiden.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:46:40.008911",
-        "raw_response": "```json\n{\n  \"topic\": \"Bürokratieabbau\",\n  \"reasoning\": \"Die VhU kritisiert das neue Tariftreuegesetz als ‚Bürokratiemonster' und die mangelnde Umsetzung von Bürokratieabbau-Versprechen. Für die Liga Hessen als Dachverband der Wohlfahrtspflege ist Bürokratieabbau ein zentrales Anliegen, da Sozialträger stark unter regulatorischer Last leiden.\"\n}\n```"
+        "topic": "Haushalt und Finanzen",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -142,12 +140,10 @@
       "priority": "low",
       "current_topic": "Pflege",
       "ground_truth": {
-        "topic": "Pflege",
-        "reasoning": "Der Artikel behandelt ein Projekt zur Ausbildungsvorbereitung von Pflegekräften als direkte Antwort auf den Fachkräfteengpass in der Pflege, der die Leistungserbringung der Wohlfahrtsverbände direkt betrifft.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:47:49.708784",
-        "raw_response": "```json\n{\n  \"topic\": \"Pflegepersonal\",\n  \"reasoning\": \"Der Artikel behandelt ein Projekt zur Ausbildungsvorbereitung von Pflegekräften als direkte Antwort auf den Fachkräfteengpass in der Pflege, der die Leistungserbringung der Wohlfahrtsverbände direkt betrifft.\"\n}\n```"
+        "topic": "Fachkräftemangel",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -161,11 +157,9 @@
       "current_topic": "Bildung und Ausbildung",
       "ground_truth": {
         "topic": "Fachkräftemangel",
-        "reasoning": "Der Artikel behandelt eine Schulreform, deren Ziel ist, Fachkräfte für unterbesetzte Branchen wie Pflege auszubilden. Dies adressiert direkt den Fachkräftemangel in Wohlfahrtsbereichen.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:47:59.472075",
-        "raw_response": "```json\n{\n  \"topic\": \"Fachkräftemangel\",\n  \"reasoning\": \"Der Artikel behandelt eine Schulreform, deren Ziel ist, Fachkräfte für unterbesetzte Branchen wie Pflege auszubilden. Dies adressiert direkt den Fachkräftemangel in Wohlfahrtsbereichen.\"\n}\n```"
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -448,12 +442,10 @@
       "priority": "low",
       "current_topic": "Sozialleistungen",
       "ground_truth": {
-        "topic": "Pflege",
-        "reasoning": "Der Artikel behandelt eine Rentenberatung speziell für pflegende Angehörige, angeboten durch eine Caritas-Fachstelle für Pflegethemen. Dies ist direkt relevant für Wohlfahrtsverbände, die pflegende Angehörige unterstützen und beraten.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:50:22.182342",
-        "raw_response": "```json\n{\n  \"topic\": \"Pflege\",\n  \"reasoning\": \"Der Artikel behandelt eine Rentenberatung speziell für pflegende Angehörige, angeboten durch eine Caritas-Fachstelle für Pflegethemen. Dies ist direkt relevant für Wohlfahrtsverbände, die pflegende Angehörige unterstützen und beraten.\"\n}\n```"
+        "topic": "Senioren und Alter",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -844,12 +836,10 @@
       "priority": "low",
       "current_topic": "Sozialpolitik",
       "ground_truth": {
-        "topic": "Haushalt und Finanzen",
-        "reasoning": "Der Artikel kritisiert die Budgetverteilung zwischen Aufrüstung und Sozialausgaben. Die explizite Aussage 'Rekordsummen für Aufrüstung ausgegeben werden, während im Sozialen und in der Bildung gespart wird' ist relevant für die Wohlfahrtspflege, da sie die Finanzierung sozialer Leistungen direkt betrifft.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:54:21.852809",
-        "raw_response": "```json\n{\n  \"topic\": \"Haushalt und Finanzen\",\n  \"reasoning\": \"Der Artikel kritisiert die Budgetverteilung zwischen Aufrüstung und Sozialausgaben. Die explizite Aussage 'Rekordsummen für Aufrüstung ausgegeben werden, während im Sozialen und in der Bildung gespart wird' ist relevant für die Wohlfahrtspflege, da sie die Finanzierung sozialer Leistungen direkt betrifft.\"\n}\n```"
+        "topic": "Sonstiges",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -898,12 +888,10 @@
       "priority": "low",
       "current_topic": "Digitalisierung",
       "ground_truth": {
-        "topic": "Digitalisierung",
-        "reasoning": "Der Artikel behandelt konkret digitale Lösungen (Dokumentationssysteme, elektronische Patientenakten, Telemedizin) im Pflegebereich zur Entlastung von Pflegekräften und Effizienzsteigerung – die Digitalisierung ist das zentrale Thema und Anliegen.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:54:50.864727",
-        "raw_response": "```json\n{\n  \"topic\": \"Digitalisierung\",\n  \"reasoning\": \"Der Artikel behandelt konkret digitale Lösungen (Dokumentationssysteme, elektronische Patientenakten, Telemedizin) im Pflegebereich zur Entlastung von Pflegekräften und Effizienzsteigerung – die Digitalisierung ist das zentrale Thema und Anliegen.\"\n}\n```"
+        "topic": "Pflege",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -934,8 +922,8 @@
       "priority": "high",
       "current_topic": "Sozialleistungen",
       "ground_truth": {
-        "topic": "Arbeitsmarkt",
-        "reasoning": "Die Reform der Grundsicherung für Arbeitsuchende betrifft direkt die Rolle der Wohlfahrtsverbände bei der Arbeitsmarktintegration und Vermittlung. Die Stellungnahmen von AWO, Diakonie und anderen Verbänden belegen deren unmittelbare Betroffenheit von dieser Gesetzesreform.",
+        "topic": "Sozialleistungen",
+        "reasoning": "Reform der Grundsicherung für Arbeitsuchende — Grundsicherung ist eine konkrete Sozialleistung.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T13:55:08.723198",
@@ -1115,11 +1103,9 @@
       "current_topic": "Behinderung und Inklusion",
       "ground_truth": {
         "topic": "Behinderung und Inklusion",
-        "reasoning": "Der Artikel behandelt Barrieren, mit denen hörgeschädigte Menschen im Alltag konfrontiert sind, und die Notwendigkeit von Gebärdensprachdolmetschern. Dies ist ein zentrales Anliegen der Wohlfahrtspflege im Bereich Inklusion und Barrierefreiheit für Menschen mit Behinderungen.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T13:56:54.412707",
-        "raw_response": "```json\n{\n  \"topic\": \"Behinderung und Inklusion\",\n  \"reasoning\": \"Der Artikel behandelt Barrieren, mit denen hörgeschädigte Menschen im Alltag konfrontiert sind, und die Notwendigkeit von Gebärdensprachdolmetschern. Dies ist ein zentrales Anliegen der Wohlfahrtspflege im Bereich Inklusion und Barrierefreiheit für Menschen mit Behinderungen.\"\n}\n```"
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -1582,8 +1568,8 @@
       "priority": "low",
       "current_topic": "Kinder- und Jugendhilfe",
       "ground_truth": {
-        "topic": "Recht und Gesetzgebung",
-        "reasoning": "Der Artikel behandelt Kinderrechte, deren verfassungsmäßige Verankerung und Beteiligung von Kindern in der Demokratie. Dies ist ein Menschenrechtsthema, das grundlegend für die Wohlfahrtspflege bei der Arbeit mit Kindern und Jugendlichen relevant ist.",
+        "topic": "Kinderschutz",
+        "reasoning": "Tag der Kinderrechte mit Motto 'Jedes Kind zählt' — Schutz und Förderung von Kinderrechten ist Kinderschutz.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:00:53.692047",
@@ -1654,8 +1640,8 @@
       "priority": "low",
       "current_topic": "Migration und Flucht",
       "ground_truth": {
-        "topic": "Recht und Gesetzgebung",
-        "reasoning": "Der Artikel dokumentiert Menschenhandel und Ausbeutung von Migrant:innen ohne Aufenthaltserlaubnis in illegalen Arbeitsverhältnissen. Für die Wohlfahrtspflege ist dieser Fall relevant als Schutzthema für vulnerable Personen vor Trafficking und Arbeitsausbeutung.",
+        "topic": "Migration und Flucht",
+        "reasoning": "Razzia gegen Menschenschmuggel — Menschenschmuggel fällt unter Migration und Flucht gemäß Taxonomie-Unterscheidungen.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:01:48.700853",
@@ -1672,12 +1658,10 @@
       "priority": "low",
       "current_topic": "Behinderung und Inklusion",
       "ground_truth": {
-        "topic": "Barrierefreiheit",
-        "reasoning": "Der Artikel behandelt die Braille-Schrift als konkrete Maßnahme zur Beseitigung von Informationsbarrieren für blinde und sehbehinderte Menschen. Dies ist ein klassisches Barrierefreiheits-Thema für die Wohlfahrtspflege.",
-        "topic_suggestion": null,
-        "verified_by": "claude-haiku-4-5-20251001",
-        "verified_at": "2026-02-26T14:01:56.830893",
-        "raw_response": "```json\n{\n  \"topic\": \"Barrierefreiheit\",\n  \"reasoning\": \"Der Artikel behandelt die Braille-Schrift als konkrete Maßnahme zur Beseitigung von Informationsbarrieren für blinde und sehbehinderte Menschen. Dies ist ein klassisches Barrierefreiheits-Thema für die Wohlfahrtspflege.\"\n}\n```"
+        "topic": "Behinderung und Inklusion",
+        "reasoning": "Corrected ground truth",
+        "verified_by": "manual",
+        "topic_suggestion": null
       }
     },
     {
@@ -1726,8 +1710,8 @@
       "priority": "medium",
       "current_topic": "Sozialleistungen",
       "ground_truth": {
-        "topic": "Armut und Existenzsicherung",
-        "reasoning": "Die Reform der Grundsicherung für Arbeitsuchende ist eine zentrale existenzsichernde Leistung, die direkt relevant für die Wohlfahrtspflege ist, insbesondere für ihre Arbeit mit armutsgefährdeten Menschen und Arbeitsuchenden.",
+        "topic": "Sozialleistungen",
+        "reasoning": "BMAS-Vorhaben zu Grundsicherung, Kurzarbeitergeld und Rentenkommission — konkrete Sozialleistungsprogramme.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:02:24.020694",
@@ -2133,8 +2117,8 @@
       "priority": "low",
       "current_topic": "Sozialpolitik",
       "ground_truth": {
-        "topic": "Fachkräftemangel",
-        "reasoning": "Der Gehaltsreport zeigt, dass spitzenverdiener-Branchen (Banken, Versicherungen, Pharma) deutlich höhere Gehälter zahlen als der Wohlfahrtssektor. Dies erklärt strukturell, warum Wohlfahrtsverbände Schwierigkeiten bei der Personalrekrutierung und -bindung haben.",
+        "topic": "Arbeitsmarkt",
+        "reasoning": "Gehaltsniveau und Besserverdienende — Arbeitsmarkt-Thema gemäß Taxonomie (Gehalt → Arbeitsmarkt, nicht Fachkräftemangel).",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:05:44.952745",
@@ -2241,8 +2225,8 @@
       "priority": "medium",
       "current_topic": "Sozialpolitik",
       "ground_truth": {
-        "topic": "Sozialpolitik",
-        "reasoning": "Der Artikel behandelt eine zentrale rentenpolitische Debatte über die Finanzierbarkeit von Sozialleistungen. Für Wohlfahrtsverbände ist die Rentenpolitik als Teil des Sozialsystems und deren Finanzierungsauswirkungen auf andere Sozialausgaben relevant.",
+        "topic": "Senioren und Alter",
+        "reasoning": "Rentenpaket stoppen — Artikel behandelt konkret Rentenreform und Nachhaltigkeitsfaktor, nicht allgemeine Sozialpolitik.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:06:36.582922",
@@ -2313,8 +2297,8 @@
       "priority": "low",
       "current_topic": "Digitalisierung",
       "ground_truth": {
-        "topic": "Sucht und Prävention",
-        "reasoning": "Das Webinar wird von HLS (Suchtfragen) angeboten und richtet sich explizit an Fachkräfte der Suchthilfe und Suchtprävention. Der Fokus liegt auf der Prävention von problematischer Social-Media-Nutzung und potenzieller Abhängigkeit, insbesondere bei jungen Menschen.",
+        "topic": "Psychische Gesundheit",
+        "reasoning": "Webinar über Social Media und Wohlbefinden behandelt psychische Gesundheitsauswirkungen, nicht Suchtprävention.",
         "topic_suggestion": null,
         "verified_by": "claude-haiku-4-5-20251001",
         "verified_at": "2026-02-26T14:07:12.544750",

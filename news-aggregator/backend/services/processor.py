@@ -457,31 +457,54 @@ Antworte NUR mit JA oder NEIN."""
         """
         from .topic_taxonomy import TOPIC_TAXONOMY, SONSTIGES, validate_topic
 
-        taxonomy_list = "\n".join(f"- {t}" for t in TOPIC_TAXONOMY)
+        # Exclude Sozialpolitik from main list — add as last-resort option
+        taxonomy_list = "\n".join(
+            f"- {t}" for t in TOPIC_TAXONOMY if t != "Sozialpolitik"
+        )
 
         follow_up = {
             "role": "user",
             "content": (
                 "Ordne diesen Artikel GENAU EINEM Thema aus der folgenden Liste zu.\n\n"
-                f"THEMENLISTE:\n{taxonomy_list}\n- Sonstiges\n\n"
+                f"THEMENLISTE:\n{taxonomy_list}\n\n"
                 "REGELN:\n"
                 "- Wähle das Thema, das am besten beschreibt, WARUM der Artikel für die "
                 "Wohlfahrtspflege relevant ist — nicht worum es allgemein geht.\n"
-                "- KEINE Parteinamen, Organisationsnamen oder Ortsnamen als Thema.\n"
-                "- Nur Sonstiges wählen, wenn wirklich KEIN Thema passt. "
-                "Dann zusätzlich einen Vorschlag angeben.\n\n"
-                "WICHTIGE UNTERSCHEIDUNGEN:\n"
-                "- Sozialpolitik = NUR wenn kein spezifischeres Thema passt. "
-                "NICHT für Rente (→ Senioren und Alter), Haushalt (→ Haushalt und Finanzen), "
-                "Mindestlohn (→ Tarifpolitik)\n"
-                "- Fachkräftemangel = struktureller Personalmangel über Branchen — "
-                "NICHT Arbeitsmarktlage oder Gehälter (→ Arbeitsmarkt)\n"
-                "- Senioren und Alter = Rente, Altersarmut, Seniorenbetreuung, Alterssicherung\n"
-                "- Kinderschutz = Schutz vor Missbrauch/Vernachlässigung — "
-                "NICHT Kinderarmut oder Jugendhilfe allgemein\n"
-                "- Pflege = umfasst auch Pflegepersonal, Pflegefinanzierung, Pflegeausbildung\n"
-                "- Migration und Flucht = umfasst auch Abschiebung, Asylpolitik, Asylverfahren\n"
-                "- Gesundheitsversorgung = umfasst auch Krankenhausreform, Klinikschließungen\n\n"
+                "- Bei thematischer Überschneidung wähle das ENGERE, SPEZIFISCHERE Thema.\n"
+                "- KEINE Parteinamen, Organisationsnamen oder Ortsnamen als Thema.\n\n"
+                "UNTERSCHEIDUNGEN:\n"
+                "- Tarifpolitik = Tarifvertrag, Warnstreik, Arbeitskampf, Mindestlohn, "
+                "Lohnerhöhung — auch wenn in Kitas/Krankenhäusern gestreikt wird\n"
+                "- Senioren und Alter = Rente, Altersarmut, Alterssicherung, Rentenreform\n"
+                "- Fachkräftemangel = struktureller Personalmangel, Fachkräftelücke\n"
+                "- Pflege = Pflegepersonal, Pflegebeitrag, Pflegereform\n"
+                "- Bürokratieabbau = Entbürokratisierung, Regulierungsabbau\n"
+                "- Gesundheitsversorgung = Krankenhausreform, Klinikschließung, Krankenkasse\n"
+                "- Migration und Flucht = auch Abschiebung, Asylpolitik, Menschenschmuggel\n"
+                "- Behinderung und Inklusion = Schwerbehinderung, Behindertenrecht, "
+                "Inklusion, Teilhabe — auch wenn es um Rente/Kindergeld für Behinderte geht\n"
+                "- Wohnen und Wohnungsnot = Wohngeld, Hessengeld, Mietpreisbremse, "
+                "Sozialwohnungen, Wohnraumförderung\n"
+                "- Sozialleistungen = Bürgergeld, Grundsicherung, Kurzarbeitergeld "
+                "— NICHT Armut allgemein (→ Armut und Existenzsicherung), "
+                "NICHT Arbeitsmarktpolitik (→ Arbeitsmarkt), "
+                "NICHT Leistungen für Geflüchtete (→ Migration und Flucht), "
+                "NICHT Behindertenleistungen (→ Behinderung und Inklusion), "
+                "NICHT Wohnungsförderung (→ Wohnen und Wohnungsnot)\n\n"
+                "BEISPIELE:\n"
+                "- „Mindestlohn steigt auf 13,90€" → Tarifpolitik\n"
+                "- „Warnstreiks in Kitas und Unikliniken" → Tarifpolitik\n"
+                "- „Steuerbefreiung für Gewerkschaftsbeiträge" → Tarifpolitik\n"
+                "- „200 Mrd. für Rentenleistungen" → Senioren und Alter\n"
+                "- „Alterssicherungskommission konstituiert" → Senioren und Alter\n"
+                "- „Pflegebeitrag stoppen, Strukturreform" → Pflege\n"
+                "- „CDU will Bürokratieabbau für Unternehmen" → Bürokratieabbau\n"
+                "- „Reform der Grundsicherung für Arbeitsuchende" → Sozialleistungen\n"
+                "- „Inflation treibt Lebensmittelpreise hoch" → Armut und Existenzsicherung\n\n"
+                "Wenn KEIN Thema aus der Liste passt, prüfe:\n"
+                "- Sozialpolitik — NUR für übergreifende Sozialstaats-Debatten "
+                "ohne klaren Fachbezug\n"
+                "- Sonstiges — mit Vorschlag\n\n"
                 "Antwort NUR als JSON:\n"
                 "{\"topic\": \"Thema aus Liste\"}\n"
                 "oder bei Sonstiges:\n"
@@ -494,7 +517,7 @@ Antworte NUR mit JA oder NEIN."""
             response = await self.llm.chat(
                 messages=messages,
                 temperature=0.2,
-                max_tokens=150,
+                max_tokens=1024,
             )
             text = response.text.strip()
 

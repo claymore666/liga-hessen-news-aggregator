@@ -124,7 +124,7 @@ class OllamaProvider(BaseLLMProvider):
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "think": False,
+            "think": True,  # Enable thinking for better topic classification accuracy
             "keep_alive": "5m",  # Unload model from VRAM after 5 min idle
             "options": {
                 "temperature": temperature,

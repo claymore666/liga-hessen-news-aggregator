@@ -1,0 +1,39 @@
+name: current
+description: Current processor.py prompt (auto-extracted)
+topics:
+  exclude:
+  - Sozialpolitik
+rules:
+- Wähle das Thema, das am besten beschreibt, WARUM der Artikel für die Wohlfahrtspflege
+  relevant ist — nicht worum es allgemein geht.
+- Bei thematischer Überschneidung wähle das ENGERE, SPEZIFISCHERE Thema.
+- KEINE Parteinamen, Organisationsnamen oder Ortsnamen als Thema.
+distinctions:
+- Tarifpolitik = Tarifvertrag, Warnstreik, Arbeitskampf, Mindestlohn, Lohnerhöhung
+  — auch wenn in Kitas/Krankenhäusern gestreikt wird
+- Senioren und Alter = Rente, Altersarmut, Alterssicherung, Rentenreform
+- Fachkräftemangel = struktureller Personalmangel, Fachkräftelücke
+- Pflege = Pflegepersonal, Pflegebeitrag, Pflegereform
+- Bürokratieabbau = Entbürokratisierung, Regulierungsabbau
+- Gesundheitsversorgung = Krankenhausreform, Klinikschließung, Krankenkasse
+- Migration und Flucht = auch Abschiebung, Asylpolitik, Menschenschmuggel
+examples:
+- input: Mindestlohn steigt auf 13,90€
+  topic: Tarifpolitik
+- input: Warnstreiks in Kitas und Unikliniken
+  topic: Tarifpolitik
+- input: Steuerbefreiung für Gewerkschaftsbeiträge
+  topic: Tarifpolitik
+- input: 200 Mrd. für Rentenleistungen
+  topic: Senioren und Alter
+- input: Alterssicherungskommission konstituiert
+  topic: Senioren und Alter
+- input: Pflegebeitrag stoppen, Strukturreform
+  topic: Pflege
+- input: CDU will Bürokratieabbau für Unternehmen
+  topic: Bürokratieabbau
+fallback_topics:
+- name: Sozialpolitik
+  description: NUR für übergreifende Sozialstaats-Debatten ohne klaren Fachbezug
+- name: Sonstiges
+  description: mit topic_suggestion
