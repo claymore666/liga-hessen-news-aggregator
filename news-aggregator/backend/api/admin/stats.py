@@ -149,9 +149,7 @@ async def get_system_stats(
         rate_limits = rate_limiter.get_status()
         if rate_limits is None and cerebras_available:
             try:
-                rate_limits_full = await cerebras.get_rate_limits()
-                if rate_limits_full:
-                    rate_limits = rate_limits_full.get("requests")
+                rate_limits = await cerebras.get_rate_limits()
             except Exception as e:
                 logger.debug(f"Failed to fetch Cerebras rate limits: {e}")
         cerebras_stats = CerebrasStats(

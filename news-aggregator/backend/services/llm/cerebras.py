@@ -24,6 +24,8 @@ class CerebrasRateLimiter:
     def __init__(self):
         # Track remaining requests per window
         self._limits: dict[str, dict] = {}
+        # Track remaining tokens per window
+        self._token_limits: dict[str, dict] = {}
         # Track when we last got a 429 (to compute backoff)
         self._last_429: float = 0
 
@@ -38,34 +40,47 @@ class CerebrasRateLimiter:
                     "remaining": remaining,
                     "updated_at": time.monotonic(),
                 }
+            tok_limit = _int(headers, f"x-ratelimit-limit-tokens-{window}")
+            tok_remaining = _int(headers, f"x-ratelimit-remaining-tokens-{window}")
+            if tok_limit is not None and tok_remaining is not None:
+                self._token_limits[window] = {
+                    "limit": tok_limit,
+                    "remaining": tok_remaining,
+                    "updated_at": time.monotonic(),
+                }
 
     async def wait_if_needed(self):
-        """Wait if we're at the rate limit for any window."""
+        """Wait if we're at the rate limit for any window (requests or tokens)."""
         now = time.monotonic()
         max_wait = 0
         blocking_window = None
+        blocking_type = "requests"
 
-        for window, info in self._limits.items():
-            if info["remaining"] <= 0:
-                age = now - info["updated_at"]
-                # Estimate time until window resets
-                if window == "minute":
-                    wait = max(0, 60 - age)
-                elif window == "hour":
-                    wait = max(0, 3600 - age)
-                else:  # day
-                    wait = max(0, 86400 - age)
+        # Check both request and token limits
+        for label, limits in (("requests", self._limits), ("tokens", self._token_limits)):
+            for window, info in limits.items():
+                if info["remaining"] <= 0:
+                    age = now - info["updated_at"]
+                    if window == "minute":
+                        wait = max(0, 60 - age)
+                    elif window == "hour":
+                        wait = max(0, 3600 - age)
+                    else:  # day
+                        wait = max(0, 86400 - age)
 
-                if wait > max_wait:
-                    max_wait = wait
-                    blocking_window = window
+                    if wait > max_wait:
+                        max_wait = wait
+                        blocking_window = window
+                        blocking_type = label
 
         if max_wait > 0 and blocking_window:
             # Cap wait to 120s — check again after that
             capped_wait = min(max_wait, 120)
+            limits = self._limits if blocking_type == "requests" else self._token_limits
+            info = limits[blocking_window]
             logger.info(
-                f"Cerebras rate limit ({blocking_window}): "
-                f"{self._limits[blocking_window]['remaining']}/{self._limits[blocking_window]['limit']}, "
+                f"Cerebras rate limit ({blocking_type}/{blocking_window}): "
+                f"{info['remaining']}/{info['limit']}, "
                 f"waiting {capped_wait:.0f}s (full reset in {max_wait:.0f}s)"
             )
             await asyncio.sleep(capped_wait)
@@ -79,12 +94,13 @@ class CerebrasRateLimiter:
         self._last_429 = time.monotonic()
         now = time.monotonic()
 
-        # Refresh updated_at for any exhausted windows
+        # Refresh updated_at for any exhausted windows (requests and tokens)
         any_exhausted = False
-        for window, info in self._limits.items():
-            if info["remaining"] <= 0:
-                info["updated_at"] = now
-                any_exhausted = True
+        for limits in (self._limits, self._token_limits):
+            for window, info in limits.items():
+                if info["remaining"] <= 0:
+                    info["updated_at"] = now
+                    any_exhausted = True
 
         # If no tracked window is exhausted, assume minute (most common)
         if not any_exhausted:
@@ -96,12 +112,20 @@ class CerebrasRateLimiter:
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
-        if not self._limits:
+        if not self._limits and not self._token_limits:
             return None
-        return {
-            window: {"limit": info["limit"], "remaining": info["remaining"]}
-            for window, info in self._limits.items()
-        }
+        result = {}
+        if self._limits:
+            result["requests"] = {
+                window: {"limit": info["limit"], "remaining": info["remaining"]}
+                for window, info in self._limits.items()
+            }
+        if self._token_limits:
+            result["tokens"] = {
+                window: {"limit": info["limit"], "remaining": info["remaining"]}
+                for window, info in self._token_limits.items()
+            }
+        return result
 
 
 # Global rate limiter (shared across provider instances)

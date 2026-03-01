@@ -237,16 +237,22 @@ const llmWorkerStats = computed(() => {
   }
 })
 
+const formatTokenCount = (n: number | undefined | null): string => {
+  if (n == null) return '?'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}K`
+  return n.toString()
+}
+
 const cerebrasRateLimits = computed(() => {
   const rl = stats.value?.cerebras?.rate_limits
   if (!rl) return null
-  // Handle both formats: cached (flat: {minute: {}, hour: {}}) and full ({requests: {}, tokens: {}})
-  const req = (rl.requests || rl) as Record<string, { limit: number; remaining: number }>
-  if (!req?.minute) return null
+  const req = rl.requests as Record<string, { limit: number; remaining: number }> | undefined
+  const tok = rl.tokens as Record<string, { limit: number; remaining: number }> | undefined
+  if (!req?.minute && !tok?.minute) return null
   return {
-    minute: req.minute,
-    hour: req.hour,
-    day: req.day,
+    requests: req || null,
+    tokens: tok || null,
   }
 })
 
@@ -443,16 +449,26 @@ onUnmounted(() => {
                 </div>
               </div>
               <!-- Rate Limits (show used/limit) -->
-              <div v-if="cerebrasRateLimits" class="mt-1 flex gap-3 text-xs text-gray-500">
-                <span :class="cerebrasRateLimits.minute?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ (cerebrasRateLimits.minute?.limit ?? 0) - (cerebrasRateLimits.minute?.remaining ?? 0) }}/{{ cerebrasRateLimits.minute?.limit ?? '?' }} req/min
-                </span>
-                <span :class="cerebrasRateLimits.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ (cerebrasRateLimits.hour?.limit ?? 0) - (cerebrasRateLimits.hour?.remaining ?? 0) }}/{{ cerebrasRateLimits.hour?.limit ?? '?' }} req/h
-                </span>
-                <span :class="cerebrasRateLimits.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ (cerebrasRateLimits.day?.limit ?? 0) - (cerebrasRateLimits.day?.remaining ?? 0) }}/{{ cerebrasRateLimits.day?.limit ?? '?' }} req/d
-                </span>
+              <div v-if="cerebrasRateLimits" class="mt-1 space-y-0.5 text-xs text-gray-500">
+                <div v-if="cerebrasRateLimits.requests" class="flex gap-3">
+                  <span :class="cerebrasRateLimits.requests.minute?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                    {{ (cerebrasRateLimits.requests.minute?.limit ?? 0) - (cerebrasRateLimits.requests.minute?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.minute?.limit ?? '?' }} req/min
+                  </span>
+                  <span :class="cerebrasRateLimits.requests.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                    {{ (cerebrasRateLimits.requests.hour?.limit ?? 0) - (cerebrasRateLimits.requests.hour?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.hour?.limit ?? '?' }} req/h
+                  </span>
+                  <span :class="cerebrasRateLimits.requests.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                    {{ (cerebrasRateLimits.requests.day?.limit ?? 0) - (cerebrasRateLimits.requests.day?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.day?.limit ?? '?' }} req/d
+                  </span>
+                </div>
+                <div v-if="cerebrasRateLimits.tokens" class="flex gap-3">
+                  <span :class="cerebrasRateLimits.tokens.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                    {{ formatTokenCount((cerebrasRateLimits.tokens.hour?.limit ?? 0) - (cerebrasRateLimits.tokens.hour?.remaining ?? 0)) }}/{{ formatTokenCount(cerebrasRateLimits.tokens.hour?.limit) }} tok/h
+                  </span>
+                  <span :class="cerebrasRateLimits.tokens.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                    {{ formatTokenCount((cerebrasRateLimits.tokens.day?.limit ?? 0) - (cerebrasRateLimits.tokens.day?.remaining ?? 0)) }}/{{ formatTokenCount(cerebrasRateLimits.tokens.day?.limit) }} tok/d
+                  </span>
+                </div>
               </div>
             </div>
           </div>
