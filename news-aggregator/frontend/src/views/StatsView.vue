@@ -442,16 +442,16 @@ onUnmounted(() => {
                   </span>
                 </div>
               </div>
-              <!-- Rate Limits -->
+              <!-- Rate Limits (show used/limit) -->
               <div v-if="cerebrasRateLimits" class="mt-1 flex gap-3 text-xs text-gray-500">
                 <span :class="cerebrasRateLimits.minute?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ cerebrasRateLimits.minute?.remaining ?? '?' }}/{{ cerebrasRateLimits.minute?.limit ?? '?' }} req/min
+                  {{ (cerebrasRateLimits.minute?.limit ?? 0) - (cerebrasRateLimits.minute?.remaining ?? 0) }}/{{ cerebrasRateLimits.minute?.limit ?? '?' }} req/min
                 </span>
                 <span :class="cerebrasRateLimits.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ cerebrasRateLimits.hour?.remaining ?? '?' }}/{{ cerebrasRateLimits.hour?.limit ?? '?' }} req/h
+                  {{ (cerebrasRateLimits.hour?.limit ?? 0) - (cerebrasRateLimits.hour?.remaining ?? 0) }}/{{ cerebrasRateLimits.hour?.limit ?? '?' }} req/h
                 </span>
                 <span :class="cerebrasRateLimits.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                  {{ cerebrasRateLimits.day?.remaining ?? '?' }}/{{ cerebrasRateLimits.day?.limit ?? '?' }} req/d
+                  {{ (cerebrasRateLimits.day?.limit ?? 0) - (cerebrasRateLimits.day?.remaining ?? 0) }}/{{ cerebrasRateLimits.day?.limit ?? '?' }} req/d
                 </span>
               </div>
             </div>
