@@ -20,7 +20,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   FunnelIcon,
-  GlobeAltIcon
+  GlobeAltIcon,
+  CloudIcon
 } from '@heroicons/vue/24/outline'
 import {
   adminApi,
@@ -415,6 +416,29 @@ onUnmounted(() => {
                 <span :class="health?.llm_available ? 'text-green-600' : 'text-red-600'">
                   {{ health?.llm_available ? 'Verfügbar' : 'Offline' }}
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cerebras -->
+        <div v-if="stats?.cerebras" class="card">
+          <div class="flex items-center gap-3">
+            <CloudIcon class="h-8 w-8 text-gray-400" />
+            <div>
+              <div class="text-sm font-medium text-gray-500">Cerebras ({{ stats.cerebras.model }})</div>
+              <div class="flex items-center gap-1">
+                <component
+                  :is="stats.cerebras.available ? CheckCircleIcon : XCircleIcon"
+                  class="h-5 w-5"
+                  :class="stats.cerebras.available ? 'text-green-500' : 'text-red-500'"
+                />
+                <span :class="stats.cerebras.available ? 'text-green-600' : 'text-red-600'">
+                  {{ stats.cerebras.available ? 'Verfügbar' : 'Offline' }}
+                </span>
+              </div>
+              <div v-if="stats.cerebras.rate_limits" class="text-xs text-gray-400 mt-0.5">
+                {{ stats.cerebras.rate_limits.requests.day.remaining.toLocaleString() }}/{{ stats.cerebras.rate_limits.requests.day.limit.toLocaleString() }} Req · {{ Math.round(stats.cerebras.rate_limits.tokens.day.remaining / 1000) }}k/{{ Math.round(stats.cerebras.rate_limits.tokens.day.limit / 1000) }}k Tok
               </div>
             </div>
           </div>
