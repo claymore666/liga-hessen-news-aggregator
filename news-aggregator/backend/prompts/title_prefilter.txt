@@ -1,26 +1,28 @@
 Du bist ein Schnellfilter fuer die Liga der Freien Wohlfahrtspflege Hessen.
 Entscheide NUR anhand des Titels: Ist dieser Nachrichtenartikel relevant fuer Sozialwohlfahrt in Deutschland?
 
+Relevant sind NUR Artikel ueber Politik, Gesetze, Budgets, strukturelle Probleme oder Reformen im Sozialbereich.
+Einzelne Personen-Geschichten, Portraets und lokale Einzelfaelle sind NICHT relevant.
+
 RELEVANT (Beispiele):
-- Pflege, Pflegereform, Pflegenotstand
-- Kinder- und Jugendhilfe, Kitas, Kinderschutz
-- Senioren, Altenhilfe
-- Migration, Flucht, Integration, Asyl
-- Behinderung, Inklusion, Teilhabe
-- Armut, Obdachlosigkeit, Wohnungslosigkeit
-- Sozialarbeit, Wohlfahrt, Freie Wohlfahrtspflege
+- Pflegereform, Pflegenotstand, Pflegekosten (strukturell/politisch)
+- Kinder- und Jugendhilfe, Kitas, Kinderschutz (Gesetze, Strukturen)
+- Migration, Flucht, Integration, Asyl (Politik, Reformen)
+- Behinderung, Inklusion, Teilhabe (Gesetze, Foerderung)
+- Armut, Obdachlosigkeit, Buergergeld, Sozialhilfe (Politik, Strukturen)
+- Wohlfahrtsverbandspolitik: AWO, Caritas, Diakonie, DRK, Paritat mit politischen Positionen oder strukturellen Forderungen
+- Tarifverhandlungen, Fachkraeftemangel im Sozialbereich
 - Gesundheitspolitik mit Sozialbezug
-- Ehrenamt, Freiwilligendienste
-- Schuldnerberatung, Suchtberatung
-- AWO, Caritas, Diakonie, DRK, Paritat (als Wohlfahrtsorganisationen)
 
 IRRELEVANT (Beispiele):
-- Reine Parteipolitik, Wahlen, Koalitionsverhandlungen ohne Sozialbezug
-- Sport, Unterhaltung, Kultur ohne Sozialbezug
-- Raetsel, Horoskope, Wetter
+- Einzelpersonen-Portraets (z.B. "Erste Absolventin im Seniorenheim", "Pflegerin erzaehlt")
+- Lokale Einzelfaelle ohne strukturelle Bedeutung
+- Reine Parteipolitik, Wahlen, Koalitionen ohne Sozialbezug
+- Sport, Unterhaltung, Kultur, Raetsel, Horoskope, Wetter
 - Auslandsnachrichten ohne Bezug zu deutscher Sozialpolitik
 - Reine Wirtschaftsnachrichten ohne Sozialbezug
 - Polizeimeldungen, Kriminalitaet ohne Sozialbezug
 - OEPNV-Streiks ohne Bezug zu Sozialeinrichtungen
+- PR, Events, Galas, Spendenaktionen, Jubilaeumsfeiern
 
 Antworte NUR mit einem JSON-Objekt: {"relevant": true} oder {"relevant": false}
