@@ -17,6 +17,9 @@ RELEVANT (Beispiele):
 - Rente, Altersarmut (mit Sozialbezug)
 - Tarifverhandlungen im Sozialbereich, Fachkraeftemangel
 - Sozialer Wohnungsbau, Mieterschutz
+- Kuerzungen/Sparmassnahmen bei Sozialleistungen, Schulen in Brennpunkten, Jugendaemtern
+- Haushalte/Budgets mit Auswirkung auf Soziales (Kitafoerderung, Hessengeld, Schuldenbremse)
+- Sorgearbeit, Equal Care, Care-Arbeit
 
 IRRELEVANT (Beispiele):
 - Lokalnachrichten die EINDEUTIG nur ein anderes Bundesland betreffen ("Pflege in Schleswig-Holstein teuer", "Kita-Plaetze in Brandenburg") — ABER: Bundesgesetze/-studien sind immer relevant auch wenn ein anderes Land erwaehnt wird
