@@ -200,7 +200,9 @@ class LLMWorker:
                         self._processor = None
                         return None
 
-        if self._processor is None:
+        if self._processor is None or self._has_cloud_provider():
+            # When cloud provider is primary, recreate processor each time
+            # so Ollama is only included during active hours
             self._processor = await create_processor_from_settings()
         return self._processor
 

@@ -132,21 +132,33 @@ async def get_system_stats(
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
 
-    # Cerebras provider status
+    # Cerebras provider status (with rate limits from cached state)
     from config import settings
     cerebras_stats = None
     if settings.cerebras_api_key:
-        from services.llm.cerebras import CerebrasProvider
+        from services.llm.cerebras import CerebrasProvider, get_rate_limiter
         cerebras = CerebrasProvider(
             api_key=settings.cerebras_api_key,
             model=settings.cerebras_model,
             timeout=settings.cerebras_timeout,
         )
         cerebras_available = await cerebras.is_available()
+        # Use cached rate limiter state (updated on every API call)
+        # Only fetch fresh limits if no cached data exists
+        rate_limiter = get_rate_limiter()
+        rate_limits = rate_limiter.get_status()
+        if rate_limits is None and cerebras_available:
+            try:
+                rate_limits_full = await cerebras.get_rate_limits()
+                if rate_limits_full:
+                    rate_limits = rate_limits_full.get("requests")
+            except Exception as e:
+                logger.debug(f"Failed to fetch Cerebras rate limits: {e}")
         cerebras_stats = CerebrasStats(
             configured=True,
             available=cerebras_available,
             model=settings.cerebras_model,
+            rate_limits=rate_limits,
         )
 
     # Classifier Worker status from DB + actual service reachability

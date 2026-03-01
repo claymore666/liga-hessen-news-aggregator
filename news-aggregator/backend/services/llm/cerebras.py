@@ -1,6 +1,8 @@
 """Cerebras LLM provider for cloud model access."""
 
+import asyncio
 import logging
+import time
 
 import httpx
 
@@ -12,12 +14,100 @@ logger = logging.getLogger(__name__)
 CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
 
 
+class CerebrasRateLimiter:
+    """Track Cerebras rate limits from response headers and throttle requests.
+
+    After each API call, updates remaining counts from headers.
+    Before each API call, waits if any rate limit window is exhausted.
+    """
+
+    def __init__(self):
+        # Track remaining requests per window
+        self._limits: dict[str, dict] = {}
+        # Track when we last got a 429 (to compute backoff)
+        self._last_429: float = 0
+
+    def update_from_headers(self, headers: httpx.Headers):
+        """Update rate limit state from response headers."""
+        for window in ("minute", "hour", "day"):
+            limit = _int(headers, f"x-ratelimit-limit-requests-{window}")
+            remaining = _int(headers, f"x-ratelimit-remaining-requests-{window}")
+            if limit is not None and remaining is not None:
+                self._limits[window] = {
+                    "limit": limit,
+                    "remaining": remaining,
+                    "updated_at": time.monotonic(),
+                }
+
+    async def wait_if_needed(self):
+        """Wait if we're at the rate limit for any window."""
+        now = time.monotonic()
+
+        for window, info in self._limits.items():
+            if info["remaining"] <= 0:
+                age = now - info["updated_at"]
+                # Estimate time until window resets
+                if window == "minute":
+                    wait = max(0, 60 - age)
+                elif window == "hour":
+                    wait = max(0, 3600 - age)
+                else:  # day
+                    wait = max(0, 86400 - age)
+
+                if wait > 0:
+                    # Cap wait to 65s — minute window is the most common limit
+                    wait = min(wait, 65)
+                    logger.info(
+                        f"Cerebras rate limit ({window}): "
+                        f"{info['remaining']}/{info['limit']}, "
+                        f"waiting {wait:.0f}s"
+                    )
+                    await asyncio.sleep(wait)
+                    return  # Only wait once, then retry
+
+    def handle_429(self):
+        """Record a 429 response for backoff tracking."""
+        self._last_429 = time.monotonic()
+        # Force remaining to 0 for minute window
+        if "minute" in self._limits:
+            self._limits["minute"]["remaining"] = 0
+            self._limits["minute"]["updated_at"] = time.monotonic()
+        else:
+            self._limits["minute"] = {
+                "limit": 30,
+                "remaining": 0,
+                "updated_at": time.monotonic(),
+            }
+
+    def get_status(self) -> dict | None:
+        """Get current rate limit status for API responses."""
+        if not self._limits:
+            return None
+        return {
+            window: {"limit": info["limit"], "remaining": info["remaining"]}
+            for window, info in self._limits.items()
+        }
+
+
+# Global rate limiter (shared across provider instances)
+_rate_limiter = CerebrasRateLimiter()
+
+
+def get_rate_limiter() -> CerebrasRateLimiter:
+    """Get the global rate limiter instance."""
+    return _rate_limiter
+
+
 class CerebrasProvider(BaseLLMProvider):
     """Cerebras provider for cloud LLM access.
 
     Cerebras offers fast inference with generous free tier limits:
-        - 14,400 requests/day
-        - 1M tokens/day
+        - 30 requests/minute, 900/hour, 14,400/day
+        - 64K tokens/minute, 1M/hour, 1M/day
+
+    Includes built-in rate limiting: tracks remaining quota from
+    response headers and waits when limits are exhausted, avoiding
+    429 errors and unnecessary fallback to Ollama.
 
     Models include:
         - gpt-oss-120b (reasoning model, free tier)
@@ -39,6 +129,7 @@ class CerebrasProvider(BaseLLMProvider):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self._rate_limiter = _rate_limiter
 
     async def complete(
         self,
@@ -60,6 +151,9 @@ class CerebrasProvider(BaseLLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> LLMResponse:
+        # Wait if rate limited
+        await self._rate_limiter.wait_if_needed()
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -79,6 +173,15 @@ class CerebrasProvider(BaseLLMProvider):
                 headers=headers,
                 json=payload,
             )
+
+            # Update rate limits from headers (works on both 200 and 429)
+            self._rate_limiter.update_from_headers(response.headers)
+
+            if response.status_code == 429:
+                self._rate_limiter.handle_429()
+                # Raise so the service can retry or fall back
+                response.raise_for_status()
+
             response.raise_for_status()
             data = response.json()
 
@@ -139,6 +242,10 @@ class CerebrasProvider(BaseLLMProvider):
                         "max_tokens": 1,
                     },
                 )
+
+                # Update shared rate limiter from this response too
+                self._rate_limiter.update_from_headers(response.headers)
+
                 if response.status_code not in (200, 429):
                     return None
 

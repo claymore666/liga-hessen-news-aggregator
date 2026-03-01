@@ -730,14 +730,28 @@ async def create_processor_from_settings() -> ItemProcessor | None:
             )
         )
 
-    # Add Ollama as fallback (local GPU)
-    providers.append(
-        OllamaProvider(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            timeout=settings.ollama_timeout,
+    # Add Ollama as fallback (local GPU) — only when GPU1 is in active hours
+    # to prevent Cerebras rate-limit fallback from waking GPU1 on weekends/nights
+    from services.gpu1_power import get_power_manager
+    power_mgr = get_power_manager()
+    add_ollama = True
+    if power_mgr is not None and settings.cerebras_api_key:
+        # When Cerebras is primary, only add Ollama during active hours
+        add_ollama = await power_mgr.is_within_active_hours()
+        if not add_ollama:
+            import logging
+            logging.getLogger(__name__).info(
+                "Ollama skipped from provider list (outside active hours, Cerebras is primary)"
+            )
+
+    if add_ollama:
+        providers.append(
+            OllamaProvider(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                timeout=settings.ollama_timeout,
+            )
         )
-    )
 
     # Add OpenRouter as last fallback if configured
     if settings.openrouter_api_key:

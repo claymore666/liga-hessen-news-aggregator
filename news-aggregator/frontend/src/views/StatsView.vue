@@ -237,6 +237,19 @@ const llmWorkerStats = computed(() => {
   }
 })
 
+const cerebrasRateLimits = computed(() => {
+  const rl = stats.value?.cerebras?.rate_limits
+  if (!rl) return null
+  // Handle both formats: cached (flat: {minute: {}, hour: {}}) and full ({requests: {}, tokens: {}})
+  const req = (rl.requests || rl) as Record<string, { limit: number; remaining: number }>
+  if (!req?.minute) return null
+  return {
+    minute: req.minute,
+    hour: req.hour,
+    day: req.day,
+  }
+})
+
 const gpu1IdleFormatted = computed(() => {
   if (!gpu1Status.value?.idle_time) return null
   const secs = Math.round(gpu1Status.value.idle_time)
@@ -360,7 +373,7 @@ onUnmounted(() => {
     <!-- Status Tab -->
     <template v-else-if="activeTab === 'status'">
       <!-- Service Availability Cards -->
-      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div class="grid gap-4 md:grid-cols-3 lg:grid-cols-7">
         <!-- Database -->
         <div class="card">
           <div class="flex items-center gap-3">
@@ -402,29 +415,43 @@ onUnmounted(() => {
         </div>
 
         <!-- LLM Providers -->
-        <div class="card">
+        <div class="card col-span-2">
           <div class="flex items-center gap-3">
-            <CpuChipIcon class="h-8 w-8 text-gray-400" />
-            <div class="min-w-0">
+            <CpuChipIcon class="h-8 w-8 text-gray-400 flex-shrink-0" />
+            <div class="min-w-0 flex-1">
               <div class="text-sm font-medium text-gray-500">LLM</div>
-              <div class="flex items-center gap-1">
-                <component
-                  :is="stats?.cerebras?.available ? CheckCircleIcon : XCircleIcon"
-                  class="h-4 w-4 flex-shrink-0"
-                  :class="stats?.cerebras?.available ? 'text-green-500' : 'text-red-500'"
-                />
-                <span class="text-sm" :class="stats?.cerebras?.available ? 'text-green-600' : 'text-red-600'">
-                  Cerebras
-                </span>
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-1">
+                  <component
+                    :is="stats?.cerebras?.available ? CheckCircleIcon : XCircleIcon"
+                    class="h-4 w-4 flex-shrink-0"
+                    :class="stats?.cerebras?.available ? 'text-green-500' : 'text-red-500'"
+                  />
+                  <span class="text-sm" :class="stats?.cerebras?.available ? 'text-green-600' : 'text-red-600'">
+                    Cerebras
+                  </span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <component
+                    :is="health?.llm_available ? CheckCircleIcon : XCircleIcon"
+                    class="h-4 w-4 flex-shrink-0"
+                    :class="health?.llm_available ? 'text-green-500' : 'text-red-500'"
+                  />
+                  <span class="text-sm" :class="health?.llm_available ? 'text-green-600' : 'text-red-600'">
+                    Ollama
+                  </span>
+                </div>
               </div>
-              <div class="flex items-center gap-1">
-                <component
-                  :is="health?.llm_available ? CheckCircleIcon : XCircleIcon"
-                  class="h-4 w-4 flex-shrink-0"
-                  :class="health?.llm_available ? 'text-green-500' : 'text-red-500'"
-                />
-                <span class="text-sm" :class="health?.llm_available ? 'text-green-600' : 'text-red-600'">
-                  Ollama
+              <!-- Rate Limits -->
+              <div v-if="cerebrasRateLimits" class="mt-1 flex gap-3 text-xs text-gray-500">
+                <span :class="cerebrasRateLimits.minute?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                  {{ cerebrasRateLimits.minute?.remaining ?? '?' }}/{{ cerebrasRateLimits.minute?.limit ?? '?' }} req/min
+                </span>
+                <span :class="cerebrasRateLimits.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                  {{ cerebrasRateLimits.hour?.remaining ?? '?' }}/{{ cerebrasRateLimits.hour?.limit ?? '?' }} req/h
+                </span>
+                <span :class="cerebrasRateLimits.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
+                  {{ cerebrasRateLimits.day?.remaining ?? '?' }}/{{ cerebrasRateLimits.day?.limit ?? '?' }} req/d
                 </span>
               </div>
             </div>
@@ -729,6 +756,9 @@ onUnmounted(() => {
           <div v-if="llmWorkerStats" class="mt-2 space-y-1 text-sm text-gray-500">
             <div>Warteschlange: {{ stats.processing_queue.total }} | Verarbeitet: {{ Number(llmWorkerStats.fresh) + Number(llmWorkerStats.backlog) }}</div>
             <div>Fehler: {{ llmWorkerStats.errors }} | Zuletzt: {{ llmWorkerStats.lastProcessed }}</div>
+            <div v-if="llmWorkerStats.meanTime > 0">
+              ~{{ llmWorkerStats.meanTime.toFixed(1) }}s/Item ({{ llmWorkerStats.itemsTimed }} gemessen)
+            </div>
           </div>
 
           <div class="mt-4 flex gap-2">
