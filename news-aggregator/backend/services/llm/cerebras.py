@@ -71,21 +71,28 @@ class CerebrasRateLimiter:
             await asyncio.sleep(capped_wait)
 
     def handle_429(self):
-        """Record a 429 response for backoff tracking."""
+        """Record a 429 response for backoff tracking.
+
+        Only updates windows that are already tracked (from response headers).
+        If no windows are tracked yet, assumes minute window is exhausted.
+        """
         self._last_429 = time.monotonic()
         now = time.monotonic()
-        # Force remaining to 0 for all windows that are exhausted
-        # The 429 means at least one window is at limit
-        for window in ("minute", "hour", "day"):
-            if window in self._limits and self._limits[window]["remaining"] <= 0:
-                self._limits[window]["updated_at"] = now
-            elif window not in self._limits:
-                defaults = {"minute": 30, "hour": 900, "day": 14400}
-                self._limits[window] = {
-                    "limit": defaults.get(window, 30),
-                    "remaining": 0,
-                    "updated_at": now,
-                }
+
+        # Refresh updated_at for any exhausted windows
+        any_exhausted = False
+        for window, info in self._limits.items():
+            if info["remaining"] <= 0:
+                info["updated_at"] = now
+                any_exhausted = True
+
+        # If no tracked window is exhausted, assume minute (most common)
+        if not any_exhausted:
+            self._limits["minute"] = {
+                "limit": 30,
+                "remaining": 0,
+                "updated_at": now,
+            }
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
