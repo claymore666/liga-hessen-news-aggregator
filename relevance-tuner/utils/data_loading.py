@@ -21,7 +21,8 @@ def load_training_data(
     splits: list[str] = ["train", "validation"],
     data_dir: Optional[Path] = None,
     include_source: bool = True,
-) -> tuple[list[str], list[int], list[str], list[str]]:
+    return_raw: bool = False,
+) -> tuple:
     """
     Load training data from JSONL splits.
 
@@ -29,13 +30,11 @@ def load_training_data(
         splits: List of splits to load (e.g., ["train", "validation"])
         data_dir: Data directory (default: config.DATA_DIR)
         include_source: Whether to append source to text
+        return_raw: If True, also return raw (titles, contents, sources) lists
 
     Returns:
-        Tuple of (texts, relevance_labels, priority_labels, ak_labels)
-        - texts: List of formatted text strings
-        - relevance_labels: List of 0/1 for relevant/irrelevant
-        - priority_labels: List of priority strings (for relevant items only)
-        - ak_labels: List of AK strings (for relevant items only)
+        Default: Tuple of (texts, relevance_labels, priority_labels, ak_labels)
+        With return_raw: Tuple of (texts, relevance, priorities, aks, titles, contents, sources)
     """
     if data_dir is None:
         data_dir = DATA_DIR
@@ -44,6 +43,9 @@ def load_training_data(
     relevance = []
     priorities = []
     aks = []
+    raw_titles = []
+    raw_contents = []
+    raw_sources = []
 
     for split in splits:
         path = data_dir / f"{split}.jsonl"
@@ -63,12 +65,16 @@ def load_training_data(
                 # Format text (no truncation - embedder handles long texts)
                 title = inp.get("title", "")
                 content = inp.get("content", "")
+                source = inp.get("source", "")
                 text = f"{title} {content}"
 
-                if include_source and inp.get("source"):
-                    text += f" Quelle: {inp['source']}"
+                if include_source and source:
+                    text += f" Quelle: {source}"
 
                 texts.append(text)
+                raw_titles.append(title)
+                raw_contents.append(content)
+                raw_sources.append(source)
 
                 # Labels
                 is_relevant = lab.get("relevant", False)
@@ -81,13 +87,16 @@ def load_training_data(
                     priorities.append("")
                     aks.append("")
 
+    if return_raw:
+        return texts, relevance, priorities, aks, raw_titles, raw_contents, raw_sources
     return texts, relevance, priorities, aks
 
 
 def load_test_data(
     data_dir: Optional[Path] = None,
     include_source: bool = True,
-) -> tuple[list[str], list[int], list[str], list[str]]:
+    return_raw: bool = False,
+) -> tuple:
     """
     Load test split data.
 
@@ -97,6 +106,7 @@ def load_test_data(
         splits=["test"],
         data_dir=data_dir,
         include_source=include_source,
+        return_raw=return_raw,
     )
 
 

@@ -23,16 +23,18 @@ Production:
 """
 
 import pickle
+import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, f1_score
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 # Import from central config and utilities
 from config import (
@@ -44,6 +46,14 @@ from config import (
     get_backend_config,
 )
 from utils import get_embedder, load_test_data, load_training_data
+
+# Import feature extraction (shared with classifier-api)
+sys.path.insert(0, str(Path(__file__).parent / "services" / "classifier-api"))
+from feature_extraction import (
+    FEATURE_VERSION,
+    NUM_FEATURES,
+    extract_features_batch,
+)
 
 # ============================================================================
 # Configuration
@@ -83,10 +93,14 @@ class EmbeddingClassifier:
         # Get classifier settings from config (with defaults)
         lr_c = self.backend_config.get("lr_c", 1.0)
         lr_max_iter = self.backend_config.get("lr_max_iter", 1000)
+        lgbm_n_estimators = self.backend_config.get("lgbm_n_estimators", 300)
+        lgbm_max_depth = self.backend_config.get("lgbm_max_depth", 8)
+        lgbm_learning_rate = self.backend_config.get("lgbm_learning_rate", 0.05)
+        lgbm_num_leaves = self.backend_config.get("lgbm_num_leaves", 31)
         rf_n_estimators = self.backend_config.get("rf_n_estimators", 200)
         rf_max_depth = self.backend_config.get("rf_max_depth", 15)
 
-        # Stage 1: Relevance
+        # Stage 1: Relevance (LR with features — generalizes well on high-dim data)
         self.relevance_clf = LogisticRegression(
             max_iter=lr_max_iter,
             class_weight="balanced",
@@ -94,7 +108,7 @@ class EmbeddingClassifier:
             random_state=RANDOM_SEED,
         )
 
-        # Stage 2: Priority (RandomForest works well with embeddings)
+        # Stage 2: Priority (RF on embeddings only — geographic features hurt priority)
         self.priority_clf = RandomForestClassifier(
             n_estimators=rf_n_estimators,
             max_depth=rf_max_depth,
@@ -104,7 +118,7 @@ class EmbeddingClassifier:
         )
         self.priority_encoder = LabelEncoder()
 
-        # Stage 3: AK
+        # Stage 3: AK (RF with features — source/geography helps topic classification)
         self.ak_clf = RandomForestClassifier(
             n_estimators=rf_n_estimators,
             max_depth=rf_max_depth,
@@ -136,39 +150,85 @@ class EmbeddingClassifier:
         relevance: list[int],
         priorities: list[str],
         aks: list[str],
+        titles: list[str] | None = None,
+        contents: list[str] | None = None,
+        sources: list[str] | None = None,
     ):
-        """Train all classifiers."""
+        """Train all classifiers.
+
+        Args:
+            texts: Pre-formatted text strings for embedding
+            relevance: Binary relevance labels
+            priorities: Priority labels
+            aks: AK labels
+            titles: Raw titles (for feature extraction)
+            contents: Raw content (for feature extraction)
+            sources: Raw source names (for feature extraction)
+        """
         print("  Computing embeddings...")
-        X = self._embed(texts, show_progress=True)
-        print(f"  Embedding matrix: {X.shape}")
+        X_emb = self._embed(texts, show_progress=True)
+        print(f"  Embedding matrix: {X_emb.shape}")
 
-        # Stage 1: Relevance
-        print("  Training relevance classifier...")
+        # Feature extraction (if raw inputs provided)
+        if titles is not None and contents is not None and sources is not None:
+            print(f"  Extracting {NUM_FEATURES} geographic/structural features...")
+            features = extract_features_batch(titles, contents, sources)
+            self.feature_scaler = StandardScaler()
+            features_scaled = self.feature_scaler.fit_transform(features)
+            X_full = np.hstack([X_emb, features_scaled])
+            self.feature_version = FEATURE_VERSION
+            print(f"  Combined matrix: {X_full.shape} (embeddings + features)")
+        else:
+            self.feature_scaler = None
+            self.feature_version = None
+            X_full = X_emb
+
+        # Stage 1: Relevance (LR with features — geographic rules)
+        print("  Training relevance classifier (LR + features)...")
         y_rel = np.array(relevance)
-        self.relevance_clf.fit(X, y_rel)
+        self.relevance_clf.fit(X_full, y_rel)
 
-        # Stage 2: Priority (only on relevant)
-        print("  Training priority classifier...")
+        # Find optimal threshold on training data (maximize F1)
+        relevance_probs = self.relevance_clf.predict_proba(X_full)
+        relevant_class_idx = list(self.relevance_clf.classes_).index(1)
+        best_f1 = 0
+        best_threshold = 0.5
+        for t in np.arange(0.40, 0.71, 0.05):
+            preds = (relevance_probs[:, relevant_class_idx] > t).astype(int)
+            tp = np.sum((preds == 1) & (y_rel == 1))
+            fp = np.sum((preds == 1) & (y_rel == 0))
+            fn = np.sum((preds == 0) & (y_rel == 1))
+            prec = tp / (tp + fp) if (tp + fp) > 0 else 0
+            rec = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = float(t)
+        self.relevance_threshold = best_threshold
+        print(f"  Optimal threshold: {best_threshold:.2f} (F1={best_f1:.1%})")
+
+        # Stage 2: Priority (RF on embeddings only — features hurt priority)
+        print("  Training priority classifier (RF, embeddings only)...")
         relevant_mask = y_rel == 1
         priorities_arr = np.array(priorities)
         valid_priority = np.array([p in PRIORITY_LEVELS for p in priorities_arr])
         valid_mask = relevant_mask & valid_priority
 
         if np.sum(valid_mask) > 10:
-            X_priority = X[valid_mask]
+            X_priority = X_emb[valid_mask]
             y_priority = priorities_arr[valid_mask]
             self.priority_encoder.fit(PRIORITY_LEVELS)
             y_priority_enc = self.priority_encoder.transform(y_priority)
             self.priority_clf.fit(X_priority, y_priority_enc)
 
-        # Stage 3: AK (only on relevant)
-        print("  Training AK classifier...")
+        # Stage 3: AK (LightGBM with features — source/geography helps topics)
+        print("  Training AK classifier (RF + features)...")
         aks_arr = np.array(aks)
         valid_ak = np.array([a in AK_CLASSES for a in aks_arr])
         valid_mask = relevant_mask & valid_ak
 
         if np.sum(valid_mask) > 10:
-            X_ak = X[valid_mask]
+            X_ak = X_full[valid_mask]
             y_ak = aks_arr[valid_mask]
             self.ak_encoder.fit(AK_CLASSES)
             y_ak_enc = self.ak_encoder.transform(y_ak)
@@ -184,11 +244,20 @@ class EmbeddingClassifier:
         if source:
             text += f" Quelle: {source}"
 
-        X = self._embed([text], show_progress=False)
+        X_emb = self._embed([text], show_progress=False)
 
-        # Stage 1: Relevance
-        relevance_prob = self.relevance_clf.predict_proba(X)[0]
-        is_relevant = self.relevance_clf.predict(X)[0]
+        # Build full feature matrix (embeddings + geographic features)
+        if getattr(self, "feature_scaler", None) is not None:
+            from feature_extraction import extract_features
+            features = extract_features(title, content, source or "").reshape(1, -1)
+            features_scaled = self.feature_scaler.transform(features)
+            X_full = np.hstack([X_emb, features_scaled])
+        else:
+            X_full = X_emb
+
+        # Stage 1: Relevance (uses features)
+        relevance_prob = self.relevance_clf.predict_proba(X_full)[0]
+        is_relevant = self.relevance_clf.predict(X_full)[0]
 
         result = {
             "relevant": bool(is_relevant),
@@ -200,9 +269,9 @@ class EmbeddingClassifier:
         }
 
         if is_relevant:
-            # Stage 2: Priority
+            # Stage 2: Priority (embeddings only — features hurt priority)
             try:
-                priority_prob = self.priority_clf.predict_proba(X)[0]
+                priority_prob = self.priority_clf.predict_proba(X_emb)[0]
                 priority_idx = np.argmax(priority_prob)
                 result["priority"] = self.priority_encoder.inverse_transform(
                     [priority_idx]
@@ -212,9 +281,9 @@ class EmbeddingClassifier:
                 result["priority"] = "medium"
                 result["priority_confidence"] = 0.5
 
-            # Stage 3: AK
+            # Stage 3: AK (uses features)
             try:
-                ak_prob = self.ak_clf.predict_proba(X)[0]
+                ak_prob = self.ak_clf.predict_proba(X_full)[0]
                 ak_idx = np.argmax(ak_prob)
                 result["ak"] = self.ak_encoder.inverse_transform([ak_idx])[0]
                 result["ak_confidence"] = float(ak_prob[ak_idx])
@@ -224,13 +293,28 @@ class EmbeddingClassifier:
 
         return result
 
-    def predict_batch(self, texts: list[str]) -> list[dict]:
+    def predict_batch(
+        self,
+        texts: list[str],
+        titles: list[str] | None = None,
+        contents: list[str] | None = None,
+        sources: list[str] | None = None,
+    ) -> list[dict]:
         """Predict for multiple texts."""
-        X = self._embed(texts, show_progress=False)
+        X_emb = self._embed(texts, show_progress=False)
 
-        # Stage 1: Relevance
-        relevance_preds = self.relevance_clf.predict(X)
-        relevance_probs = self.relevance_clf.predict_proba(X)
+        # Build full feature matrix
+        if getattr(self, "feature_scaler", None) is not None and titles is not None:
+            features = extract_features_batch(titles, contents or [""] * len(texts),
+                                              sources or [""] * len(texts))
+            features_scaled = self.feature_scaler.transform(features)
+            X_full = np.hstack([X_emb, features_scaled])
+        else:
+            X_full = X_emb
+
+        # Stage 1: Relevance (uses features)
+        relevance_preds = self.relevance_clf.predict(X_full)
+        relevance_probs = self.relevance_clf.predict_proba(X_full)
 
         results = []
         for i in range(len(texts)):
@@ -248,11 +332,14 @@ class EmbeddingClassifier:
         # Stage 2 & 3: Only for relevant items
         relevant_indices = [i for i, r in enumerate(results) if r["relevant"]]
         if relevant_indices:
-            X_relevant = X[relevant_indices]
+            # Priority uses embeddings only
+            X_pri = X_emb[relevant_indices]
+            # AK uses embeddings + features
+            X_ak = X_full[relevant_indices]
 
             try:
-                priority_probs = self.priority_clf.predict_proba(X_relevant)
-                ak_probs = self.ak_clf.predict_proba(X_relevant)
+                priority_probs = self.priority_clf.predict_proba(X_pri)
+                ak_probs = self.ak_clf.predict_proba(X_ak)
 
                 for j, i in enumerate(relevant_indices):
                     priority_idx = np.argmax(priority_probs[j])
@@ -317,6 +404,15 @@ class EmbeddingClassifier:
             "multilabel": False,  # Single-label for now
         }
 
+        # Include feature scaler if features were used during training
+        if getattr(self, "feature_scaler", None) is not None:
+            data["feature_scaler"] = self.feature_scaler
+            data["feature_version"] = getattr(self, "feature_version", 1)
+
+        # Include optimal relevance threshold
+        if hasattr(self, "relevance_threshold"):
+            data["relevance_threshold"] = self.relevance_threshold
+
         with open(filepath, "wb") as f:
             pickle.dump(data, f)
 
@@ -365,9 +461,12 @@ def evaluate(
     relevance: list[int],
     priorities: list[str],
     aks: list[str],
+    titles: list[str] | None = None,
+    contents: list[str] | None = None,
+    sources: list[str] | None = None,
 ) -> dict:
     """Evaluate the classifier."""
-    predictions = clf.predict_batch(texts)
+    predictions = clf.predict_batch(texts, titles=titles, contents=contents, sources=sources)
 
     # Relevance
     y_true_rel = np.array(relevance)
@@ -476,12 +575,14 @@ def main():
     print(f"  RF: n_estimators={backend_config.get('rf_n_estimators', 200)}, "
           f"max_depth={backend_config.get('rf_max_depth', 15)}")
 
-    # Load data using shared utilities
+    # Load data using shared utilities (with raw inputs for feature extraction)
     print("\n[1/4] Loading data...")
-    train_texts, train_rel, train_pri, train_ak = load_training_data(
-        splits=["train", "validation"]
+    train_texts, train_rel, train_pri, train_ak, train_titles, train_contents, train_sources = load_training_data(
+        splits=["train", "validation"], return_raw=True,
     )
-    test_texts, test_rel, test_pri, test_ak = load_test_data()
+    test_texts, test_rel, test_pri, test_ak, test_titles, test_contents, test_sources = load_test_data(
+        return_raw=True,
+    )
 
     print(f"  Training: {len(train_texts)} items")
     print(f"  Test: {len(test_texts)} items")
@@ -502,19 +603,23 @@ def main():
     # Train with backend-specific config
     print("\n[2/4] Training classifier...")
     clf = EmbeddingClassifier(backend_config=backend_config)
-    clf.fit(train_texts, train_rel, train_pri, train_ak)
+    clf.fit(train_texts, train_rel, train_pri, train_ak,
+            titles=train_titles, contents=train_contents, sources=train_sources)
 
     # Evaluate
     print("\n[3/4] Evaluating on test set...")
-    metrics = evaluate(clf, test_texts, test_rel, test_pri, test_ak)
+    metrics = evaluate(clf, test_texts, test_rel, test_pri, test_ak,
+                       titles=test_titles, contents=test_contents, sources=test_sources)
 
     # Speed benchmark
     print("\n[4/4] Speed benchmark...")
     # Warmup
-    clf.predict_batch(test_texts[:10])
+    clf.predict_batch(test_texts[:10], titles=test_titles[:10],
+                      contents=test_contents[:10], sources=test_sources[:10])
 
     start = time.perf_counter()
-    clf.predict_batch(test_texts)
+    clf.predict_batch(test_texts, titles=test_titles,
+                      contents=test_contents, sources=test_sources)
     elapsed = time.perf_counter() - start
     speed = len(test_texts) / elapsed
     print(f"  Speed: {speed:.1f} items/sec ({1000/speed:.1f}ms per item)")

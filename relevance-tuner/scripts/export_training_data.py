@@ -250,6 +250,11 @@ def main():
         "--min-confidence", type=float, default=0.0,
         help="Minimum LLM relevance score 0.0-1.0 (recommended: 0.6 for higher quality labels)"
     )
+    parser.add_argument(
+        "--haiku-overrides", type=str, default=None,
+        help="JSONL file with Haiku-labeled items (from label_disagreements.py). "
+             "Overrides LLM labels for matching item IDs with higher-quality Haiku labels."
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -302,6 +307,48 @@ def main():
     if quality_filtered > 0:
         print(f"  Excluded: {quality_filtered} items below content/confidence thresholds")
 
+    # Apply Haiku label overrides (higher-quality labels for disagreement items)
+    haiku_overrides_applied = 0
+    if args.haiku_overrides:
+        haiku_path = Path(args.haiku_overrides)
+        if not haiku_path.exists():
+            print(f"WARNING: Haiku overrides file not found: {haiku_path}")
+        else:
+            # Load Haiku-labeled items keyed by item_id
+            haiku_by_id = {}
+            with open(haiku_path) as f:
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                        item_id = record.get("provenance", {}).get("item_id")
+                        if item_id:
+                            haiku_by_id[item_id] = record
+                    except json.JSONDecodeError:
+                        pass
+            print(f"\nApplying Haiku label overrides ({len(haiku_by_id)} items)...")
+
+            # Replace labels for matching items in training data
+            for i, item in enumerate(training_data):
+                item_id = item["provenance"].get("item_id")
+                if item_id in haiku_by_id:
+                    haiku_record = haiku_by_id.pop(item_id)
+                    training_data[i]["labels"] = haiku_record["labels"]
+                    training_data[i]["provenance"]["label_source"] = "haiku"
+                    training_data[i]["provenance"]["is_disagreement"] = True
+                    haiku_overrides_applied += 1
+
+            # Add Haiku items that weren't in training data (e.g., filtered by quality)
+            haiku_added = 0
+            existing_ids = {item["provenance"].get("item_id") for item in training_data}
+            for item_id, haiku_record in haiku_by_id.items():
+                if item_id not in existing_ids:
+                    training_data.append(haiku_record)
+                    haiku_added += 1
+
+            print(f"  Overridden: {haiku_overrides_applied} items")
+            if haiku_added > 0:
+                print(f"  Added:      {haiku_added} items (not in API export)")
+
     if not training_data:
         print("No training data after filtering!")
         sys.exit(1)
@@ -319,11 +366,14 @@ def main():
 
     # Disagreement stats
     disagreement_items = [i for i in training_data if i["provenance"].get("is_disagreement")]
+    haiku_labeled = [i for i in training_data if i["provenance"].get("label_source") == "haiku"]
     print(f"\nClassifier-LLM disagreements:")
     print(f"  Found:           {len(disagreement_ids)}")
     print(f"  In training data: {len(disagreement_items)} (after filters)")
     if len(disagreement_ids) > len(disagreement_items):
         print(f"  Excluded:         {len(disagreement_ids) - len(disagreement_items)} (filtered by content/confidence)")
+    if haiku_labeled:
+        print(f"  Haiku-labeled:    {len(haiku_labeled)} (higher-quality ground truth)")
 
     # Priority distribution (relevant only)
     priority_dist = Counter(i["labels"]["priority"] for i in relevant)

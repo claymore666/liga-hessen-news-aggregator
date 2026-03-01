@@ -28,11 +28,14 @@ from pathlib import Path
 
 # Add parent directory to path for config/utils import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add classifier-api to path for feature_extraction import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services" / "classifier-api"))
 
 import numpy as np
 
 from config import MODELS_DIR, PRIORITY_LEVELS
 from utils import get_embedder
+from feature_extraction import extract_features_batch
 
 # ============================================================================
 # Configuration
@@ -53,23 +56,56 @@ def load_model(model_path: Path) -> dict:
         return pickle.load(f)
 
 
-def predict_batch(model: dict, embeddings: np.ndarray) -> list[dict]:
-    """Run predictions using model components directly."""
+def predict_batch(
+    model: dict,
+    embeddings: np.ndarray,
+    titles: list[str] | None = None,
+    contents: list[str] | None = None,
+    sources: list[str] | None = None,
+    threshold: float = 0.5,
+) -> list[dict]:
+    """Run predictions using model components directly.
+
+    Per-stage feature routing:
+    - Relevance: embeddings + features (geographic rules)
+    - Priority: embeddings only (features hurt priority)
+    - AK: embeddings + features (source/geography helps topics)
+
+    Args:
+        threshold: Relevance confidence threshold (default 0.5).
+                   Items with P(relevant) > threshold are classified as relevant.
+    """
     relevance_clf = model["relevance_clf"]
     priority_clf = model["priority_clf"]
     ak_clf = model["ak_clf"]
     priority_encoder = model["priority_encoder"]
     ak_encoder = model["ak_encoder"]
 
-    relevance_preds = relevance_clf.predict(embeddings)
-    relevance_probs = relevance_clf.predict_proba(embeddings)
+    X_emb = embeddings  # Keep raw embeddings for priority
+
+    # Build full feature matrix for relevance + AK
+    feature_scaler = model.get("feature_scaler")
+    if feature_scaler is not None and titles is not None:
+        features = extract_features_batch(
+            titles, contents or [""] * len(embeddings),
+            sources or [""] * len(embeddings),
+        )
+        features_scaled = feature_scaler.transform(features)
+        X_full = np.hstack([embeddings, features_scaled])
+    else:
+        X_full = embeddings
+
+    # Stage 1: Relevance (uses features) with configurable threshold
+    relevance_probs = relevance_clf.predict_proba(X_full)
+    relevant_class_idx = list(relevance_clf.classes_).index(1)
 
     results = []
     for i in range(len(embeddings)):
-        is_relevant = bool(relevance_preds[i])
+        relevance_confidence = float(relevance_probs[i][relevant_class_idx])
+        is_relevant = relevance_confidence > threshold
         result = {
             "relevant": is_relevant,
-            "relevance_confidence": float(max(relevance_probs[i])),
+            "relevance_confidence": relevance_confidence,
             "priority": None,
             "ak": None,
         }
@@ -78,10 +114,11 @@ def predict_batch(model: dict, embeddings: np.ndarray) -> list[dict]:
     # Stage 2 & 3: Only for relevant items
     relevant_indices = [i for i, r in enumerate(results) if r["relevant"]]
     if relevant_indices:
-        X_relevant = embeddings[relevant_indices]
+        X_pri = X_emb[relevant_indices]   # Priority: embeddings only
+        X_ak = X_full[relevant_indices]   # AK: embeddings + features
         try:
-            priority_probs = priority_clf.predict_proba(X_relevant)
-            ak_probs = ak_clf.predict_proba(X_relevant)
+            priority_probs = priority_clf.predict_proba(X_pri)
+            ak_probs = ak_clf.predict_proba(X_ak)
 
             for j, i in enumerate(relevant_indices):
                 priority_idx = np.argmax(priority_probs[j])
@@ -231,6 +268,10 @@ def main():
                         help="Label for this eval run (e.g. 'baseline', 'retrained-v2')")
     parser.add_argument("--eval-set", type=str, default=None,
                         help=f"Path to eval set JSON (default: {EVAL_SET_PATH})")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Relevance threshold (default: from model or 0.5)")
+    parser.add_argument("--sweep", action="store_true",
+                        help="Sweep thresholds 0.40-0.70 and print precision/recall/F1 for each")
     args = parser.parse_args()
 
     model_path = Path(args.model) if args.model else DEFAULT_MODEL
@@ -278,8 +319,11 @@ def main():
     model = load_model(model_path)
     print(f"  Backend: {model.get('backend', 'unknown')}")
 
-    # Prepare texts (matching data_loading.py format)
+    # Prepare texts (matching data_loading.py format) and raw inputs for features
     texts = []
+    raw_titles = []
+    raw_contents = []
+    raw_sources = []
     for item in items:
         title = item.get("title", "")
         content = item.get("content", "")
@@ -288,6 +332,9 @@ def main():
         if source:
             text += f" Quelle: {source}"
         texts.append(text)
+        raw_titles.append(title)
+        raw_contents.append(content)
+        raw_sources.append(source)
 
     # Compute embeddings
     print("\n[2/3] Computing embeddings...")
@@ -300,9 +347,45 @@ def main():
     embed_speed = len(texts) / embed_time
     print(f"  Embedded {len(texts)} items in {embed_time:.1f}s ({embed_speed:.0f} items/sec)")
 
+    # Determine threshold
+    threshold = args.threshold if args.threshold is not None else model.get("relevance_threshold", 0.5)
+
     # Predict
     print("\n[3/3] Running predictions...")
-    predictions = predict_batch(model, embeddings)
+    has_features = model.get("feature_scaler") is not None
+    if has_features:
+        print(f"  Model includes geographic features (v{model.get('feature_version', '?')})")
+
+    # Sweep mode: test multiple thresholds
+    if args.sweep:
+        print(f"\n{'=' * 80}")
+        print("THRESHOLD SWEEP")
+        print(f"{'=' * 80}")
+        print(f"{'Threshold':>10} {'Prec':>7} {'Recall':>7} {'F1':>7} {'TP':>5} {'FP':>5} {'FN':>5} {'Acc':>7}")
+        print("-" * 65)
+
+        best_f1 = 0
+        best_threshold = 0.5
+        for t in np.arange(0.40, 0.71, 0.05):
+            preds = predict_batch(model, embeddings,
+                                  titles=raw_titles, contents=raw_contents, sources=raw_sources,
+                                  threshold=t)
+            m, _ = compute_metrics(items, preds)
+            f1 = m["f1"]
+            print(f"{t:>10.2f} {m['precision']:>6.1%} {m['recall']:>6.1%} {f1:>6.1%} "
+                  f"{m['tp']:>5} {m['fp']:>5} {m['fn']:>5} {m['accuracy']:>6.1%}")
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = t
+
+        print(f"\nBest F1: {best_f1:.1%} at threshold {best_threshold:.2f}")
+        print(f"\nTo use: python scripts/run_classifier_eval.py --threshold {best_threshold:.2f} --label <name>")
+        return
+
+    print(f"  Relevance threshold: {threshold}")
+    predictions = predict_batch(model, embeddings,
+                                titles=raw_titles, contents=raw_contents, sources=raw_sources,
+                                threshold=threshold)
 
     # Compute metrics
     metrics, results_detail = compute_metrics(items, predictions)
@@ -369,6 +452,7 @@ def main():
         "model_path": str(model_path),
         "model_fingerprint": fingerprint,
         "label": label,
+        "relevance_threshold": threshold,
         "eval_set_version": eval_version,
         "eval_set_path": str(eval_path),
         "embed_speed_items_per_sec": round(embed_speed, 1),
