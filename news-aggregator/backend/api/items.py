@@ -1376,3 +1376,203 @@ async def get_item_history(
         }
         for event in events
     ]
+
+
+# --- Title Pre-filter Endpoints ---
+
+
+class PrefilterBatchRequest(BaseModel):
+    """Request body for batch pre-filter."""
+    item_ids: list[int] | None = None
+    days: int | None = None
+
+
+@router.post("/items/{item_id}/prefilter")
+async def prefilter_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run title pre-filter (qwen3:8b) on a single item.
+
+    Returns the relevance verdict without triggering full LLM analysis.
+    Does NOT unload/reload models — caller manages that.
+    """
+    from config import settings
+    from services.title_prefilter import prefilter_single
+
+    if not settings.title_prefilter_enabled:
+        raise HTTPException(status_code=400, detail="Title pre-filter is disabled")
+
+    query = select(Item).where(Item.id == item_id)
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Run pre-filter
+    check_result = await prefilter_single(
+        base_url=settings.ollama_base_url,
+        model=settings.title_prefilter_model,
+        title=item.title,
+    )
+
+    relevant = check_result["relevant"]
+    duration_ms = check_result.get("duration_ms", 0)
+
+    # Update item metadata
+    new_metadata = dict(item.metadata_) if item.metadata_ else {}
+    new_metadata.pop("needs_title_check", None)
+    new_metadata["title_check"] = {
+        "relevant": relevant,
+        "model": settings.title_prefilter_model,
+        "duration_ms": duration_ms,
+        "checked_at": datetime.utcnow().isoformat(),
+    }
+    item.metadata_ = new_metadata
+
+    if not relevant:
+        item.needs_llm_processing = False
+        item.priority = Priority.NONE
+        item.priority_score = 10
+
+    # Record event
+    from services.item_events import record_event, EVENT_TITLE_PREFILTER
+    await record_event(
+        db, item_id, EVENT_TITLE_PREFILTER,
+        data={"relevant": relevant, "model": settings.title_prefilter_model, "duration_ms": duration_ms},
+    )
+
+    return {
+        "id": item_id,
+        "title": item.title,
+        "relevant": relevant,
+        "duration_ms": duration_ms,
+    }
+
+
+async def _prefilter_batch_task(item_ids: list[int]):
+    """Background task to run title pre-filter on a batch of items."""
+    from config import settings
+    from services.title_prefilter import run_prefilter_batch
+    from services.item_events import record_event, EVENT_TITLE_PREFILTER
+
+    # Load items
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Item.id, Item.title, Item.metadata_)
+            .where(Item.id.in_(item_ids))
+        )
+        rows = result.fetchall()
+
+    items = [{"id": r[0], "title": r[1], "metadata_": dict(r[2]) if r[2] else {}} for r in rows]
+
+    if not items:
+        logger.info("Pre-filter batch: no items found")
+        return
+
+    # Run batch (handles model switching)
+    batch_result = await run_prefilter_batch(
+        base_url=settings.ollama_base_url,
+        items=items,
+        main_model=settings.ollama_model,
+        prefilter_model=settings.title_prefilter_model,
+    )
+
+    # Apply results
+    from sqlalchemy import update as sql_update
+    checked = 0
+    filtered = 0
+
+    for res in batch_result.get("results", []):
+        item_id = res["id"]
+        relevant = res["relevant"]
+        duration_ms = res.get("duration_ms", 0)
+
+        orig = next((i for i in items if i["id"] == item_id), None)
+        if not orig:
+            continue
+
+        try:
+            async with async_session_maker() as db:
+                new_metadata = dict(orig["metadata_"])
+                new_metadata.pop("needs_title_check", None)
+                new_metadata["title_check"] = {
+                    "relevant": relevant,
+                    "model": settings.title_prefilter_model,
+                    "duration_ms": duration_ms,
+                    "checked_at": datetime.utcnow().isoformat(),
+                }
+
+                update_values = {"metadata_": new_metadata}
+                if not relevant:
+                    update_values["needs_llm_processing"] = False
+                    update_values["priority"] = Priority.NONE
+                    update_values["priority_score"] = 10
+                    filtered += 1
+
+                await db.execute(
+                    sql_update(Item).where(Item.id == item_id).values(**update_values)
+                )
+                await record_event(
+                    db, item_id, EVENT_TITLE_PREFILTER,
+                    data={"relevant": relevant, "model": settings.title_prefilter_model, "duration_ms": duration_ms},
+                )
+                await db.commit()
+                checked += 1
+        except Exception as e:
+            logger.error(f"Pre-filter batch: failed to update item {item_id}: {e}")
+
+    logger.info(f"Pre-filter batch complete: {checked} checked, {filtered} filtered out")
+
+
+@router.post("/items/prefilter")
+async def prefilter_items_batch(
+    request_body: PrefilterBatchRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run title pre-filter on a batch of items.
+
+    Specify either item_ids or days (to process recent classifier-only items).
+    Runs in background with model switching (unload 14b -> batch 8b -> unload 8b).
+    """
+    from config import settings
+
+    if not settings.title_prefilter_enabled:
+        raise HTTPException(status_code=400, detail="Title pre-filter is disabled")
+
+    if request_body.item_ids:
+        item_ids = request_body.item_ids
+    elif request_body.days:
+        # Find recent items that have classifier results but no LLM analysis
+        cutoff = datetime.utcnow() - timedelta(days=request_body.days)
+        query = (
+            select(Item.id)
+            .where(
+                Item.fetched_at >= cutoff,
+                Item.needs_llm_processing == True,  # noqa: E712
+                json_extract_path(Item.metadata_, "pre_filter").is_not(None),
+                json_extract_path(Item.metadata_, "title_check").is_(None),
+            )
+            .order_by(Item.fetched_at.desc())
+            .limit(settings.title_prefilter_batch_limit)
+        )
+        result = await db.execute(query)
+        item_ids = [row[0] for row in result.fetchall()]
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either item_ids or days parameter",
+        )
+
+    if not item_ids:
+        return {"status": "no items to process", "count": 0}
+
+    background_tasks.add_task(_prefilter_batch_task, item_ids)
+
+    return {
+        "status": "started",
+        "count": len(item_ids),
+        "message": "Pre-filter running in background. Check logs for progress.",
+    }

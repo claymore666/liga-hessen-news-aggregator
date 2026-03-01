@@ -121,6 +121,9 @@ services:
       - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
       - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}
       - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-true}
+      # Title pre-filter (small LLM for quick false-positive rejection)
+      - TITLE_PREFILTER_ENABLED=${TITLE_PREFILTER_ENABLED:-true}
+      - TITLE_PREFILTER_MODEL=${TITLE_PREFILTER_MODEL:-qwen3:8b}
       - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - REDIS_URL=redis://redis:6379/0
       - BROWSER_POOL_MAX=${BROWSER_POOL_MAX:-2}
@@ -128,6 +131,7 @@ services:
     volumes:
       - backend-data:/app/data
       - ./ssh:/app/ssh:ro  # SSH key for gpu1 shutdown
+      - ./backend/prompts:/app/prompts:ro  # LLM prompt files (title pre-filter)
     ports:
       - "8000:8000"
     depends_on:

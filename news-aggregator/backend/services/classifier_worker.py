@@ -331,6 +331,12 @@ class ClassifierWorker:
                     "classified_at": datetime.utcnow().isoformat(),
                 }
 
+                # Flag for title pre-filter (runs before full LLM)
+                if not skip_llm:
+                    from config import settings
+                    if settings.title_prefilter_enabled:
+                        new_metadata["needs_title_check"] = True
+
                 # Set retry priority for LLM worker
                 if confidence >= CONFIDENCE_HIGH:
                     new_metadata["retry_priority"] = "high"

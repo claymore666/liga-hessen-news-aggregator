@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     classifier_use_priority: bool = False  # Use classifier priority instead of LLM
     classifier_use_ak: bool = False  # Use classifier AK instead of LLM
 
+    # Title Pre-filter (small LLM for quick title-based relevance check)
+    title_prefilter_enabled: bool = True  # Enable title pre-filter between classifier and LLM
+    title_prefilter_model: str = "qwen3:8b"  # Small model for fast title checks
+    title_prefilter_batch_limit: int = 200  # Max items per pre-filter batch
+
     # GPU1 Power Management (Wake-on-LAN)
     gpu1_wol_enabled: bool = True  # Enable WoL feature
     gpu1_ollama_url: str = "http://192.168.0.141:11434"  # Ollama URL on gpu1 for availability check

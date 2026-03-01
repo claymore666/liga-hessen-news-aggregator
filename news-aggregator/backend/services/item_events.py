@@ -21,6 +21,7 @@ EVENT_READ = "read"
 EVENT_ARCHIVED = "archived"
 EVENT_STARRED = "starred"
 EVENT_DUPLICATE_DETECTED = "duplicate_detected"
+EVENT_TITLE_PREFILTER = "title_prefilter"
 
 
 async def record_event(

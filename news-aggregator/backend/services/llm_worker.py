@@ -64,6 +64,8 @@ class LLMWorker:
         self._stats = {
             "fresh_processed": 0,
             "backlog_processed": 0,
+            "prefilter_checked": 0,
+            "prefilter_filtered": 0,
             "errors": 0,
             "started_at": None,
             "last_processed_at": None,
@@ -218,6 +220,14 @@ class LLMWorker:
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
 
+                # Priority 1.5: Run title pre-filter on classified items
+                prefilter_count = await self._run_title_prefilter()
+                if prefilter_count > 0:
+                    consecutive_errors = 0
+                    await self._on_success()
+                    self._record_gpu1_activity()
+                    continue  # Re-check fresh items before backlog
+
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
@@ -318,6 +328,177 @@ class LLMWorker:
             self._processor = None
             logger.info("gpu1 shutdown due to idle timeout, processor cleared")
 
+    async def _run_title_prefilter(self) -> int:
+        """
+        Run qwen3:8b title pre-filter on items flagged by the classifier.
+
+        Checks items with needs_title_check=True, processes their titles through
+        a small LLM, and rejects obvious false positives before they reach the
+        full LLM. Handles VRAM model switching automatically.
+
+        Returns:
+            Number of items checked (0 if none pending or feature disabled)
+        """
+        from config import settings
+
+        if not settings.title_prefilter_enabled:
+            return 0
+
+        # Query items needing title check
+        async with async_session_maker() as db:
+            from database import json_extract_path
+            needs_title_check = json_extract_path(Item.metadata_, "needs_title_check")
+
+            query = (
+                select(Item.id, Item.title, Item.metadata_)
+                .where(
+                    Item.needs_llm_processing == True,  # noqa: E712
+                    needs_title_check == "true",
+                )
+                .order_by(Item.fetched_at.desc())
+                .limit(settings.title_prefilter_batch_limit)
+            )
+
+            result = await db.execute(query)
+            rows = result.fetchall()
+
+        if not rows:
+            return 0
+
+        items_to_check = [
+            {"id": row[0], "title": row[1], "metadata_": dict(row[2]) if row[2] else {}}
+            for row in rows
+        ]
+
+        logger.info(f"Title pre-filter: {len(items_to_check)} items to check")
+
+        # Check if gpu1/Ollama is reachable before model switching
+        from services.gpu1_power import get_power_manager
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            if not await power_mgr.is_available():
+                logger.debug("gpu1 not available, skipping title pre-filter")
+                return 0
+
+        # Run pre-filter batch (handles model switching)
+        from services.title_prefilter import run_prefilter_batch
+
+        try:
+            batch_result = await run_prefilter_batch(
+                base_url=settings.ollama_base_url,
+                items=items_to_check,
+                main_model=settings.ollama_model,
+                prefilter_model=settings.title_prefilter_model,
+            )
+        except Exception as e:
+            logger.error(f"Title pre-filter batch failed: {e}")
+            # On total failure, remove flags so items proceed to LLM
+            await self._clear_title_check_flags([i["id"] for i in items_to_check])
+            return 0
+
+        # Apply results to database
+        from services.item_events import record_event, EVENT_TITLE_PREFILTER
+
+        checked = 0
+        filtered = 0
+
+        for result_item in batch_result.get("results", []):
+            item_id = result_item["id"]
+            relevant = result_item["relevant"]
+            duration_ms = result_item.get("duration_ms", 0)
+
+            # Find the original metadata
+            orig = next((i for i in items_to_check if i["id"] == item_id), None)
+            if not orig:
+                continue
+
+            try:
+                async with async_session_maker() as db:
+                    from sqlalchemy import update as sql_update
+
+                    new_metadata = dict(orig["metadata_"])
+                    # Remove the flag
+                    new_metadata.pop("needs_title_check", None)
+                    # Record result
+                    new_metadata["title_check"] = {
+                        "relevant": relevant,
+                        "model": settings.title_prefilter_model,
+                        "duration_ms": duration_ms,
+                        "checked_at": datetime.utcnow().isoformat(),
+                    }
+
+                    update_values = {"metadata_": new_metadata}
+
+                    if not relevant:
+                        # Reject: skip LLM entirely
+                        update_values["needs_llm_processing"] = False
+                        update_values["priority"] = Priority.NONE
+                        update_values["priority_score"] = 10
+                        filtered += 1
+
+                    await db.execute(
+                        sql_update(Item)
+                        .where(Item.id == item_id)
+                        .values(**update_values)
+                    )
+
+                    await record_event(
+                        db,
+                        item_id,
+                        EVENT_TITLE_PREFILTER,
+                        data={
+                            "relevant": relevant,
+                            "model": settings.title_prefilter_model,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+
+                    await db.commit()
+                    checked += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to update pre-filter result for item {item_id}: {e}")
+                # On per-item error, clear the flag so item proceeds to LLM
+                await self._clear_title_check_flags([item_id])
+
+            # Check for fresh items — break if they arrive (priority)
+            if not self._fresh_queue.empty():
+                logger.info("Fresh items arrived, pausing pre-filter")
+                break
+
+        async with self._stats_lock:
+            self._stats["prefilter_checked"] += checked
+            self._stats["prefilter_filtered"] += filtered
+
+        logger.info(
+            f"Title pre-filter done: {checked} checked, {filtered} filtered out"
+        )
+        return checked
+
+    async def _clear_title_check_flags(self, item_ids: list[int]) -> None:
+        """Remove needs_title_check flag so items proceed to LLM on error."""
+        from sqlalchemy import update as sql_update
+        from database import json_extract_path
+
+        try:
+            async with async_session_maker() as db:
+                for item_id in item_ids:
+                    result = await db.execute(
+                        select(Item.metadata_).where(Item.id == item_id)
+                    )
+                    row = result.scalar_one_or_none()
+                    if row:
+                        new_metadata = dict(row) if row else {}
+                        new_metadata.pop("needs_title_check", None)
+                        await db.execute(
+                            sql_update(Item)
+                            .where(Item.id == item_id)
+                            .values(metadata_=new_metadata)
+                        )
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to clear title check flags: {e}")
+
     async def _process_fresh_items(self) -> int:
         """
         Process items from the fresh queue.
@@ -395,6 +576,7 @@ class LLMWorker:
             from database import json_extract_path
             retry_priority = json_extract_path(Item.metadata_, "retry_priority")
             pre_filter = json_extract_path(Item.metadata_, "pre_filter")
+            needs_title_check = json_extract_path(Item.metadata_, "needs_title_check")
             priority_order = case(
                 (retry_priority == "high", 1),
                 (retry_priority == "edge_case", 2),
@@ -411,6 +593,8 @@ class LLMWorker:
                     Item.needs_llm_processing == True,  # noqa: E712
                     # Skip certainly irrelevant items
                     or_(retry_priority != "low", retry_priority.is_(None)),
+                    # Skip items still awaiting title pre-filter
+                    or_(needs_title_check.is_(None), needs_title_check == "false"),
                 )
                 .order_by(priority_order, Item.fetched_at.desc())
                 .limit(self.backlog_batch_size)
