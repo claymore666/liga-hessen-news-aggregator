@@ -42,6 +42,8 @@ class CerebrasRateLimiter:
     async def wait_if_needed(self):
         """Wait if we're at the rate limit for any window."""
         now = time.monotonic()
+        max_wait = 0
+        blocking_window = None
 
         for window, info in self._limits.items():
             if info["remaining"] <= 0:
@@ -54,30 +56,36 @@ class CerebrasRateLimiter:
                 else:  # day
                     wait = max(0, 86400 - age)
 
-                if wait > 0:
-                    # Cap wait to 65s — minute window is the most common limit
-                    wait = min(wait, 65)
-                    logger.info(
-                        f"Cerebras rate limit ({window}): "
-                        f"{info['remaining']}/{info['limit']}, "
-                        f"waiting {wait:.0f}s"
-                    )
-                    await asyncio.sleep(wait)
-                    return  # Only wait once, then retry
+                if wait > max_wait:
+                    max_wait = wait
+                    blocking_window = window
+
+        if max_wait > 0 and blocking_window:
+            # Cap wait to 120s — check again after that
+            capped_wait = min(max_wait, 120)
+            logger.info(
+                f"Cerebras rate limit ({blocking_window}): "
+                f"{self._limits[blocking_window]['remaining']}/{self._limits[blocking_window]['limit']}, "
+                f"waiting {capped_wait:.0f}s (full reset in {max_wait:.0f}s)"
+            )
+            await asyncio.sleep(capped_wait)
 
     def handle_429(self):
         """Record a 429 response for backoff tracking."""
         self._last_429 = time.monotonic()
-        # Force remaining to 0 for minute window
-        if "minute" in self._limits:
-            self._limits["minute"]["remaining"] = 0
-            self._limits["minute"]["updated_at"] = time.monotonic()
-        else:
-            self._limits["minute"] = {
-                "limit": 30,
-                "remaining": 0,
-                "updated_at": time.monotonic(),
-            }
+        now = time.monotonic()
+        # Force remaining to 0 for all windows that are exhausted
+        # The 429 means at least one window is at limit
+        for window in ("minute", "hour", "day"):
+            if window in self._limits and self._limits[window]["remaining"] <= 0:
+                self._limits[window]["updated_at"] = now
+            elif window not in self._limits:
+                defaults = {"minute": 30, "hour": 900, "day": 14400}
+                self._limits[window] = {
+                    "limit": defaults.get(window, 30),
+                    "remaining": 0,
+                    "updated_at": now,
+                }
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
