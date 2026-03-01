@@ -162,35 +162,43 @@ class LLMWorker:
             from services.worker_status import write_state
             await write_state("llm", running=True, stopped_due_to_errors=False)
 
+    def _has_cloud_provider(self) -> bool:
+        """Check if a cloud LLM provider (Cerebras) is configured."""
+        from config import settings
+        return bool(settings.cerebras_api_key)
+
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""
         from services.gpu1_power import get_power_manager
         from services.processor import create_processor_from_settings
 
-        # Always check if gpu1 is available (even if processor is cached)
-        power_mgr = get_power_manager()
-        if power_mgr is not None:
-            # Outside active hours: don't use gpu1 at all (free VRAM for local use)
-            if not await power_mgr.is_within_active_hours():
-                logger.debug(
-                    "Outside active hours, skipping LLM processing "
-                    "(gpu1 VRAM reserved for local use)"
-                )
-                self._processor = None
-                return None
-
-            if await power_mgr.is_available():
-                logger.debug("gpu1 available, proceeding with LLM processing")
-            else:
-                logger.info("gpu1 not available, attempting Wake-on-LAN...")
-                if await power_mgr.ensure_available():
-                    logger.info("gpu1 woken and ready for LLM processing")
-                    # Clear cached processor since gpu1 was asleep
-                    self._processor = None
-                else:
-                    logger.warning("Failed to wake gpu1, LLM processing unavailable")
+        # Skip GPU1 gating when a cloud provider is configured —
+        # the fallback chain handles provider selection automatically
+        if not self._has_cloud_provider():
+            # Only gate on gpu1 when it's the sole LLM provider
+            power_mgr = get_power_manager()
+            if power_mgr is not None:
+                # Outside active hours: don't use gpu1 at all (free VRAM for local use)
+                if not await power_mgr.is_within_active_hours():
+                    logger.debug(
+                        "Outside active hours, skipping LLM processing "
+                        "(gpu1 VRAM reserved for local use)"
+                    )
                     self._processor = None
                     return None
+
+                if await power_mgr.is_available():
+                    logger.debug("gpu1 available, proceeding with LLM processing")
+                else:
+                    logger.info("gpu1 not available, attempting Wake-on-LAN...")
+                    if await power_mgr.ensure_available():
+                        logger.info("gpu1 woken and ready for LLM processing")
+                        # Clear cached processor since gpu1 was asleep
+                        self._processor = None
+                    else:
+                        logger.warning("Failed to wake gpu1, LLM processing unavailable")
+                        self._processor = None
+                        return None
 
         if self._processor is None:
             self._processor = await create_processor_from_settings()
@@ -370,14 +378,16 @@ class LLMWorker:
         Returns:
             Number of items processed
         """
-        from services.gpu1_power import get_power_manager
+        # Only gate backlog on gpu1 when there's no cloud provider
+        if not self._has_cloud_provider():
+            from services.gpu1_power import get_power_manager
 
-        # Check if gpu1 is available WITHOUT waking it
-        power_mgr = get_power_manager()
-        if power_mgr is not None:
-            if not await power_mgr.is_available():
-                logger.debug("gpu1 not available, skipping backlog (won't wake for backlog)")
-                return 0
+            # Check if gpu1 is available WITHOUT waking it
+            power_mgr = get_power_manager()
+            if power_mgr is not None:
+                if not await power_mgr.is_available():
+                    logger.debug("gpu1 not available, skipping backlog (won't wake for backlog)")
+                    return 0
 
         try:
             processor = await self._get_processor()
