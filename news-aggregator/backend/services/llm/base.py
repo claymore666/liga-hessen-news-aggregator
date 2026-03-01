@@ -11,6 +11,7 @@ class LLMResponse(BaseModel):
 
     text: str = Field(..., description="Generated text response")
     model: str = Field(..., description="Model that generated the response")
+    provider: str = Field(default="", description="Provider name (e.g. cerebras, ollama)")
     tokens_used: int | None = Field(default=None, description="Total tokens used")
     prompt_tokens: int | None = Field(default=None, description="Tokens in prompt")
     completion_tokens: int | None = Field(default=None, description="Tokens in completion")

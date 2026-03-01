@@ -67,6 +67,7 @@ class LLMService:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                response.provider = provider.provider_name
                 logger.info(f"LLM response from {provider.provider_name}")
                 return response
 
@@ -109,6 +110,7 @@ class LLMService:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                response.provider = provider.provider_name
                 logger.info(f"LLM chat response from {provider.provider_name}")
                 return response
 

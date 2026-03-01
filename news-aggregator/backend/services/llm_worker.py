@@ -643,6 +643,8 @@ class LLMWorker:
                 # Prepare metadata update
                 new_metadata = dict(item_data["metadata_"])
                 new_metadata["llm_analysis"] = {
+                    "provider": analysis.get("_provider", "unknown"),
+                    "model": analysis.get("_model", "unknown"),
                     "relevance_score": analysis.get("relevance_score", 0.5),
                     "priority_suggestion": llm_priority,
                     "assigned_aks": llm_aks,
@@ -683,6 +685,8 @@ class LLMWorker:
                         "priority_score": new_score,
                         "assigned_aks": assigned_aks,
                         "assigned_ak": assigned_ak,
+                        "llm_provider": analysis.get("_provider"),
+                        "llm_model": analysis.get("_model"),
                         "metadata_": new_metadata,
                         "needs_llm_processing": False,
                     }

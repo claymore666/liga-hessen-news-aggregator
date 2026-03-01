@@ -117,6 +117,9 @@ export interface Item {
   metadata?: ItemMetadata
   created_at: string
   updated_at: string
+  // LLM provider/model tracking
+  llm_provider: string | null
+  llm_model: string | null
   // Duplicate grouping
   similar_to_id: number | null
   duplicates: DuplicateBrief[]

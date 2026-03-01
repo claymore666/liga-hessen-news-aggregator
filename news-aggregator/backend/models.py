@@ -209,6 +209,9 @@ class Item(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    # LLM provider/model tracking
+    llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # LLM processing status - True if item needs (re)processing due to GPU unavailability
     needs_llm_processing: Mapped[bool] = mapped_column(default=False, index=True)
     # Semantic duplicate grouping - points to the "primary" item this is a duplicate of

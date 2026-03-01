@@ -661,6 +661,10 @@ Antworte NUR mit JA oder NEIN."""
         elif "assigned_aks" not in result:
             result["assigned_aks"] = []
 
+        # Attach provider/model info from LLM response
+        result["_provider"] = response.provider
+        result["_model"] = response.model
+
         return result
 
     def _default_analysis(self, summary: str = "") -> dict[str, Any]:
