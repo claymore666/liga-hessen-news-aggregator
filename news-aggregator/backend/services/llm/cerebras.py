@@ -28,6 +28,8 @@ class CerebrasRateLimiter:
         self._token_limits: dict[str, dict] = {}
         # Track when we last got a 429 (to compute backoff)
         self._last_429: float = 0
+        # Count consecutive 429s to escalate wait (429 responses may lack full headers)
+        self._consecutive_429s: int = 0
 
     def update_from_headers(self, headers: httpx.Headers):
         """Update rate limit state from response headers."""
@@ -90,9 +92,27 @@ class CerebrasRateLimiter:
 
         Only updates windows that are already tracked (from response headers).
         If no windows are tracked yet, assumes minute window is exhausted.
+        After 3+ consecutive 429s, escalates to hour window (429 responses
+        often lack full headers, so minute waits loop forever when the real
+        blocker is hour tokens).
         """
         self._last_429 = time.monotonic()
+        self._consecutive_429s += 1
         now = time.monotonic()
+
+        # After 3+ consecutive 429s, the minute window isn't the real blocker —
+        # escalate to hour window (most likely token limit)
+        if self._consecutive_429s >= 3:
+            logger.warning(
+                f"Cerebras: {self._consecutive_429s} consecutive 429s, "
+                f"escalating to hour wait (likely token limit)"
+            )
+            self._token_limits["hour"] = {
+                "limit": 1_000_000,
+                "remaining": 0,
+                "updated_at": now,
+            }
+            return
 
         # Refresh updated_at for any exhausted windows (requests and tokens)
         any_exhausted = False
@@ -109,6 +129,10 @@ class CerebrasRateLimiter:
                 "remaining": 0,
                 "updated_at": now,
             }
+
+    def handle_success(self):
+        """Reset consecutive 429 counter on successful request."""
+        self._consecutive_429s = 0
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
@@ -222,6 +246,7 @@ class CerebrasProvider(BaseLLMProvider):
                 response.raise_for_status()
 
             response.raise_for_status()
+            self._rate_limiter.handle_success()
             data = response.json()
 
         usage = data.get("usage", {})
