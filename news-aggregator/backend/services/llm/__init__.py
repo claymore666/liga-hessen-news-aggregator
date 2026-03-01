@@ -25,12 +25,14 @@ Usage:
 """
 
 from .base import BaseLLMProvider, LLMResponse
+from .cerebras import CerebrasProvider
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
 from .service import LLMService
 
 __all__ = [
     "BaseLLMProvider",
+    "CerebrasProvider",
     "LLMResponse",
     "OllamaProvider",
     "OpenRouterProvider",

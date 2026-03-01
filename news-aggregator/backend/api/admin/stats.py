@@ -57,10 +57,19 @@ class ItemStats(BaseModel):
     starred: int
 
 
+class CerebrasStats(BaseModel):
+    """Cerebras provider availability and rate limits."""
+    configured: bool
+    available: bool
+    model: str
+    rate_limits: dict | None = None
+
+
 class SystemStatsResponse(BaseModel):
     """Comprehensive system statistics for dashboard."""
     scheduler: SchedulerStatus
     llm_worker: WorkerStatus
+    cerebras: CerebrasStats | None = None
     classifier_worker: WorkerStatus
     dedup_worker: WorkerStatus
     processing_queue: ProcessingQueueStats
@@ -122,6 +131,23 @@ async def get_system_stats(
         stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
+
+    # Cerebras provider status
+    from config import settings
+    cerebras_stats = None
+    if settings.cerebras_api_key:
+        from services.llm.cerebras import CerebrasProvider
+        cerebras = CerebrasProvider(
+            api_key=settings.cerebras_api_key,
+            model=settings.cerebras_model,
+            timeout=settings.cerebras_timeout,
+        )
+        cerebras_available = await cerebras.is_available()
+        cerebras_stats = CerebrasStats(
+            configured=True,
+            available=cerebras_available,
+            model=settings.cerebras_model,
+        )
 
     # Classifier Worker status from DB + actual service reachability
     clf_state = await read_state("classifier")
@@ -229,6 +255,7 @@ async def get_system_stats(
     return SystemStatsResponse(
         scheduler=scheduler_status,
         llm_worker=llm_worker_status,
+        cerebras=cerebras_stats,
         classifier_worker=classifier_worker_status,
         dedup_worker=dedup_worker_status,
         processing_queue=processing_queue,

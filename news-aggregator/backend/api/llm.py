@@ -55,12 +55,22 @@ class OllamaModelsResponse(BaseModel):
     base_url: str
 
 
+class CerebrasStatus(BaseModel):
+    """Cerebras provider status with rate limits."""
+
+    configured: bool
+    available: bool | None = None
+    model: str
+    rate_limits: dict | None = None
+
+
 class LLMSettingsResponse(BaseModel):
     """Current LLM settings."""
 
     ollama_available: bool
     ollama_base_url: str
     ollama_model: str
+    cerebras: CerebrasStatus | None = None
     openrouter_configured: bool
     openrouter_model: str
 
@@ -125,10 +135,29 @@ async def get_llm_settings() -> LLMSettingsResponse:
         )
         ollama_available = await provider.is_available()
 
+    # Check Cerebras availability and rate limits
+    cerebras_status = None
+    if settings.cerebras_api_key:
+        from services.llm.cerebras import CerebrasProvider
+        cerebras = CerebrasProvider(
+            api_key=settings.cerebras_api_key,
+            model=settings.cerebras_model,
+            timeout=settings.cerebras_timeout,
+        )
+        cerebras_available = await cerebras.is_available()
+        rate_limits = await cerebras.get_rate_limits() if cerebras_available else None
+        cerebras_status = CerebrasStatus(
+            configured=True,
+            available=cerebras_available,
+            model=settings.cerebras_model,
+            rate_limits=rate_limits,
+        )
+
     return LLMSettingsResponse(
         ollama_available=ollama_available,
         ollama_base_url=settings.ollama_base_url,
         ollama_model=settings.ollama_model,
+        cerebras=cerebras_status,
         openrouter_configured=bool(settings.openrouter_api_key),
         openrouter_model=settings.openrouter_model,
     )

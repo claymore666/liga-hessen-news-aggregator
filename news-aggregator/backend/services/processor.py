@@ -706,7 +706,7 @@ async def create_processor_from_settings() -> ItemProcessor | None:
         Configured ItemProcessor instance, or None if LLM is disabled
     """
     from config import settings
-    from .llm import OllamaProvider, OpenRouterProvider, LLMService
+    from .llm import CerebrasProvider, OllamaProvider, OpenRouterProvider, LLMService
 
     # Check if LLM processing is enabled (runtime setting overrides env)
     if not await is_llm_enabled():
@@ -716,7 +716,17 @@ async def create_processor_from_settings() -> ItemProcessor | None:
 
     providers = []
 
-    # Add Ollama as primary provider
+    # Add Cerebras as primary provider if configured (free cloud API)
+    if settings.cerebras_api_key:
+        providers.append(
+            CerebrasProvider(
+                api_key=settings.cerebras_api_key,
+                model=settings.cerebras_model,
+                timeout=settings.cerebras_timeout,
+            )
+        )
+
+    # Add Ollama as fallback (local GPU)
     providers.append(
         OllamaProvider(
             base_url=settings.ollama_base_url,
@@ -725,7 +735,7 @@ async def create_processor_from_settings() -> ItemProcessor | None:
         )
     )
 
-    # Add OpenRouter as fallback if configured
+    # Add OpenRouter as last fallback if configured
     if settings.openrouter_api_key:
         providers.append(
             OpenRouterProvider(

@@ -110,6 +110,7 @@ class TestLLMSettings:
         assert "ollama_available" in data
         assert "ollama_base_url" in data
         assert "ollama_model" in data
+        assert "cerebras" in data  # None or dict
         assert "openrouter_configured" in data
         assert "openrouter_model" in data
 

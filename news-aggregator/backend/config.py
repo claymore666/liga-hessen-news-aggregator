@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:14b-q8_0"  # Base model with system prompt (NOT liga-relevance)
     ollama_timeout: int = 120
 
+    # LLM - Cerebras (free tier, OpenAI-compatible)
+    cerebras_api_key: str = ""
+    cerebras_model: str = "gpt-oss-120b"
+    cerebras_timeout: int = 60
+
     # LLM - OpenRouter (fallback)
     openrouter_api_key: str = ""
     openrouter_model: str = "mistralai/mistral-7b-instruct:free"
