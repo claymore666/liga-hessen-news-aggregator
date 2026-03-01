@@ -121,8 +121,8 @@ services:
       - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
       - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}
       - CLASSIFIER_WORKER_ENABLED=${CLASSIFIER_WORKER_ENABLED:-true}
-      # Title pre-filter (small LLM for quick false-positive rejection)
-      - TITLE_PREFILTER_ENABLED=${TITLE_PREFILTER_ENABLED:-true}
+      # Title pre-filter disabled: can't achieve 0 false negatives (see docs/services/TITLE_PREFILTER_EVALUATION.md)
+      - TITLE_PREFILTER_ENABLED=${TITLE_PREFILTER_ENABLED:-false}
       - TITLE_PREFILTER_MODEL=${TITLE_PREFILTER_MODEL:-qwen3:8b}
       - DUPLICATE_CHECK_DAYS=${DUPLICATE_CHECK_DAYS:-7}
       - REDIS_URL=redis://redis:6379/0

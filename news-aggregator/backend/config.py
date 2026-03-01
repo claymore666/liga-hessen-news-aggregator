@@ -110,7 +110,9 @@ class Settings(BaseSettings):
     classifier_use_ak: bool = False  # Use classifier AK instead of LLM
 
     # Title Pre-filter (small LLM for quick title-based relevance check)
-    title_prefilter_enabled: bool = True  # Enable title pre-filter between classifier and LLM
+    # Disabled: title-only checks can't achieve 0 false negatives.
+    # See docs/services/TITLE_PREFILTER_EVALUATION.md
+    title_prefilter_enabled: bool = False
     title_prefilter_model: str = "qwen3:8b"  # Small model for fast title checks
     title_prefilter_batch_limit: int = 200  # Max items per pre-filter batch
 
