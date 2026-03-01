@@ -185,6 +185,14 @@ class HealthResponse(BaseModel):
     trained_at: str | None = None
     training_items: int | None = None
     multilabel: bool = False
+    model_loaded: bool = Field(
+        default=True,
+        description="Whether embedding model is currently loaded in VRAM"
+    )
+    idle_timeout: int = Field(
+        default=300,
+        description="Seconds of inactivity before model is unloaded from VRAM"
+    )
     search_index_items: int = Field(
         default=0,
         description="Number of items indexed for semantic search (nomic embeddings)"
@@ -242,6 +250,8 @@ async def health():
         trained_at=info.get("trained_at"),
         training_items=info.get("training_items"),
         multilabel=info.get("multilabel", False),
+        model_loaded=info.get("model_loaded", True),
+        idle_timeout=info.get("idle_timeout", 600),
         search_index_items=vs_items,
         duplicate_index_items=ds_stats.get("total_items", 0),
         duplicate_model=ds_stats.get("model"),

@@ -4,8 +4,12 @@ Wraps NomicV2Embedder + sklearn RandomForest classifiers.
 Includes VectorStore for semantic search and similarity.
 """
 
+import gc
+import os
 import pickle
+import time
 from pathlib import Path
+from threading import Lock, Timer
 from typing import Optional
 
 import chromadb
@@ -13,9 +17,14 @@ from chromadb.config import Settings
 import numpy as np
 import torch
 
+from feature_extraction import extract_features, FEATURE_VERSION
+
+# Idle timeout in seconds before unloading models from VRAM (default: 5 min)
+IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", "300"))
+
 
 class BaseEmbedder:
-    """Base class for embedders."""
+    """Base class for embedders with automatic VRAM management."""
 
     def __init__(self, model_name: str, max_length: int = 2000, task_prefix: str = ""):
         self.model_name = model_name
@@ -23,6 +32,8 @@ class BaseEmbedder:
         self.task_prefix = task_prefix
         self._model = None
         self._embedding_dim = 768
+        self._unload_timer: Timer | None = None
+        self._lock = Lock()
 
     def _load_model(self):
         if self._model is None:
@@ -38,6 +49,27 @@ class BaseEmbedder:
                 print("WARNING: No GPU detected, running on CPU")
         return self._model
 
+    def _schedule_unload(self):
+        """Schedule model unload after idle timeout."""
+        if self._unload_timer is not None:
+            self._unload_timer.cancel()
+        if IDLE_TIMEOUT > 0:
+            self._unload_timer = Timer(IDLE_TIMEOUT, self._unload_model)
+            self._unload_timer.daemon = True
+            self._unload_timer.start()
+
+    def _unload_model(self):
+        """Unload model from VRAM to free GPU memory."""
+        with self._lock:
+            if self._model is not None:
+                print(f"Unloading {self.model_name} (idle for {IDLE_TIMEOUT}s)...")
+                del self._model
+                self._model = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+                print(f"Unloaded {self.model_name}, VRAM freed.")
+
     @property
     def embedding_dim(self) -> int:
         return self._embedding_dim
@@ -48,15 +80,17 @@ class BaseEmbedder:
         show_progress_bar: bool = False,
         batch_size: int = 16,
     ) -> list[list[float]]:
-        model = self._load_model()
-        prefixed = [f"{self.task_prefix}{t[:self.max_length]}" for t in texts]
-        embeddings = model.encode(
-            prefixed,
-            show_progress_bar=show_progress_bar,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            batch_size=batch_size,
-        )
+        with self._lock:
+            model = self._load_model()
+            prefixed = [f"{self.task_prefix}{t[:self.max_length]}" for t in texts]
+            embeddings = model.encode(
+                prefixed,
+                show_progress_bar=show_progress_bar,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                batch_size=batch_size,
+            )
+        self._schedule_unload()
         return embeddings.tolist()
 
 
@@ -113,6 +147,9 @@ class EmbeddingClassifier:
         self.ak_clf = None
         self.backend = "nomic-v2"
         self.multilabel = False  # Whether AK classifier is multi-label
+        self.feature_scaler = None  # StandardScaler for geographic features
+        self.feature_version = None
+        self.relevance_threshold = 0.5  # Configurable threshold (from pkl or default)
 
     @classmethod
     def load(cls, model_path: str = "models/embedding_classifier_nomic-v2.pkl"):
@@ -135,6 +172,10 @@ class EmbeddingClassifier:
             instance.multilabel = data.get("multilabel", False)
             if instance.multilabel and "ak_classes" in data:
                 instance.AK_LABELS = data["ak_classes"]
+            # Load feature scaler (None if old model without features)
+            instance.feature_scaler = data.get("feature_scaler")
+            instance.feature_version = data.get("feature_version")
+            instance.relevance_threshold = data.get("relevance_threshold", 0.5)
         else:
             # Legacy: class instance (shouldn't happen in production)
             instance.relevance_clf = data.relevance_clf
@@ -145,7 +186,10 @@ class EmbeddingClassifier:
             if instance.multilabel:
                 instance.AK_LABELS = data.ak_classes
 
-        print(f"Loaded classifier: {instance.backend} (multilabel={instance.multilabel})")
+        features_info = ""
+        if instance.feature_scaler is not None:
+            features_info = f", features=v{instance.feature_version}"
+        print(f"Loaded classifier: {instance.backend} (multilabel={instance.multilabel}{features_info})")
         return instance
 
     def predict(
@@ -162,17 +206,27 @@ class EmbeddingClassifier:
                            priority_confidence, ak, ak_confidence,
                            aks (list), ak_confidences (dict) for multi-label
         """
-        # Combine text fields
+        # Combine text fields (must match training format in data_loading.py)
         text = f"{title} {content}"
+        if source:
+            text += f" Quelle: {source}"
 
         # Get embedding
-        embedding = np.array(self.embedder.encode([text], show_progress_bar=False))
+        X_emb = np.array(self.embedder.encode([text], show_progress_bar=False))
 
-        # Predict relevance
-        relevance_proba = self.relevance_clf.predict_proba(embedding)[0]
+        # Build full feature matrix (embeddings + geographic features)
+        if self.feature_scaler is not None:
+            features = extract_features(title, content, source).reshape(1, -1)
+            features_scaled = self.feature_scaler.transform(features)
+            X_full = np.hstack([X_emb, features_scaled])
+        else:
+            X_full = X_emb
+
+        # Predict relevance (uses features for geographic rules)
+        relevance_proba = self.relevance_clf.predict_proba(X_full)[0]
         relevant_idx = list(self.relevance_clf.classes_).index(1)
         relevance_confidence = relevance_proba[relevant_idx]
-        is_relevant = relevance_confidence > 0.5
+        is_relevant = relevance_confidence > self.relevance_threshold
 
         result = {
             "relevant": is_relevant,
@@ -187,22 +241,22 @@ class EmbeddingClassifier:
 
         # Only predict priority/AK if relevant
         if is_relevant and self.priority_clf and self.ak_clf:
-            # Priority
-            priority_proba = self.priority_clf.predict_proba(embedding)[0]
+            # Priority (embeddings only — geographic features hurt priority)
+            priority_proba = self.priority_clf.predict_proba(X_emb)[0]
             priority_idx = int(np.argmax(priority_proba))
             result["priority"] = self.PRIORITY_LABELS[priority_idx]
             result["priority_confidence"] = float(priority_proba[priority_idx])
 
-            # AK prediction
+            # AK prediction (uses features — source/geography helps topics)
             if self.multilabel:
                 # Multi-label: predict multiple AKs
-                ak_preds = self.ak_clf.predict(embedding)[0]
+                ak_preds = self.ak_clf.predict(X_full)[0]
                 ak_confidences = {}
 
                 # Get probabilities for each AK
                 predicted_aks = []
                 for i, estimator in enumerate(self.ak_clf.estimators_):
-                    prob = estimator.predict_proba(embedding)[0]
+                    prob = estimator.predict_proba(X_full)[0]
                     conf = prob[1] if len(prob) > 1 else prob[0]
                     ak_confidences[self.AK_LABELS[i]] = float(conf)
                     if ak_preds[i] == 1:
@@ -221,7 +275,7 @@ class EmbeddingClassifier:
                 result["ak_confidence"] = ak_confidences.get(result["ak"], 0.0)
             else:
                 # Single-label: predict one AK
-                ak_proba = self.ak_clf.predict_proba(embedding)[0]
+                ak_proba = self.ak_clf.predict_proba(X_full)[0]
                 ak_idx = int(np.argmax(ak_proba))
                 result["ak"] = self.AK_LABELS[ak_idx]
                 result["ak_confidence"] = float(ak_proba[ak_idx])
@@ -236,7 +290,7 @@ class EmbeddingClassifier:
 
     def get_info(self) -> dict:
         """Get classifier info."""
-        return {
+        info = {
             "backend": self.backend,
             "embedding_dim": self.embedder.embedding_dim,
             "gpu_available": self.is_gpu_available(),
@@ -245,7 +299,14 @@ class EmbeddingClassifier:
             "trained_at": self.TRAINED_AT,
             "training_items": self.TRAINING_ITEMS,
             "multilabel": self.multilabel,
+            "model_loaded": self.embedder._model is not None,
+            "idle_timeout": IDLE_TIMEOUT,
         }
+        info["relevance_threshold"] = self.relevance_threshold
+        if self.feature_scaler is not None:
+            info["feature_version"] = self.feature_version
+            info["num_features"] = self.feature_scaler.n_features_in_
+        return info
 
 
 class VectorStore:
@@ -667,4 +728,5 @@ class DuplicateStore:
             "total_items": self.collection.count(),
             "persist_dir": self.persist_dir,
             "model": self.embedder.model_name,
+            "model_loaded": self.embedder._model is not None,
         }
