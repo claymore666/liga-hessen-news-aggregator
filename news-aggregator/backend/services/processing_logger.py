@@ -444,7 +444,7 @@ class ProcessingLogger:
         for each item in a batch.
 
         Args:
-            updates: List of update dicts with keys: id, metadata_, old_priority, priority
+            updates: List of update dicts with keys: id, metadata_patch, old_priority, priority
 
         Returns:
             List of created log entries
@@ -455,7 +455,9 @@ class ProcessingLogger:
         now = datetime.utcnow()
 
         for upd in updates:
-            result = upd["metadata_"].get("pre_filter", {})
+            # Support both new patch format and legacy full-metadata format
+            meta = upd.get("metadata_patch") or upd.get("metadata_", {})
+            result = meta.get("pre_filter", {})
             confidence = result.get("relevance_confidence", 0.5)
 
             log = ItemProcessingLog(

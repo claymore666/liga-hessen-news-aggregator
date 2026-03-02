@@ -642,28 +642,32 @@ class LLMWorker:
                         assigned_ak = classifier_ak
                         logger.debug(f"Using classifier AK: {classifier_ak}")
 
-                # Prepare metadata update
-                new_metadata = dict(item_data["metadata_"])
-                new_metadata["llm_analysis"] = {
-                    "provider": analysis.get("_provider", "unknown"),
-                    "model": analysis.get("_model", "unknown"),
-                    "relevance_score": analysis.get("relevance_score", 0.5),
-                    "priority_suggestion": llm_priority,
-                    "assigned_aks": llm_aks,
-                    "assigned_ak": llm_aks[0] if llm_aks else None,
-                    "tags": analysis.get("tags", []),
-                    "topic": topic,
-                    "topic_suggestion": topic_suggestion,
-                    "reasoning": analysis.get("reasoning"),
-                    "processed_at": datetime.utcnow().isoformat(),
-                    "source": "llm_worker",
+                # Build metadata patch (only keys this worker manages)
+                # Using a patch with json_merge avoids race conditions with the
+                # classifier worker writing pre_filter concurrently
+                metadata_patch = {
+                    "llm_analysis": {
+                        "provider": analysis.get("_provider", "unknown"),
+                        "model": analysis.get("_model", "unknown"),
+                        "relevance_score": analysis.get("relevance_score", 0.5),
+                        "priority_suggestion": llm_priority,
+                        "assigned_aks": llm_aks,
+                        "assigned_ak": llm_aks[0] if llm_aks else None,
+                        "tags": analysis.get("tags", []),
+                        "topic": topic,
+                        "topic_suggestion": topic_suggestion,
+                        "reasoning": analysis.get("reasoning"),
+                        "processed_at": datetime.utcnow().isoformat(),
+                        "source": "llm_worker",
+                    },
                 }
+                remove_keys = []
 
                 # Record duplicate confirmation result in metadata
                 confirmed_similar_to_id = None
                 if duplicate_confirmed is not None:
                     dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
-                    new_metadata["duplicate_confirmation"] = {
+                    metadata_patch["duplicate_confirmation"] = {
                         "confirmed": duplicate_confirmed,
                         "reasoning": duplicate_reasoning,
                         "candidate_id": dup_candidate.get("candidate_id"),
@@ -671,8 +675,7 @@ class LLMWorker:
                         "confirmed_at": datetime.utcnow().isoformat(),
                     }
                     # Clear the candidate since we've processed it
-                    if "duplicate_candidate" in new_metadata:
-                        del new_metadata["duplicate_candidate"]
+                    remove_keys.append("duplicate_candidate")
 
                     if duplicate_confirmed:
                         confirmed_similar_to_id = dup_candidate.get("candidate_id")
@@ -680,6 +683,8 @@ class LLMWorker:
                 # Phase 3: Quick write - update item in database
                 # Connection is released after this block
                 async with async_session_maker() as db:
+                    from database import json_merge, json_merge_remove
+
                     update_values = {
                         "summary": analysis.get("summary"),
                         "detailed_analysis": analysis.get("detailed_analysis"),
@@ -689,16 +694,26 @@ class LLMWorker:
                         "assigned_ak": assigned_ak,
                         "llm_provider": analysis.get("_provider"),
                         "llm_model": analysis.get("_model"),
-                        "metadata_": new_metadata,
                         "needs_llm_processing": False,
                     }
+
+                    # Use atomic json_merge to avoid overwriting classifier's
+                    # pre_filter if it wrote between our Phase 1 read and now
+                    if remove_keys:
+                        update_values["metadata_"] = json_merge_remove(
+                            Item.metadata_, metadata_patch, remove_keys
+                        )
+                    else:
+                        update_values["metadata_"] = json_merge(
+                            Item.metadata_, metadata_patch
+                        )
 
                     # Set similar_to_id if duplicate was confirmed by LLM
                     if confirmed_similar_to_id:
                         update_values["similar_to_id"] = confirmed_similar_to_id
 
                     # Remove None values to avoid overwriting with None
-                    update_values = {k: v for k, v in update_values.items() if v is not None or k in ("assigned_ak", "needs_llm_processing")}
+                    update_values = {k: v for k, v in update_values.items() if v is not None or k in ("assigned_ak", "needs_llm_processing", "metadata_")}
 
                     await db.execute(
                         sql_update(Item)

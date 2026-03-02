@@ -320,9 +320,10 @@ class ClassifierWorker:
                 # Determine new priority based on confidence
                 new_priority, new_score, skip_llm = self._determine_priority(confidence)
 
-                # Prepare updated metadata
-                new_metadata = dict(item_data["old_metadata"])
-                new_metadata["pre_filter"] = {
+                # Build metadata patch (only keys this worker manages)
+                # Using a patch instead of full replace avoids race conditions
+                # with the LLM worker writing llm_analysis concurrently
+                pre_filter_data = {
                     "relevance_confidence": confidence,
                     "ak_suggestion": result.get("ak"),
                     "ak_confidence": result.get("ak_confidence"),
@@ -333,11 +334,16 @@ class ClassifierWorker:
 
                 # Set retry priority for LLM worker
                 if confidence >= CONFIDENCE_HIGH:
-                    new_metadata["retry_priority"] = "high"
+                    retry_priority = "high"
                 elif confidence >= CONFIDENCE_EDGE:
-                    new_metadata["retry_priority"] = "edge_case"
+                    retry_priority = "edge_case"
                 else:
-                    new_metadata["retry_priority"] = "low"
+                    retry_priority = "low"
+
+                metadata_patch = {
+                    "pre_filter": pre_filter_data,
+                    "retry_priority": retry_priority,
+                }
 
                 # Collect update
                 updates.append({
@@ -345,7 +351,7 @@ class ClassifierWorker:
                     "old_priority": old_priority,
                     "priority": new_priority.value,
                     "priority_score": new_score,
-                    "metadata_": new_metadata,
+                    "metadata_patch": metadata_patch,
                     "needs_llm_processing": not skip_llm,
                 })
 
@@ -368,8 +374,12 @@ class ClassifierWorker:
             from services.item_events import record_events_batch, EVENT_CLASSIFIER_PROCESSED
 
             try:
+                from database import json_merge
+
                 async with async_session_maker() as db:
                     # Batch update items (individual updates required due to different metadata per item)
+                    # Use json_merge to atomically merge classifier keys without overwriting
+                    # concurrent LLM worker writes (e.g. llm_analysis)
                     for upd in updates:
                         await db.execute(
                             update(Item)
@@ -377,7 +387,7 @@ class ClassifierWorker:
                             .values(
                                 priority=upd["priority"],
                                 priority_score=upd["priority_score"],
-                                metadata_=upd["metadata_"],
+                                metadata_=json_merge(Item.metadata_, upd["metadata_patch"]),
                                 needs_llm_processing=upd["needs_llm_processing"],
                             )
                         )
@@ -388,9 +398,9 @@ class ClassifierWorker:
                             "item_id": upd["id"],
                             "event_type": EVENT_CLASSIFIER_PROCESSED,
                             "data": {
-                                "confidence": upd["metadata_"]["pre_filter"]["relevance_confidence"],
+                                "confidence": upd["metadata_patch"]["pre_filter"]["relevance_confidence"],
                                 "priority": upd["priority"],
-                                "ak_suggestion": upd["metadata_"]["pre_filter"].get("ak_suggestion"),
+                                "ak_suggestion": upd["metadata_patch"]["pre_filter"].get("ak_suggestion"),
                             },
                         }
                         for upd in updates

@@ -59,6 +59,44 @@ def json_array_contains(column: Any, value: str) -> ColumnElement:
     return cast(column, JSONB).op("@>")(text(f"'{json_value}'::jsonb"))
 
 
+def json_merge(column: Any, patch: dict) -> ColumnElement:
+    """Atomically merge keys into a JSONB column using PostgreSQL's || operator.
+
+    This avoids race conditions where two workers both read-modify-write
+    the same JSONB column, potentially overwriting each other's changes.
+
+    Args:
+        column: The JSONB column to merge into
+        patch: Dict of keys to add/update (shallow merge at top level)
+
+    Returns:
+        SQLAlchemy expression: COALESCE(column, '{}'::jsonb) || patch::jsonb
+    """
+    # Escape single quotes for safe SQL string literal embedding
+    patch_json = json.dumps(patch, default=str).replace("'", "''")
+    return func.coalesce(cast(column, JSONB), text("'{}'::jsonb")).op('||')(
+        text(f"'{patch_json}'::jsonb")
+    )
+
+
+def json_merge_remove(column: Any, patch: dict, remove_keys: list[str]) -> ColumnElement:
+    """Atomically merge keys and remove others from a JSONB column.
+
+    Args:
+        column: The JSONB column to merge into
+        patch: Dict of keys to add/update
+        remove_keys: List of top-level keys to remove
+
+    Returns:
+        SQLAlchemy expression: (COALESCE(column, '{}'::jsonb) || patch::jsonb) - keys
+    """
+    result = json_merge(column, patch)
+    for key in remove_keys:
+        escaped_key = key.replace("'", "''")
+        result = result.op('-')(text(f"'{escaped_key}'"))
+    return result
+
+
 def json_array_overlaps(column: Any, values: list[str]) -> ColumnElement:
     """Check if a JSON array column overlaps with any of the given values.
 
