@@ -155,8 +155,18 @@ class CerebrasRateLimiter:
             }
 
     def handle_success(self):
-        """Reset consecutive 429 counter on successful request."""
+        """Reset consecutive 429 counter on successful request.
+
+        Also bumps remaining to at least 1 for any window showing 0,
+        since a successful response proves quota was available. Works
+        around Cerebras free tier reporting remaining-hour=0 in headers
+        even when requests succeed.
+        """
         self._consecutive_429s = 0
+        for limits in (self._limits, self._token_limits):
+            for info in limits.values():
+                if info["remaining"] <= 0:
+                    info["remaining"] = 1
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
