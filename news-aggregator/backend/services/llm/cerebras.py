@@ -553,6 +553,9 @@ class CerebrasProvider(BaseLLMProvider):
                             limit = _int(h, f"x-ratelimit-limit-{prefix}-{window}")
                             remaining = _int(h, f"x-ratelimit-remaining-{prefix}-{window}")
                             if limit is not None and remaining is not None:
+                                # Skip bogus remaining=0 on success (Cerebras hour bug)
+                                if is_success and remaining == 0:
+                                    remaining = limit
                                 if window not in aggregated[category]:
                                     aggregated[category][window] = {"limit": 0, "remaining": 0}
                                 aggregated[category][window]["limit"] += limit
