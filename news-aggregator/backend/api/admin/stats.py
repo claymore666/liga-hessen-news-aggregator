@@ -62,6 +62,7 @@ class CerebrasStats(BaseModel):
     configured: bool
     available: bool
     model: str
+    key_count: int = 1
     rate_limits: dict | None = None
 
 
@@ -135,18 +136,17 @@ async def get_system_stats(
     # Cerebras provider status (with rate limits from cached state)
     from config import settings
     cerebras_stats = None
-    if settings.cerebras_api_key:
-        from services.llm.cerebras import CerebrasProvider, get_rate_limiter
+    if settings.cerebras_api_keys:
+        from services.llm.cerebras import CerebrasProvider, get_aggregated_status
         cerebras = CerebrasProvider(
-            api_key=settings.cerebras_api_key,
+            api_keys=settings.cerebras_api_keys,
             model=settings.cerebras_model,
             timeout=settings.cerebras_timeout,
         )
         cerebras_available = await cerebras.is_available()
         # Use cached rate limiter state (updated on every API call)
         # Only fetch fresh limits if no cached data exists
-        rate_limiter = get_rate_limiter()
-        rate_limits = rate_limiter.get_status()
+        rate_limits = get_aggregated_status()
         if rate_limits is None and cerebras_available:
             try:
                 rate_limits = await cerebras.get_rate_limits()
@@ -156,6 +156,7 @@ async def get_system_stats(
             configured=True,
             available=cerebras_available,
             model=settings.cerebras_model,
+            key_count=cerebras.key_count,
             rate_limits=rate_limits,
         )
 

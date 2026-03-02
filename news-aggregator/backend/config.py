@@ -98,9 +98,17 @@ class Settings(BaseSettings):
     ollama_timeout: int = 120
 
     # LLM - Cerebras (free tier, OpenAI-compatible)
+    # Supports multiple comma-separated API keys for higher throughput
     cerebras_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
     cerebras_timeout: int = 60
+
+    @property
+    def cerebras_api_keys(self) -> list[str]:
+        """Split comma-separated API keys into a list."""
+        if not self.cerebras_api_key:
+            return []
+        return [k.strip() for k in self.cerebras_api_key.split(",") if k.strip()]
 
     # LLM - OpenRouter (fallback)
     openrouter_api_key: str = ""

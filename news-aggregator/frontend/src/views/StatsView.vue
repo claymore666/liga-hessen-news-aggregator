@@ -436,6 +436,10 @@ onUnmounted(() => {
                   <span class="text-sm" :class="stats?.cerebras?.available ? 'text-green-600' : 'text-red-600'">
                     Cerebras
                   </span>
+                  <span v-if="stats?.cerebras?.key_count && stats.cerebras.key_count > 1"
+                    class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                    {{ stats.cerebras.key_count }} keys
+                  </span>
                 </div>
                 <div class="flex items-center gap-1">
                   <component

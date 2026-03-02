@@ -61,6 +61,7 @@ class CerebrasStatus(BaseModel):
     configured: bool
     available: bool | None = None
     model: str
+    key_count: int = 1
     rate_limits: dict | None = None
 
 
@@ -137,10 +138,10 @@ async def get_llm_settings() -> LLMSettingsResponse:
 
     # Check Cerebras availability and rate limits
     cerebras_status = None
-    if settings.cerebras_api_key:
+    if settings.cerebras_api_keys:
         from services.llm.cerebras import CerebrasProvider
         cerebras = CerebrasProvider(
-            api_key=settings.cerebras_api_key,
+            api_keys=settings.cerebras_api_keys,
             model=settings.cerebras_model,
             timeout=settings.cerebras_timeout,
         )
@@ -150,6 +151,7 @@ async def get_llm_settings() -> LLMSettingsResponse:
             configured=True,
             available=cerebras_available,
             model=settings.cerebras_model,
+            key_count=cerebras.key_count,
             rate_limits=rate_limits,
         )
 

@@ -51,6 +51,30 @@ class CerebrasRateLimiter:
                     "updated_at": time.monotonic(),
                 }
 
+    def remaining_requests(self) -> int | None:
+        """Return minimum remaining requests across all tracked windows, or None if unknown."""
+        if not self._limits:
+            return None
+        return min(info["remaining"] for info in self._limits.values())
+
+    def seconds_until_reset(self) -> float:
+        """Return seconds until the soonest exhausted window resets, or 0 if not blocked."""
+        now = time.monotonic()
+        min_wait = 0.0
+        for limits in (self._limits, self._token_limits):
+            for window, info in limits.items():
+                if info["remaining"] <= 0:
+                    age = now - info["updated_at"]
+                    if window == "minute":
+                        wait = max(0.0, 60 - age)
+                    elif window == "hour":
+                        wait = max(0.0, 3600 - age)
+                    else:  # day
+                        wait = max(0.0, 86400 - age)
+                    if min_wait == 0 or (wait > 0 and wait < min_wait):
+                        min_wait = wait
+        return min_wait
+
     async def wait_if_needed(self):
         """Wait if we're at the rate limit for any window (requests or tokens)."""
         now = time.monotonic()
@@ -152,32 +176,81 @@ class CerebrasRateLimiter:
         return result
 
 
-# Global rate limiter (shared across provider instances)
-_rate_limiter = CerebrasRateLimiter()
+# ---- Global per-key rate limiter pool ----
+# Maps API key -> CerebrasRateLimiter. Survives provider recreation each worker cycle.
+_key_pool: dict[str, CerebrasRateLimiter] = {}
+
+
+def get_or_create_limiter(api_key: str) -> CerebrasRateLimiter:
+    """Get or create a rate limiter for a specific API key."""
+    if api_key not in _key_pool:
+        _key_pool[api_key] = CerebrasRateLimiter()
+    return _key_pool[api_key]
 
 
 def get_rate_limiter() -> CerebrasRateLimiter:
-    """Get the global rate limiter instance."""
-    return _rate_limiter
+    """Get the first key's rate limiter (backward compat)."""
+    if _key_pool:
+        return next(iter(_key_pool.values()))
+    # No keys registered yet — return a fresh limiter that will be replaced
+    return CerebrasRateLimiter()
+
+
+def get_all_limiters() -> dict[str, CerebrasRateLimiter]:
+    """Get all per-key rate limiters."""
+    return _key_pool
+
+
+def get_aggregated_status() -> dict | None:
+    """Get aggregated rate limit status across all keys.
+
+    Sums limits and remaining across all keys for each window.
+    """
+    if not _key_pool:
+        return None
+
+    # Collect individual statuses
+    statuses = []
+    for limiter in _key_pool.values():
+        s = limiter.get_status()
+        if s:
+            statuses.append(s)
+
+    if not statuses:
+        return None
+
+    # Aggregate: sum limits and remaining per window
+    result = {}
+    for category in ("requests", "tokens"):
+        windows = {}
+        for s in statuses:
+            if category not in s:
+                continue
+            for window, info in s[category].items():
+                if window not in windows:
+                    windows[window] = {"limit": 0, "remaining": 0}
+                windows[window]["limit"] += info["limit"] or 0
+                windows[window]["remaining"] += info["remaining"] or 0
+        if windows:
+            result[category] = windows
+
+    return result or None
 
 
 class CerebrasProvider(BaseLLMProvider):
     """Cerebras provider for cloud LLM access.
 
-    Cerebras offers fast inference with generous free tier limits:
+    Supports multiple API keys for higher throughput. Each key has independent
+    rate limits tracked by its own CerebrasRateLimiter. Before each request,
+    the provider picks the key with the most remaining quota. If a key gets
+    429'd, the next key is tried before raising.
+
+    Cerebras free tier limits per key:
         - 30 requests/minute, 900/hour, 14,400/day
         - 64K tokens/minute, 1M/hour, 1M/day
 
-    Includes built-in rate limiting: tracks remaining quota from
-    response headers and waits when limits are exhausted, avoiding
-    429 errors and unnecessary fallback to Ollama.
-
-    Models include:
-        - gpt-oss-120b (reasoning model, free tier)
-        - qwen-3-235b-a22b-instruct-2507 (MoE, paid tier)
-
     Configured via:
-        - CEREBRAS_API_KEY: API key for authentication
+        - CEREBRAS_API_KEY: Comma-separated API keys
         - CEREBRAS_MODEL: Model to use
     """
 
@@ -185,14 +258,62 @@ class CerebrasProvider(BaseLLMProvider):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
+        api_keys: list[str] | None = None,
         model: str = "gpt-oss-120b",
         timeout: int = 60,
     ):
-        self.api_key = api_key
+        # Accept either single key or list of keys (backward compatible)
+        if api_keys:
+            keys = api_keys
+        elif api_key:
+            keys = [api_key]
+        else:
+            keys = []
+
+        self._keys: list[tuple[str, CerebrasRateLimiter]] = [
+            (k, get_or_create_limiter(k)) for k in keys
+        ]
+        # Round-robin index for breaking ties
+        self._rr_index = 0
         self.model = model
         self.timeout = timeout
-        self._rate_limiter = _rate_limiter
+
+    @property
+    def key_count(self) -> int:
+        return len(self._keys)
+
+    @property
+    def api_key(self) -> str:
+        """Return first key (backward compat for is_available)."""
+        return self._keys[0][0] if self._keys else ""
+
+    def _select_key(self) -> tuple[str, CerebrasRateLimiter]:
+        """Pick the key with the most remaining requests.
+
+        If multiple keys tie (including when none have data yet), round-robin.
+        """
+        if len(self._keys) == 1:
+            return self._keys[0]
+
+        best_idx = 0
+        best_remaining = -1
+
+        for i, (_, limiter) in enumerate(self._keys):
+            remaining = limiter.remaining_requests()
+            if remaining is None:
+                # No data yet — treat as high remaining so new keys get used
+                remaining = 999_999
+            if remaining > best_remaining:
+                best_remaining = remaining
+                best_idx = i
+            elif remaining == best_remaining:
+                # Tie — use round-robin to break it
+                if i == self._rr_index % len(self._keys):
+                    best_idx = i
+
+        self._rr_index = (best_idx + 1) % len(self._keys)
+        return self._keys[best_idx]
 
     async def complete(
         self,
@@ -208,17 +329,19 @@ class CerebrasProvider(BaseLLMProvider):
 
         return await self.chat(messages, temperature=temperature, max_tokens=max_tokens)
 
-    async def chat(
+    async def _chat_with_key(
         self,
+        api_key: str,
+        limiter: CerebrasRateLimiter,
         messages: list[dict],
-        temperature: float = 0.7,
-        max_tokens: int | None = None,
+        temperature: float,
+        max_tokens: int | None,
     ) -> LLMResponse:
-        # Wait if rate limited
-        await self._rate_limiter.wait_if_needed()
+        """Execute a chat request with a specific key."""
+        await limiter.wait_if_needed()
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
@@ -238,22 +361,23 @@ class CerebrasProvider(BaseLLMProvider):
             )
 
             # Update rate limits from headers (works on both 200 and 429)
-            self._rate_limiter.update_from_headers(response.headers)
+            limiter.update_from_headers(response.headers)
 
             if response.status_code == 429:
-                self._rate_limiter.handle_429()
-                # Raise so the service can retry or fall back
-                response.raise_for_status()
+                limiter.handle_429()
+                raise httpx.HTTPStatusError(
+                    f"429 Too Many Requests",
+                    request=response.request,
+                    response=response,
+                )
 
             response.raise_for_status()
-            self._rate_limiter.handle_success()
+            limiter.handle_success()
             data = response.json()
 
+        key_suffix = api_key[-4:]
         usage = data.get("usage", {})
         message = data["choices"][0]["message"]
-        # gpt-oss-120b is a reasoning model: response text is in "content",
-        # chain-of-thought is in "reasoning". Fall back to "reasoning" if
-        # "content" is missing/empty (e.g. when max_tokens is too low).
         text = message.get("content") or message.get("reasoning") or ""
         return LLMResponse(
             text=text,
@@ -265,18 +389,91 @@ class CerebrasProvider(BaseLLMProvider):
                 "provider": self.provider_name,
                 "id": data.get("id"),
                 "finish_reason": data["choices"][0].get("finish_reason"),
+                "key": f"...{key_suffix}",
             },
         )
 
+    async def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        if not self._keys:
+            raise RuntimeError("No Cerebras API keys configured")
+
+        # Try the best key first, then others on 429
+        tried_keys: set[str] = set()
+        last_error = None
+
+        while len(tried_keys) < len(self._keys):
+            api_key, limiter = self._select_key()
+
+            # If we already tried this key, find another
+            if api_key in tried_keys:
+                found_untried = False
+                for k, lim in self._keys:
+                    if k not in tried_keys:
+                        api_key, limiter = k, lim
+                        found_untried = True
+                        break
+                if not found_untried:
+                    break
+
+            tried_keys.add(api_key)
+            try:
+                return await self._chat_with_key(
+                    api_key, limiter, messages, temperature, max_tokens,
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    key_suffix = api_key[-4:]
+                    remaining_keys = len(self._keys) - len(tried_keys)
+                    if remaining_keys > 0:
+                        logger.info(
+                            f"Cerebras key ...{key_suffix} rate limited, "
+                            f"trying next key ({remaining_keys} remaining)"
+                        )
+                    last_error = e
+                    continue
+                raise
+
+        # All keys exhausted — wait on the one that resets soonest, then retry
+        soonest_key, soonest_limiter = self._keys[0]
+        soonest_wait = soonest_limiter.seconds_until_reset()
+        for k, lim in self._keys[1:]:
+            wait = lim.seconds_until_reset()
+            if 0 < wait < soonest_wait or soonest_wait == 0:
+                soonest_key, soonest_limiter = k, lim
+                soonest_wait = wait
+
+        if soonest_wait > 0:
+            capped = min(soonest_wait, 120)
+            logger.info(
+                f"All {len(self._keys)} Cerebras keys exhausted, "
+                f"waiting {capped:.0f}s for soonest reset"
+            )
+            await asyncio.sleep(capped)
+            return await self._chat_with_key(
+                soonest_key, soonest_limiter, messages, temperature, max_tokens,
+            )
+
+        # No wait needed but all failed — re-raise last error
+        if last_error:
+            raise last_error
+        raise RuntimeError("All Cerebras keys exhausted")
+
     async def is_available(self) -> bool:
-        if not self.api_key:
+        if not self._keys:
             return False
 
+        # Check with first key (all keys share the same account typically)
+        api_key = self._keys[0][0]
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(
                     "https://api.cerebras.ai/v1/models",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                 )
                 return response.status_code == 200
         except Exception as e:
@@ -286,55 +483,51 @@ class CerebrasProvider(BaseLLMProvider):
     async def get_rate_limits(self) -> dict | None:
         """Query current rate limit usage from Cerebras API.
 
-        Makes a minimal request to read the rate limit headers.
-        Returns dict with limits and remaining counts, or None on failure.
+        Makes a minimal request per key, then returns aggregated limits.
         """
-        if not self.api_key:
+        if not self._keys:
             return None
 
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
-                    CEREBRAS_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "max_tokens": 1,
-                    },
-                )
+        aggregated: dict[str, dict[str, dict]] = {}
 
-                # Update shared rate limiter from this response too
-                self._rate_limiter.update_from_headers(response.headers)
+        for api_key, limiter in self._keys:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.post(
+                        CEREBRAS_API_URL,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": [{"role": "user", "content": "hi"}],
+                            "max_tokens": 1,
+                        },
+                    )
 
-                if response.status_code not in (200, 429):
-                    return None
+                    limiter.update_from_headers(response.headers)
 
-                h = response.headers
-                return {
-                    "requests": {
-                        "minute": {"limit": _int(h, "x-ratelimit-limit-requests-minute"),
-                                   "remaining": _int(h, "x-ratelimit-remaining-requests-minute")},
-                        "hour": {"limit": _int(h, "x-ratelimit-limit-requests-hour"),
-                                 "remaining": _int(h, "x-ratelimit-remaining-requests-hour")},
-                        "day": {"limit": _int(h, "x-ratelimit-limit-requests-day"),
-                                "remaining": _int(h, "x-ratelimit-remaining-requests-day")},
-                    },
-                    "tokens": {
-                        "minute": {"limit": _int(h, "x-ratelimit-limit-tokens-minute"),
-                                   "remaining": _int(h, "x-ratelimit-remaining-tokens-minute")},
-                        "hour": {"limit": _int(h, "x-ratelimit-limit-tokens-hour"),
-                                 "remaining": _int(h, "x-ratelimit-remaining-tokens-hour")},
-                        "day": {"limit": _int(h, "x-ratelimit-limit-tokens-day"),
-                                "remaining": _int(h, "x-ratelimit-remaining-tokens-day")},
-                    },
-                }
-        except Exception as e:
-            logger.debug(f"Cerebras rate limits check failed: {e}")
-            return None
+                    if response.status_code not in (200, 429):
+                        continue
+
+                    h = response.headers
+                    for category, prefix in (("requests", "requests"), ("tokens", "tokens")):
+                        if category not in aggregated:
+                            aggregated[category] = {}
+                        for window in ("minute", "hour", "day"):
+                            limit = _int(h, f"x-ratelimit-limit-{prefix}-{window}")
+                            remaining = _int(h, f"x-ratelimit-remaining-{prefix}-{window}")
+                            if limit is not None and remaining is not None:
+                                if window not in aggregated[category]:
+                                    aggregated[category][window] = {"limit": 0, "remaining": 0}
+                                aggregated[category][window]["limit"] += limit
+                                aggregated[category][window]["remaining"] += remaining
+            except Exception as e:
+                logger.debug(f"Cerebras rate limits check failed for key ...{api_key[-4:]}: {e}")
+                continue
+
+        return aggregated or None
 
 
 def _int(headers: httpx.Headers, key: str) -> int | None:

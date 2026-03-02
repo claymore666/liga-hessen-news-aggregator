@@ -721,10 +721,10 @@ async def create_processor_from_settings() -> ItemProcessor | None:
     providers = []
 
     # Add Cerebras as primary provider if configured (free cloud API)
-    if settings.cerebras_api_key:
+    if settings.cerebras_api_keys:
         providers.append(
             CerebrasProvider(
-                api_key=settings.cerebras_api_key,
+                api_keys=settings.cerebras_api_keys,
                 model=settings.cerebras_model,
                 timeout=settings.cerebras_timeout,
             )
@@ -735,7 +735,7 @@ async def create_processor_from_settings() -> ItemProcessor | None:
     from services.gpu1_power import get_power_manager
     power_mgr = get_power_manager()
     add_ollama = True
-    if power_mgr is not None and settings.cerebras_api_key:
+    if power_mgr is not None and settings.cerebras_api_keys:
         # When Cerebras is primary, only add Ollama during active hours
         add_ollama = await power_mgr.is_within_active_hours()
         if not add_ollama:

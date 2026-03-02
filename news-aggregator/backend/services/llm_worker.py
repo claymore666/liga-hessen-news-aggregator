@@ -165,7 +165,7 @@ class LLMWorker:
     def _has_cloud_provider(self) -> bool:
         """Check if a cloud LLM provider (Cerebras) is configured."""
         from config import settings
-        return bool(settings.cerebras_api_key)
+        return bool(settings.cerebras_api_keys)
 
     async def _get_processor(self):
         """Get or create the LLM processor, waking gpu1 if needed."""

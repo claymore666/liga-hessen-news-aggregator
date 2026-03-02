@@ -216,6 +216,7 @@ export interface CerebrasStats {
   configured: boolean
   available: boolean
   model: string
+  key_count: number
   rate_limits?: {
     requests: { minute: { limit: number; remaining: number }; hour: { limit: number; remaining: number }; day: { limit: number; remaining: number } }
     tokens: { minute: { limit: number; remaining: number }; hour: { limit: number; remaining: number }; day: { limit: number; remaining: number } }
