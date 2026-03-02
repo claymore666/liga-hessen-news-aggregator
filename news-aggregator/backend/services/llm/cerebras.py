@@ -31,12 +31,31 @@ class CerebrasRateLimiter:
         # Count consecutive 429s to escalate wait (429 responses may lack full headers)
         self._consecutive_429s: int = 0
 
-    def update_from_headers(self, headers: httpx.Headers):
-        """Update rate limit state from response headers."""
+    def update_from_headers(self, headers: httpx.Headers, *, success: bool = False):
+        """Update rate limit state from response headers.
+
+        Args:
+            headers: Response headers containing rate limit info.
+            success: True if the response was 200 OK. When True, skip
+                storing remaining=0 values — Cerebras free tier reports
+                remaining-hour=0 even when requests succeed. We rely on
+                actual 429 responses to detect real exhaustion.
+        """
         for window in ("minute", "hour", "day"):
             limit = _int(headers, f"x-ratelimit-limit-requests-{window}")
             remaining = _int(headers, f"x-ratelimit-remaining-requests-{window}")
             if limit is not None and remaining is not None:
+                if success and remaining == 0:
+                    # Don't store bogus 0 — keep existing data or store limit only
+                    if window not in self._limits:
+                        self._limits[window] = {
+                            "limit": limit,
+                            "remaining": limit,
+                            "updated_at": time.monotonic(),
+                        }
+                    else:
+                        self._limits[window]["limit"] = limit
+                    continue
                 self._limits[window] = {
                     "limit": limit,
                     "remaining": remaining,
@@ -45,6 +64,16 @@ class CerebrasRateLimiter:
             tok_limit = _int(headers, f"x-ratelimit-limit-tokens-{window}")
             tok_remaining = _int(headers, f"x-ratelimit-remaining-tokens-{window}")
             if tok_limit is not None and tok_remaining is not None:
+                if success and tok_remaining == 0:
+                    if window not in self._token_limits:
+                        self._token_limits[window] = {
+                            "limit": tok_limit,
+                            "remaining": tok_limit,
+                            "updated_at": time.monotonic(),
+                        }
+                    else:
+                        self._token_limits[window]["limit"] = tok_limit
+                    continue
                 self._token_limits[window] = {
                     "limit": tok_limit,
                     "remaining": tok_remaining,
@@ -155,18 +184,8 @@ class CerebrasRateLimiter:
             }
 
     def handle_success(self):
-        """Reset consecutive 429 counter on successful request.
-
-        Also bumps remaining to at least 1 for any window showing 0,
-        since a successful response proves quota was available. Works
-        around Cerebras free tier reporting remaining-hour=0 in headers
-        even when requests succeed.
-        """
+        """Reset consecutive 429 counter on successful request."""
         self._consecutive_429s = 0
-        for limits in (self._limits, self._token_limits):
-            for info in limits.values():
-                if info["remaining"] <= 0:
-                    info["remaining"] = 1
 
     def get_status(self) -> dict | None:
         """Get current rate limit status for API responses."""
@@ -219,12 +238,15 @@ def get_aggregated_status() -> dict | None:
     if not _key_pool:
         return None
 
-    # Collect individual statuses
+    # Collect individual statuses — require ALL keys to have data
     statuses = []
     for limiter in _key_pool.values():
         s = limiter.get_status()
         if s:
             statuses.append(s)
+        else:
+            # Not all keys have data yet, force a fresh probe
+            return None
 
     if not statuses:
         return None
@@ -370,8 +392,9 @@ class CerebrasProvider(BaseLLMProvider):
                 json=payload,
             )
 
-            # Update rate limits from headers (works on both 200 and 429)
-            limiter.update_from_headers(response.headers)
+            # Update rate limits from headers
+            is_success = response.status_code == 200
+            limiter.update_from_headers(response.headers, success=is_success)
 
             if response.status_code == 429:
                 limiter.handle_429()
@@ -516,7 +539,8 @@ class CerebrasProvider(BaseLLMProvider):
                         },
                     )
 
-                    limiter.update_from_headers(response.headers)
+                    is_success = response.status_code == 200
+                    limiter.update_from_headers(response.headers, success=is_success)
 
                     if response.status_code not in (200, 429):
                         continue
