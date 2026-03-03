@@ -193,8 +193,8 @@ services:
       - ../relevance-tuner/services/classifier-api/models:/app/models
       - classifier-vectordb:/app/data/vectordb
       - classifier-duplicatedb:/app/data/duplicatedb
-    ports:
-      - "8082:8082"
+    # No host port mapping needed — backend connects via Docker network (http://classifier:8082)
+    # Port 8082 on host is used by the Ollama proxy (forwarding to gpu1:8082 for legacy access)
     stop_grace_period: 30s
     logging:
       driver: "json-file"
