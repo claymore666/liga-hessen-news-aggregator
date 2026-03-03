@@ -36,8 +36,8 @@ cd news-aggregator
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-**Note:** The classifier API is NOT in docker-compose.prod.yml (no GPU on docker-ai).
-To update the classifier, rebuild it on gpu1 via `docker compose up -d --build classifier`.
+The classifier runs on both environments (lightweight container, embeddings via Ollama).
+To rebuild only the classifier: `docker compose -f docker-compose.prod.yml up -d --build classifier`.
 
 ### QA/Development (gpu1)
 
@@ -47,21 +47,21 @@ git pull origin dev
 docker compose up -d --build
 ```
 
-This includes the classifier API (requires NVIDIA GPU). To rebuild only the classifier:
+This includes the classifier API (lightweight, embeddings via Ollama). To rebuild only the classifier:
 
 ```bash
 docker compose up -d --build classifier
 ```
 
-### Local Deployment (gpu1 only)
+### Local Deployment (gpu1 and docker-ai)
 
-Two components ensure ChromaDB data is flushed before gpu1 powers off. Neither is part of Docker deployment.
+Two components ensure ChromaDB data is flushed before the host powers off. Install on whichever host runs the classifier container.
 
 **1. Shutdown flush service** (`scripts/classifier-flush.service`)
 Gracefully stops the classifier on shutdown/reboot/halt:
 
 ```bash
-# Install/update
+# Install/update (on gpu1 or docker-ai)
 sudo cp scripts/classifier-flush.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now classifier-flush.service
@@ -71,7 +71,7 @@ journalctl -u classifier-flush.service
 ```
 
 **2. Sleep handler** (`scripts/docker-sleep-handler`)
-Stops/starts the classifier around suspend/resume:
+Stops/starts the classifier around suspend/resume (gpu1 only — docker-ai doesn't sleep):
 
 ```bash
 # Install/update

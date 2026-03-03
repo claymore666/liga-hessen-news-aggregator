@@ -1,6 +1,7 @@
 """
 Embedding Classifier API
 FastAPI service for news relevance classification and semantic search.
+Embeddings generated via Ollama HTTP API (no local GPU required).
 """
 
 import logging
@@ -47,31 +48,38 @@ async def lifespan(app: FastAPI):
         logger.info(f"Duplicate store ready: {duplicate_store.get_stats()}")
 
         # Auto-sync: if duplicate store has fewer items than search store,
-        # sync missing items from search to duplicate index
-        vs_count = vector_store.get_stats()["total_items"]
-        ds_count = duplicate_store.get_stats()["total_items"]
-        if ds_count < vs_count:
-            logger.info(
-                f"Duplicate store ({ds_count}) behind search store ({vs_count}), "
-                f"syncing {vs_count - ds_count} items..."
-            )
-            items = vector_store.get_all_items()
-            # Batch to stay under ChromaDB's max batch size
-            batch_size = 2000
-            total_synced = 0
-            for i in range(0, len(items), batch_size):
-                batch = items[i:i + batch_size]
-                synced = duplicate_store.add_items_batch(batch)
-                total_synced += synced
-                if synced > 0:
-                    logger.info(f"Synced batch {i//batch_size + 1}: {synced} items")
-            logger.info(f"Auto-sync complete: {total_synced} items added to duplicate store")
+        # sync missing items from search to duplicate index.
+        # Wrapped in try/except: Ollama (gpu1) may be asleep at startup.
+        try:
+            vs_count = vector_store.get_stats()["total_items"]
+            ds_count = duplicate_store.get_stats()["total_items"]
+            if ds_count < vs_count:
+                logger.info(
+                    f"Duplicate store ({ds_count}) behind search store ({vs_count}), "
+                    f"syncing {vs_count - ds_count} items..."
+                )
+                items = vector_store.get_all_items()
+                # Batch to stay under ChromaDB's max batch size
+                batch_size = 2000
+                total_synced = 0
+                for i in range(0, len(items), batch_size):
+                    batch = items[i:i + batch_size]
+                    synced = duplicate_store.add_items_batch(batch)
+                    total_synced += synced
+                    if synced > 0:
+                        logger.info(f"Synced batch {i//batch_size + 1}: {synced} items")
+                logger.info(f"Auto-sync complete: {total_synced} items added to duplicate store")
+        except Exception as e:
+            logger.warning(f"Auto-sync skipped (Ollama may be unavailable): {e}")
 
-        # Warm up the models with test predictions
-        logger.info("Warming up models...")
-        _ = classifier.predict("Test", "Test content", "test")
-        _ = duplicate_store.find_duplicates("Test", "Test content")
-        logger.info("Models ready!")
+        # Warm up with a test prediction (non-fatal if Ollama is unreachable)
+        try:
+            logger.info("Warming up models...")
+            _ = classifier.predict("Test", "Test content", "test")
+            _ = duplicate_store.find_duplicates("Test", "Test content")
+            logger.info("Models ready!")
+        except Exception as e:
+            logger.warning(f"Warmup skipped (Ollama may be unavailable): {e}")
     except Exception as e:
         logger.error(f"Failed to load classifier: {e}")
         raise
@@ -83,7 +91,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Embedding Classifier API",
-    description="GPU-accelerated news relevance classification and semantic search",
+    description="News relevance classification and semantic search (embeddings via Ollama)",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -181,18 +189,12 @@ class HealthResponse(BaseModel):
     model: str
     gpu: bool
     gpu_name: str | None = None
+    ollama_url: str | None = None
+    ollama_available: bool = False
     classifier_version: str | None = None
     trained_at: str | None = None
     training_items: int | None = None
     multilabel: bool = False
-    model_loaded: bool = Field(
-        default=True,
-        description="Whether embedding model is currently loaded in VRAM"
-    )
-    idle_timeout: int = Field(
-        default=300,
-        description="Seconds of inactivity before model is unloaded from VRAM"
-    )
     search_index_items: int = Field(
         default=0,
         description="Number of items indexed for semantic search (nomic embeddings)"
@@ -246,12 +248,12 @@ async def health():
         model=info["backend"],
         gpu=info["gpu_available"],
         gpu_name=info["gpu_name"],
+        ollama_url=info.get("ollama_url"),
+        ollama_available=info.get("ollama_available", False),
         classifier_version=info.get("version"),
         trained_at=info.get("trained_at"),
         training_items=info.get("training_items"),
         multilabel=info.get("multilabel", False),
-        model_loaded=info.get("model_loaded", True),
-        idle_timeout=info.get("idle_timeout", 600),
         search_index_items=vs_items,
         duplicate_index_items=ds_stats.get("total_items", 0),
         duplicate_model=ds_stats.get("model"),

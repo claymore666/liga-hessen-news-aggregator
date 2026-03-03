@@ -26,13 +26,14 @@
 
 ## Embedding Models Architecture
 
-The system uses THREE different embedding models for different purposes:
+The classifier API generates embeddings via Ollama HTTP API (no local GPU/PyTorch needed).
+Both embedding models run on gpu1's Ollama, accessed via the Ollama proxy on docker-ai.
 
-| Component | Model | Purpose | Dimensions |
-|-----------|-------|---------|------------|
-| **Classifier** | `nomic-ai/nomic-embed-text-v2-moe` | Relevance/Priority/AK classification | 768 |
-| **Semantic Search** | `nomic-ai/nomic-embed-text-v2-moe` | Vector search in classifier-api | 768 |
-| **Duplicate Detection** | `paraphrase-multilingual-mpnet-base-v2` | Same-story detection | 768 |
+| Component | Ollama Model | Purpose | Dimensions |
+|-----------|-------------|---------|------------|
+| **Classifier** | `nomic-embed-text-v2-moe` | Relevance/Priority/AK classification | 768 |
+| **Semantic Search** | `nomic-embed-text-v2-moe` | Vector search in classifier-api | 768 |
+| **Duplicate Detection** | `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | Same-story detection | 768 |
 
 ### Available Embedding Backends (utils/embeddings.py)
 
@@ -220,14 +221,15 @@ curl -X PUT "http://localhost:8000/api/llm/model" -H "Content-Type: application/
 
 ## Classifier API (Embedding Service)
 
-Runs on port 8082. Provides classification, semantic search, and duplicate detection.
+Lightweight container on port 8082. Embeddings generated via Ollama HTTP API.
+Runs on both docker-ai (prod) and gpu1 (dev). No GPU or PyTorch required.
 
-### Models Used
+### Embedding Models (via Ollama)
 
-| Model | Purpose |
-|-------|---------|
-| `nomic-ai/nomic-embed-text-v2-moe` | Classification & semantic search (768d) |
-| `paraphrase-multilingual-mpnet-base-v2` | Duplicate detection (better same-story detection) |
+| Ollama Model | Purpose |
+|-------------|---------|
+| `nomic-embed-text-v2-moe` | Classification & semantic search (768d) |
+| `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | Duplicate detection (better same-story detection) |
 
 ### Duplicate Detection
 
@@ -272,8 +274,13 @@ See `news-aggregator/docs/operations/TROUBLESHOOTING.md` for full procedure on r
 ### Rebuilding Classifier
 
 ```bash
-cd /home/kamienc/claude.ai/ligahessen/relevance-tuner/services/classifier-api
-docker compose down && docker compose build --no-cache && docker compose up -d
+# On gpu1 (QA)
+cd /home/kamienc/claude.ai/ligahessen/news-aggregator
+docker compose up -d --build classifier
+
+# On docker-ai (Production)
+cd /home/kamienc/projects/liga-hessen-news-aggregator/news-aggregator
+docker compose -f docker-compose.prod.yml up -d --build classifier
 ```
 
 ## Database & Storage
@@ -295,10 +302,10 @@ docker exec liga-news-db psql -U liga -d liga_news -c "SELECT pg_size_pretty(pg_
 
 ### ChromaDB Indexes
 
-| Index | Path | Model | Purpose |
-|-------|------|-------|---------|
-| Search index | `/app/data/vectordb` | nomic-v2 | Classification & semantic search |
-| Duplicate index | `/app/data/duplicatedb` | paraphrase-mpnet | Duplicate detection |
+| Index | Path | Ollama Model | Purpose |
+|-------|------|-------------|---------|
+| Search index | `/app/data/vectordb` | nomic-embed-text-v2-moe | Classification & semantic search |
+| Duplicate index | `/app/data/duplicatedb` | paraphrase-multilingual | Duplicate detection |
 
 ```bash
 # Check store sizes

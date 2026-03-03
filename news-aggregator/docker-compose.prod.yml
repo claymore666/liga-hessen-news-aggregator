@@ -7,12 +7,11 @@
 #
 # Environment files:
 #   - docker-compose.yml      -> gpu1 (QA) - workers disabled, includes classifier
-#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled, NO classifier
+#   - docker-compose.prod.yml -> docker-ai (Production) - workers enabled, includes classifier
 #   - docker-compose.training.yml -> classifier training
 #
-# NOTE: The classifier API requires an NVIDIA GPU and runs on gpu1, not here.
-# Backend connects to it remotely via CLASSIFIER_URL=http://gpu1.fritz.box:8082.
-# To rebuild the classifier, use docker-compose.yml on gpu1.
+# The classifier API runs here as a lightweight container (embeddings via Ollama
+# proxy on docker-ai port 11434, which forwards to gpu1 Ollama).
 # =============================================================================
 
 # Network for LAN access (Wake-on-LAN)
@@ -97,8 +96,8 @@ services:
       - OLLAMA_MODEL=gpt-oss-120b
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
-      # Embedding classifier pre-filter (runs on gpu1)
-      - CLASSIFIER_URL=http://gpu1.fritz.box:8082
+      # Embedding classifier (runs locally on docker-ai, embeddings via Ollama proxy)
+      - CLASSIFIER_URL=http://classifier:8082
       - CLASSIFIER_THRESHOLD=${CLASSIFIER_THRESHOLD:-0.8}
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
       - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}
@@ -139,6 +138,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      classifier:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -178,8 +179,37 @@ services:
       retries: 3
       start_period: 5s
 
+  # Classifier API - lightweight container, embeddings via Ollama proxy
+  # Ollama proxy on docker-ai (172.17.0.1:11434) forwards to gpu1 Ollama.
+  classifier:
+    build:
+      context: ../relevance-tuner/services/classifier-api
+      dockerfile: Dockerfile
+    container_name: liga-classifier
+    restart: unless-stopped
+    environment:
+      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+    volumes:
+      - ../relevance-tuner/services/classifier-api/models:/app/models
+      - classifier-vectordb:/app/data/vectordb
+      - classifier-duplicatedb:/app/data/duplicatedb
+    ports:
+      - "8082:8082"
+    stop_grace_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - default
+
 volumes:
   postgres-data:
     name: liga-news-postgres
   backend-data:
     name: liga-news-data
+  classifier-vectordb:
+    name: liga-classifier-vectordb
+  classifier-duplicatedb:
+    name: liga-classifier-duplicatedb

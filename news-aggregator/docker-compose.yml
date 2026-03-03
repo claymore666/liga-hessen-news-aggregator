@@ -178,8 +178,7 @@ services:
       retries: 3
       start_period: 5s
 
-  # Classifier API - runs on gpu1 only (requires NVIDIA GPU)
-  # On production (docker-ai), the backend connects to gpu1:8082 remotely.
+  # Classifier API - lightweight container, embeddings via Ollama (runs locally on gpu1)
   classifier:
     build:
       context: ../relevance-tuner/services/classifier-api
@@ -187,23 +186,16 @@ services:
     container_name: liga-classifier
     ports:
       - "8082:8082"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
     volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
       - ../relevance-tuner/services/classifier-api/models:/app/models
       - classifier-vectordb:/app/data/vectordb
       - classifier-duplicatedb:/app/data/duplicatedb
     restart: unless-stopped
     stop_grace_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     logging:
       driver: "json-file"
       options:
