@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     llm_enabled: bool = True  # Set to False to disable all LLM processing
 
     # LLM - Ollama (via proxy that routes to cloud first, then local)
-    ollama_base_url: str = "http://gpu1:11434"
+    ollama_base_url: str = "http://docker-ai:11434"
     ollama_model: str = "gpt-oss-120b"
     ollama_timeout: int = 120
 
