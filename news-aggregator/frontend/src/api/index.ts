@@ -212,21 +212,9 @@ export interface ItemStats {
   starred: number
 }
 
-export interface CerebrasStats {
-  configured: boolean
-  available: boolean
-  model: string
-  key_count: number
-  rate_limits?: {
-    requests: { minute: { limit: number; remaining: number }; hour: { limit: number; remaining: number }; day: { limit: number; remaining: number } }
-    tokens: { minute: { limit: number; remaining: number }; hour: { limit: number; remaining: number }; day: { limit: number; remaining: number } }
-  } | null
-}
-
 export interface SystemStatsResponse {
   scheduler: SchedulerStatus
   llm_worker: WorkerStatus
-  cerebras?: CerebrasStats | null
   classifier_worker: WorkerStatus
   dedup_worker: WorkerStatus
   processing_queue: ProcessingQueueStats

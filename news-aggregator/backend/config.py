@@ -92,23 +92,10 @@ class Settings(BaseSettings):
     # LLM - General
     llm_enabled: bool = True  # Set to False to disable all LLM processing
 
-    # LLM - Ollama (primary)
+    # LLM - Ollama (via proxy that routes to cloud first, then local)
     ollama_base_url: str = "http://gpu1:11434"
-    ollama_model: str = "qwen3:14b-q8_0"  # Base model with system prompt (NOT liga-relevance)
+    ollama_model: str = "qwen3:32b"
     ollama_timeout: int = 120
-
-    # LLM - Cerebras (free tier, OpenAI-compatible)
-    # Supports multiple comma-separated API keys for higher throughput
-    cerebras_api_key: str = ""
-    cerebras_model: str = "gpt-oss-120b"
-    cerebras_timeout: int = 60
-
-    @property
-    def cerebras_api_keys(self) -> list[str]:
-        """Split comma-separated API keys into a list."""
-        if not self.cerebras_api_key:
-            return []
-        return [k.strip() for k in self.cerebras_api_key.split(",") if k.strip()]
 
     # LLM - OpenRouter (fallback)
     openrouter_api_key: str = ""

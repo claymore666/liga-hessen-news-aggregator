@@ -237,25 +237,6 @@ const llmWorkerStats = computed(() => {
   }
 })
 
-const formatTokenCount = (n: number | undefined | null): string => {
-  if (n == null) return '?'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}K`
-  return n.toString()
-}
-
-const cerebrasRateLimits = computed(() => {
-  const rl = stats.value?.cerebras?.rate_limits
-  if (!rl) return null
-  const req = rl.requests as Record<string, { limit: number; remaining: number }> | undefined
-  const tok = rl.tokens as Record<string, { limit: number; remaining: number }> | undefined
-  if (!req?.minute && !tok?.minute) return null
-  return {
-    requests: req || null,
-    tokens: tok || null,
-  }
-})
-
 const gpu1IdleFormatted = computed(() => {
   if (!gpu1Status.value?.idle_time) return null
   const secs = Math.round(gpu1Status.value.idle_time)
@@ -420,59 +401,21 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- LLM Providers -->
-        <div class="card col-span-2">
+        <!-- LLM Provider -->
+        <div class="card">
           <div class="flex items-center gap-3">
             <CpuChipIcon class="h-8 w-8 text-gray-400 flex-shrink-0" />
-            <div class="min-w-0 flex-1">
+            <div>
               <div class="text-sm font-medium text-gray-500">LLM</div>
-              <div class="flex items-center gap-4">
-                <div class="flex items-center gap-1">
-                  <component
-                    :is="stats?.cerebras?.available ? CheckCircleIcon : XCircleIcon"
-                    class="h-4 w-4 flex-shrink-0"
-                    :class="stats?.cerebras?.available ? 'text-green-500' : 'text-red-500'"
-                  />
-                  <span class="text-sm" :class="stats?.cerebras?.available ? 'text-green-600' : 'text-red-600'">
-                    Cerebras
-                  </span>
-                  <span v-if="stats?.cerebras?.key_count && stats.cerebras.key_count > 1"
-                    class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
-                    {{ stats.cerebras.key_count }} keys
-                  </span>
-                </div>
-                <div class="flex items-center gap-1">
-                  <component
-                    :is="health?.llm_available ? CheckCircleIcon : XCircleIcon"
-                    class="h-4 w-4 flex-shrink-0"
-                    :class="health?.llm_available ? 'text-green-500' : 'text-red-500'"
-                  />
-                  <span class="text-sm" :class="health?.llm_available ? 'text-green-600' : 'text-red-600'">
-                    Ollama
-                  </span>
-                </div>
-              </div>
-              <!-- Rate Limits (show used/limit) -->
-              <div v-if="cerebrasRateLimits" class="mt-1 space-y-0.5 text-xs text-gray-500">
-                <div v-if="cerebrasRateLimits.requests" class="flex gap-3">
-                  <span :class="cerebrasRateLimits.requests.minute?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                    {{ (cerebrasRateLimits.requests.minute?.limit ?? 0) - (cerebrasRateLimits.requests.minute?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.minute?.limit ?? '?' }} req/min
-                  </span>
-                  <span :class="cerebrasRateLimits.requests.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                    {{ (cerebrasRateLimits.requests.hour?.limit ?? 0) - (cerebrasRateLimits.requests.hour?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.hour?.limit ?? '?' }} req/h
-                  </span>
-                  <span :class="cerebrasRateLimits.requests.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                    {{ (cerebrasRateLimits.requests.day?.limit ?? 0) - (cerebrasRateLimits.requests.day?.remaining ?? 0) }}/{{ cerebrasRateLimits.requests.day?.limit ?? '?' }} req/d
-                  </span>
-                </div>
-                <div v-if="cerebrasRateLimits.tokens" class="flex gap-3">
-                  <span :class="cerebrasRateLimits.tokens.hour?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                    {{ formatTokenCount((cerebrasRateLimits.tokens.hour?.limit ?? 0) - (cerebrasRateLimits.tokens.hour?.remaining ?? 0)) }}/{{ formatTokenCount(cerebrasRateLimits.tokens.hour?.limit) }} tok/h
-                  </span>
-                  <span :class="cerebrasRateLimits.tokens.day?.remaining === 0 ? 'text-red-600 font-medium' : ''">
-                    {{ formatTokenCount((cerebrasRateLimits.tokens.day?.limit ?? 0) - (cerebrasRateLimits.tokens.day?.remaining ?? 0)) }}/{{ formatTokenCount(cerebrasRateLimits.tokens.day?.limit) }} tok/d
-                  </span>
-                </div>
+              <div class="flex items-center gap-1">
+                <component
+                  :is="health?.llm_available ? CheckCircleIcon : XCircleIcon"
+                  class="h-4 w-4 flex-shrink-0"
+                  :class="health?.llm_available ? 'text-green-500' : 'text-red-500'"
+                />
+                <span class="text-sm" :class="health?.llm_available ? 'text-green-600' : 'text-red-600'">
+                  Ollama
+                </span>
               </div>
             </div>
           </div>

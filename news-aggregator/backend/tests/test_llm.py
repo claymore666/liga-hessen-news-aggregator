@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from services.llm import (
     BaseLLMProvider,
-    CerebrasProvider,
     LLMResponse,
     LLMService,
     OllamaProvider,
@@ -174,18 +173,6 @@ class TestOpenRouterProvider:
         result = await provider.is_available()
 
         assert result is False
-
-
-# === CerebrasProvider import test ===
-
-
-class TestCerebrasProviderImport:
-    """Test that CerebrasProvider is properly exported."""
-
-    def test_cerebras_in_all(self):
-        """CerebrasProvider should be importable from services.llm."""
-        assert CerebrasProvider is not None
-        assert CerebrasProvider.provider_name == "cerebras"
 
 
 # === LLMService Tests ===

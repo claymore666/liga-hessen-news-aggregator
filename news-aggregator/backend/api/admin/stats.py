@@ -57,20 +57,10 @@ class ItemStats(BaseModel):
     starred: int
 
 
-class CerebrasStats(BaseModel):
-    """Cerebras provider availability and rate limits."""
-    configured: bool
-    available: bool
-    model: str
-    key_count: int = 1
-    rate_limits: dict | None = None
-
-
 class SystemStatsResponse(BaseModel):
     """Comprehensive system statistics for dashboard."""
     scheduler: SchedulerStatus
     llm_worker: WorkerStatus
-    cerebras: CerebrasStats | None = None
     classifier_worker: WorkerStatus
     dedup_worker: WorkerStatus
     processing_queue: ProcessingQueueStats
@@ -132,33 +122,6 @@ async def get_system_stats(
         stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
-
-    # Cerebras provider status (with rate limits from cached state)
-    from config import settings
-    cerebras_stats = None
-    if settings.cerebras_api_keys:
-        from services.llm.cerebras import CerebrasProvider, get_aggregated_status
-        cerebras = CerebrasProvider(
-            api_keys=settings.cerebras_api_keys,
-            model=settings.cerebras_model,
-            timeout=settings.cerebras_timeout,
-        )
-        cerebras_available = await cerebras.is_available()
-        # Use cached rate limiter state (updated on every API call)
-        # Only fetch fresh limits if no cached data exists
-        rate_limits = get_aggregated_status()
-        if rate_limits is None and cerebras_available:
-            try:
-                rate_limits = await cerebras.get_rate_limits()
-            except Exception as e:
-                logger.debug(f"Failed to fetch Cerebras rate limits: {e}")
-        cerebras_stats = CerebrasStats(
-            configured=True,
-            available=cerebras_available,
-            model=settings.cerebras_model,
-            key_count=cerebras.key_count,
-            rate_limits=rate_limits,
-        )
 
     # Classifier Worker status from DB + actual service reachability
     clf_state = await read_state("classifier")
@@ -266,7 +229,6 @@ async def get_system_stats(
     return SystemStatsResponse(
         scheduler=scheduler_status,
         llm_worker=llm_worker_status,
-        cerebras=cerebras_stats,
         classifier_worker=classifier_worker_status,
         dedup_worker=dedup_worker_status,
         processing_queue=processing_queue,
