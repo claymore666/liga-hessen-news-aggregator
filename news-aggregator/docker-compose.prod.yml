@@ -93,7 +93,7 @@ services:
       - TZ=Europe/Berlin
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://docker-ai.fritz.box:11434
+      - OLLAMA_BASE_URL=http://172.17.0.1:11434
       - OLLAMA_MODEL=gpt-oss-120b
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
