@@ -179,8 +179,7 @@ services:
       retries: 3
       start_period: 5s
 
-  # Classifier API - lightweight container, embeddings via gpu1 Ollama directly.
-  # Can't use the local Ollama proxy (172.17.0.1:11434) because it doesn't support /api/embed.
+  # Classifier API - lightweight container, embeddings via Ollama proxy
   classifier:
     build:
       context: ../relevance-tuner/services/classifier-api
@@ -188,7 +187,7 @@ services:
     container_name: liga-classifier
     restart: unless-stopped
     environment:
-      - OLLAMA_BASE_URL=http://gpu1.fritz.box:11434
+      - OLLAMA_BASE_URL=http://172.17.0.1:11434
     volumes:
       - ../relevance-tuner/services/classifier-api/models:/app/models
       - classifier-vectordb:/app/data/vectordb
