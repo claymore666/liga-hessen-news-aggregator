@@ -211,5 +211,7 @@ volumes:
     name: liga-news-data
   classifier-vectordb:
     name: liga-classifier-vectordb
+    external: true
   classifier-duplicatedb:
     name: liga-classifier-duplicatedb
+    external: true
