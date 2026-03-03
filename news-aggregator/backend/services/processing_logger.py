@@ -381,8 +381,8 @@ class ProcessingLogger:
         return await self.log_step(
             step_type=ProcessingStepType.LLM_ANALYSIS,
             item_id=item_id,
-            model_name=settings.ollama_model,
-            model_provider="ollama",
+            model_name=analysis.get("model") or settings.ollama_model,
+            model_provider=analysis.get("provider") or "ollama",
             duration_ms=duration_ms,
             confidence_score=analysis.get("relevance_score"),
             priority_input=priority_input,
