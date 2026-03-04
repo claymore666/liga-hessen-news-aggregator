@@ -37,7 +37,7 @@ class OllamaEmbedder:
         self._embedding_dim = 768
         self._client = httpx.Client(base_url=OLLAMA_BASE_URL, timeout=120.0)
         self._availability_cache: tuple[bool, float] | None = None
-        self._availability_ttl = 30.0  # seconds
+        self._availability_ttl = 900.0  # 15 minutes — models don't disappear quickly
 
     @property
     def embedding_dim(self) -> int:

@@ -123,24 +123,14 @@ async def get_system_stats(
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )
 
-    # Classifier Worker status from DB + actual service reachability
+    # Classifier Worker status from DB
     clf_state = await read_state("classifier")
     clf_stats = await read_stats("classifier")
-    # Check if the classifier API is actually reachable (direct health check)
-    classifier_reachable = False
-    try:
-        from config import settings
-        if settings.classifier_url:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                resp = await client.get(f"{settings.classifier_url.rstrip('/')}/health")
-                classifier_reachable = resp.status_code == 200
-    except Exception:
-        pass
     classifier_worker_status = WorkerStatus(
         running=clf_state.get("running", False),
         paused=clf_state.get("paused", False),
         stopped_due_to_errors=clf_state.get("stopped_due_to_errors", False),
-        service_available=classifier_reachable,
+        service_available=clf_state.get("running", False),
         stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
               {"processed": 0, "errors": 0},
     )
