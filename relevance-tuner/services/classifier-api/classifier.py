@@ -10,6 +10,8 @@ No GPU or PyTorch required in this container.
 import logging
 import os
 import pickle
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -34,18 +36,27 @@ class OllamaEmbedder:
         self.task_prefix = task_prefix
         self._embedding_dim = 768
         self._client = httpx.Client(base_url=OLLAMA_BASE_URL, timeout=120.0)
+        self._availability_cache: tuple[bool, float] | None = None
+        self._availability_ttl = 30.0  # seconds
 
     @property
     def embedding_dim(self) -> int:
         return self._embedding_dim
 
     def is_available(self) -> bool:
-        """Check if Ollama is reachable."""
+        """Check if Ollama is reachable (cached for 30s to avoid hammering the proxy)."""
+        now = time.monotonic()
+        if self._availability_cache is not None:
+            cached_result, cached_at = self._availability_cache
+            if now - cached_at < self._availability_ttl:
+                return cached_result
         try:
             resp = self._client.get("/api/tags")
-            return resp.status_code == 200
+            result = resp.status_code == 200
         except httpx.HTTPError:
-            return False
+            result = False
+        self._availability_cache = (result, now)
+        return result
 
     def encode(
         self,
@@ -591,6 +602,19 @@ class DuplicateStore:
 
         print(f"DuplicateStore initialized: {self.collection.count()} items in collection")
 
+    @staticmethod
+    def _normalize_fetched_at(meta: dict) -> dict:
+        """Convert fetched_at ISO string to epoch float for ChromaDB filtering."""
+        if "fetched_at" in meta and isinstance(meta["fetched_at"], str) and meta["fetched_at"]:
+            try:
+                dt = datetime.fromisoformat(meta["fetched_at"])
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                meta["fetched_at"] = dt.timestamp()
+            except (ValueError, TypeError):
+                del meta["fetched_at"]
+        return meta
+
     def add_item(
         self,
         item_id: str,
@@ -608,6 +632,7 @@ class DuplicateStore:
 
         meta = metadata or {}
         meta["title"] = title[:500]
+        meta = self._normalize_fetched_at(meta)
 
         self.collection.add(
             ids=[item_id],
@@ -637,6 +662,7 @@ class DuplicateStore:
             meta = item.get("metadata", {}) or {}
             meta["title"] = item["title"][:500]
             meta = {k: v for k, v in meta.items() if v is not None}
+            meta = self._normalize_fetched_at(meta)
             metadatas.append(meta)
             documents.append(texts[new_items.index(item)][:2000])
 
@@ -676,9 +702,16 @@ class DuplicateStore:
         embedding = self.embedder.encode([text], show_progress_bar=False)[0]
 
         # Build ChromaDB where filter for time-bounded dedup
+        # ChromaDB requires numeric values for comparison operators
         where_filter = None
         if fetched_after:
-            where_filter = {"fetched_at": {"$gte": fetched_after}}
+            try:
+                dt = datetime.fromisoformat(fetched_after)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                where_filter = {"fetched_at": {"$gte": dt.timestamp()}}
+            except (ValueError, TypeError):
+                pass  # Skip filter if timestamp is unparseable
 
         query_kwargs = {
             "query_embeddings": [embedding],
