@@ -14,7 +14,6 @@
 # proxy on docker-ai port 11434, which forwards to gpu1 Ollama).
 # =============================================================================
 
-# Network for LAN access (Wake-on-LAN)
 networks:
   default:
     # Default bridge for inter-container communication (db access)
@@ -27,6 +26,8 @@ networks:
         - subnet: 192.168.0.0/24
           gateway: 192.168.0.1
           ip_range: 192.168.0.200/30  # Reserve 200-203 for containers
+  ollama-net:
+    external: true  # Managed by ollamaproxy compose — join to reach intake directly
 
 services:
   redis:
@@ -92,7 +93,7 @@ services:
       - TZ=Europe/Berlin
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      - OLLAMA_BASE_URL=http://intake:11434
       - OLLAMA_MODEL=gpt-oss-120b
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
@@ -155,6 +156,7 @@ services:
       default:  # For db connectivity
       lan:
         ipv4_address: 192.168.0.200  # Static IP on LAN for WoL
+      ollama-net:  # Direct path to ollamaproxy intake service
 
   frontend:
     build:
@@ -187,7 +189,7 @@ services:
     container_name: liga-classifier
     restart: unless-stopped
     environment:
-      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      - OLLAMA_BASE_URL=http://intake:11434
     volumes:
       - ../relevance-tuner/services/classifier-api/models:/app/models
       - classifier-vectordb:/app/data/vectordb
@@ -202,6 +204,7 @@ services:
         max-file: "3"
     networks:
       - default
+      - ollama-net  # Direct path to ollamaproxy-intake-1
 
 volumes:
   postgres-data:
