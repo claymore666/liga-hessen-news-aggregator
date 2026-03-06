@@ -217,6 +217,7 @@ export interface SystemStatsResponse {
   llm_worker: WorkerStatus
   classifier_worker: WorkerStatus
   dedup_worker: WorkerStatus
+  classifier_bypassed: boolean
   processing_queue: ProcessingQueueStats
   items: ItemStats
   timestamp: string
@@ -374,6 +375,7 @@ export const adminApi = {
   stopClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/stop'),
   pauseClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/pause'),
   resumeClassifierWorker: () => api.post<WorkerControlResponse>('/admin/classifier-worker/resume'),
+  setClassifierBypass: (bypassed: boolean) => api.post<WorkerControlResponse>('/admin/classifier-bypass', { bypassed }),
 
   // Dedup Worker controls
   startDedupWorker: () => api.post<WorkerControlResponse>('/admin/dedup-worker/start'),

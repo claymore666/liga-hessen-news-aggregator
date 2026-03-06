@@ -21,7 +21,8 @@ import {
   ChevronRightIcon,
   FunnelIcon,
   GlobeAltIcon,
-  CloudIcon
+  CloudIcon,
+  ForwardIcon
 } from '@heroicons/vue/24/outline'
 import {
   adminApi,
@@ -776,67 +777,83 @@ onUnmounted(() => {
             <span
               class="flex items-center gap-1 text-sm"
               :class="{
-                'text-green-600': stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available === true,
-                'text-yellow-600': stats.classifier_worker.paused,
-                'text-red-600': !stats.classifier_worker.running || stats.classifier_worker.service_available === false
+                'text-orange-600': stats.classifier_bypassed,
+                'text-green-600': !stats.classifier_bypassed && stats.classifier_worker.running && !stats.classifier_worker.paused && stats.classifier_worker.service_available === true,
+                'text-yellow-600': !stats.classifier_bypassed && stats.classifier_worker.paused,
+                'text-red-600': !stats.classifier_bypassed && (!stats.classifier_worker.running || stats.classifier_worker.service_available === false)
               }"
             >
               <component
-                :is="!stats.classifier_worker.running || stats.classifier_worker.service_available === false ? XCircleIcon : stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon"
+                :is="stats.classifier_bypassed ? ForwardIcon : !stats.classifier_worker.running || stats.classifier_worker.service_available === false ? XCircleIcon : stats.classifier_worker.paused ? PauseIcon : CheckCircleIcon"
                 class="h-4 w-4"
               />
-              {{ !stats.classifier_worker.running ? 'Worker gestoppt' : stats.classifier_worker.service_available === false ? 'Classifier nicht erreichbar' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
+              {{ stats.classifier_bypassed ? 'Bypass aktiv' : !stats.classifier_worker.running ? 'Worker gestoppt' : stats.classifier_worker.service_available === false ? 'Classifier nicht erreichbar' : stats.classifier_worker.paused ? 'Pausiert' : 'Läuft' }}
             </span>
           </div>
 
           <div class="mt-2 space-y-1 text-sm text-gray-500">
-            <div>Ausstehend: {{ stats.processing_queue.awaiting_classifier }}</div>
-            <div v-if="stats.classifier_worker.service_available !== null">
+            <div v-if="stats.classifier_bypassed" class="text-orange-600 font-medium">
+              Alle Artikel gehen direkt zum LLM. Keine Vorfilterung, keine semantische Duplikaterkennung.
+            </div>
+            <div v-else>Ausstehend: {{ stats.processing_queue.awaiting_classifier }}</div>
+            <div v-if="!stats.classifier_bypassed && stats.classifier_worker.service_available !== null">
               API: <span :class="stats.classifier_worker.service_available ? 'text-green-600' : 'text-red-600'">{{ stats.classifier_worker.service_available ? 'Erreichbar' : 'Nicht erreichbar' }}</span>
             </div>
           </div>
 
           <div class="mt-4 flex gap-2">
             <button
-              v-if="!stats.classifier_worker.running"
               type="button"
-              class="btn btn-sm btn-primary"
-              :disabled="actionLoading === 'clf-start'"
-              @click="controlAction(adminApi.startClassifierWorker, 'clf-start')"
+              class="btn btn-sm"
+              :class="stats.classifier_bypassed ? 'bg-orange-500 text-white hover:bg-orange-600 focus:ring-orange-400' : 'btn-secondary'"
+              :disabled="actionLoading === 'clf-bypass'"
+              @click="controlAction(() => adminApi.setClassifierBypass(!stats!.classifier_bypassed), 'clf-bypass')"
             >
-              <PlayIcon class="h-4 w-4" />
-              Start
+              <ForwardIcon class="h-4 w-4" />
+              {{ stats.classifier_bypassed ? 'Bypass deaktivieren' : 'Bypass aktivieren' }}
             </button>
-            <template v-else>
+            <template v-if="!stats.classifier_bypassed">
               <button
-                v-if="!stats.classifier_worker.paused"
-                type="button"
-                class="btn btn-sm btn-secondary"
-                :disabled="actionLoading === 'clf-pause'"
-                @click="controlAction(adminApi.pauseClassifierWorker, 'clf-pause')"
-              >
-                <PauseIcon class="h-4 w-4" />
-                Pause
-              </button>
-              <button
-                v-else
+                v-if="!stats.classifier_worker.running"
                 type="button"
                 class="btn btn-sm btn-primary"
-                :disabled="actionLoading === 'clf-resume'"
-                @click="controlAction(adminApi.resumeClassifierWorker, 'clf-resume')"
+                :disabled="actionLoading === 'clf-start'"
+                @click="controlAction(adminApi.startClassifierWorker, 'clf-start')"
               >
                 <PlayIcon class="h-4 w-4" />
-                Fortsetzen
+                Start
               </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-secondary"
-                :disabled="actionLoading === 'clf-stop'"
-                @click="controlAction(adminApi.stopClassifierWorker, 'clf-stop')"
-              >
-                <StopIcon class="h-4 w-4" />
-                Stop
-              </button>
+              <template v-else>
+                <button
+                  v-if="!stats.classifier_worker.paused"
+                  type="button"
+                  class="btn btn-sm btn-secondary"
+                  :disabled="actionLoading === 'clf-pause'"
+                  @click="controlAction(adminApi.pauseClassifierWorker, 'clf-pause')"
+                >
+                  <PauseIcon class="h-4 w-4" />
+                  Pause
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn btn-sm btn-primary"
+                  :disabled="actionLoading === 'clf-resume'"
+                  @click="controlAction(adminApi.resumeClassifierWorker, 'clf-resume')"
+                >
+                  <PlayIcon class="h-4 w-4" />
+                  Fortsetzen
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-secondary"
+                  :disabled="actionLoading === 'clf-stop'"
+                  @click="controlAction(adminApi.stopClassifierWorker, 'clf-stop')"
+                >
+                  <StopIcon class="h-4 w-4" />
+                  Stop
+                </button>
+              </template>
             </template>
           </div>
         </div>

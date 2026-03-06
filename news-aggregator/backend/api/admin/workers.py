@@ -12,6 +12,66 @@ router = APIRouter()
 
 
 # =============================================================================
+# Classifier Bypass
+# =============================================================================
+
+
+async def _get_classifier_bypass() -> bool:
+    """Read classifier_bypass setting from DB."""
+    from database import async_session_maker
+    from models import Setting
+    from sqlalchemy import select
+
+    async with async_session_maker() as db:
+        setting = await db.scalar(
+            select(Setting.value).where(Setting.key == "classifier_bypass")
+        )
+        return bool(setting) if setting is not None else False
+
+
+async def _set_classifier_bypass(enabled: bool) -> None:
+    """Write classifier_bypass setting to DB."""
+    from database import async_session_maker
+    from models import Setting
+    from sqlalchemy import select
+
+    async with async_session_maker() as db:
+        existing = await db.scalar(
+            select(Setting).where(Setting.key == "classifier_bypass")
+        )
+        if existing:
+            existing.value = enabled
+        else:
+            db.add(Setting(
+                key="classifier_bypass",
+                value=enabled,
+                description="Bypass classifier pre-filter, semantic dedup, and vector indexing",
+            ))
+        await db.commit()
+
+
+@router.get("/admin/classifier-bypass")
+async def get_classifier_bypass():
+    """Get current classifier bypass state."""
+    bypassed = await _get_classifier_bypass()
+    return {"bypassed": bypassed}
+
+
+@router.post("/admin/classifier-bypass")
+async def set_classifier_bypass(request: dict):
+    """Toggle classifier bypass on/off.
+
+    When bypassed, all items go directly to LLM without pre-filtering,
+    semantic duplicate detection, or vector indexing (all require Ollama embeddings).
+    URL-based duplicate detection still works.
+    """
+    bypassed = request.get("bypassed", False)
+    await _set_classifier_bypass(bypassed)
+    logger.info(f"Classifier bypass {'enabled' if bypassed else 'disabled'}")
+    return {"bypassed": bypassed, "message": f"Classifier bypass {'enabled' if bypassed else 'disabled'}"}
+
+
+# =============================================================================
 # Worker Status Poll Interval
 # =============================================================================
 

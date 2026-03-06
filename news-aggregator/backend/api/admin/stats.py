@@ -63,6 +63,7 @@ class SystemStatsResponse(BaseModel):
     llm_worker: WorkerStatus
     classifier_worker: WorkerStatus
     dedup_worker: WorkerStatus
+    classifier_bypassed: bool = False
     processing_queue: ProcessingQueueStats
     items: ItemStats
     timestamp: str
@@ -216,11 +217,16 @@ async def get_system_stats(
         starred=item_row.starred,
     )
 
+    # Classifier bypass state
+    from api.admin.workers import _get_classifier_bypass
+    classifier_bypassed = await _get_classifier_bypass()
+
     return SystemStatsResponse(
         scheduler=scheduler_status,
         llm_worker=llm_worker_status,
         classifier_worker=classifier_worker_status,
         dedup_worker=dedup_worker_status,
+        classifier_bypassed=classifier_bypassed,
         processing_queue=processing_queue,
         items=item_stats,
         timestamp=datetime.utcnow().isoformat(),

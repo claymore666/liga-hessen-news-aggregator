@@ -193,15 +193,21 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     mode_str = " (training)" if training_mode else ""
     logger.info(f"Fetching channel {channel_id}{mode_str}")
 
-    # Try to create relevance pre-filter (optional, skip in training mode)
+    # Try to create relevance pre-filter (optional, skip in training mode or bypass)
     relevance_filter = None
     if not training_mode and settings.classifier_enabled:
-        try:
-            relevance_filter = await create_relevance_filter()
-            if relevance_filter:
-                logger.debug("Relevance pre-filter initialized")
-        except Exception as e:
-            logger.warning(f"Relevance pre-filter not available: {e}")
+        # Check bypass setting
+        from api.admin.workers import _get_classifier_bypass
+        classifier_bypassed = await _get_classifier_bypass()
+        if classifier_bypassed:
+            logger.debug("Classifier bypassed, skipping pre-filter")
+        else:
+            try:
+                relevance_filter = await create_relevance_filter()
+                if relevance_filter:
+                    logger.debug("Relevance pre-filter initialized")
+            except Exception as e:
+                logger.warning(f"Relevance pre-filter not available: {e}")
 
     # Try to create LLM processor (optional, skip in training mode for speed)
     processor: ItemProcessor | None = None
