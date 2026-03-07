@@ -33,7 +33,7 @@ class EmailConfig(BaseModel):
     subject_prefix: str = "[Liga News]"
     include_summary: bool = True
     include_content: bool = False
-    min_priority: Priority = Priority.NONE
+    min_priority: Priority = Priority.LOW
 
 
 class BriefingEmail:

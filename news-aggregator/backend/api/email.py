@@ -18,7 +18,7 @@ router = APIRouter(prefix="/email", tags=["email"])
 class SendBriefingRequest(BaseModel):
     """Request to send a briefing email."""
     recipients: list[EmailStr]
-    min_priority: Priority = Priority.NONE
+    min_priority: Priority = Priority.LOW
     hours_back: int = 24
     include_read: bool = False
 
@@ -32,7 +32,7 @@ class SendBriefingResponse(BaseModel):
 
 class PreviewBriefingRequest(BaseModel):
     """Request to preview a briefing."""
-    min_priority: Priority = Priority.NONE
+    min_priority: Priority = Priority.LOW
     hours_back: int = 24
     include_read: bool = False
 
@@ -60,6 +60,7 @@ async def send_briefing(
         select(Item)
         .options(selectinload(Item.channel).selectinload(Channel.source))
         .where(Item.fetched_at >= since)
+        .where(Item.similar_to_id.is_(None))  # Exclude duplicates
     )
 
     if not request.include_read:
@@ -117,6 +118,7 @@ async def preview_briefing(
         select(Item)
         .options(selectinload(Item.channel).selectinload(Channel.source))
         .where(Item.fetched_at >= since)
+        .where(Item.similar_to_id.is_(None))  # Exclude duplicates
     )
 
     if not request.include_read:
