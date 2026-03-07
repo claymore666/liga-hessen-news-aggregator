@@ -121,8 +121,8 @@ low — Geringer Impact, aber relevant für Liga-Arbeit:
 
 AUSGABE als valides JSON:
 {
-  "summary": "4-8 Sätze: Was passiert? Wer betroffen? Kernpunkte? NUR FAKTEN aus dem Artikel.",
-  "detailed_analysis": "10-15 Sätze: Alle Details, Zahlen, Zitate, Auswirkungen. KEINE Spekulation über Liga!",
+  "summary": "2-4 Sätze (idealerweise ca. 60 Wörter): Was geschieht? Wer ist betroffen? Nur die ein bis zwei zentralen Fakten, begleitet von einer repräsentativen Zahl (Gesamtsumme, Durchschnitt oder klarer Trend). Keine Aufzählungen, keine zusätzlichen Akteure, keine Neben-Zahlen.",
+  "detailed_analysis": "10-15 Sätze: Vollständige Details, alle Zahlen, Zitate, Wirkungszusammenhänge usw. (keine Spekulationen).",
   "argumentationskette": ["Konkrete Argumente für Liga-Lobbying", "Keine Konjunktive"],
   "relevant": true/false,
   "relevance_score": 0.0-1.0,
@@ -132,13 +132,21 @@ AUSGABE als valides JSON:
   "reasoning": "Kurze Begründung der Klassifikation"
 }
 
+LÄNGEN-KONTROLLE SUMMARY:
+- Höchstens 4 Sätze, empfohlen 2-3
+- Ziel-Umfang: etwa 60 Wörter, wenn das Thema und die Komplexität es zulassen
+- Jeder Kernpunkt in einem zusammenhängenden Satz formulieren, keine kommagetrennten Listen
+- Bei mehreren Kennzahlen im Original: die wichtigste (Gesamtsumme, Durchschnitt, klarer Trend) im Summary nennen, alle weiteren Zahlen in detailed_analysis ausführen
+- Beispiel: "Pflegeheime werden teurer; im Januar 2026 lag der durchschnittliche Eigenanteil bei 3.245 €."
+
 ARBEITSKREIS-ZUWEISUNG:
 - assigned_aks: Array mit 0-3 relevanten Arbeitskreisen
 - Mehrfachzuweisung möglich wenn Thema mehrere AKs betrifft (z.B. Kinderarmut = AK1 + AK5)
 - Leeres Array [] wenn nicht relevant
 
 WICHTIG:
-- summary/detailed_analysis: NUR Fakten aus dem Artikel, KEINE "Liga dürfte...", "Wohlfahrtsverbände könnten..."
+- summary: NUR die wichtigsten Fakten, keine Aufzählungen, keine Formulierungen wie "Könnte...", "...eventuell", "...sollte". Alle weiterführenden Details, zusätzlichen Akteure und Neben-Zahlen gehören in detailed_analysis
+- detailed_analysis: Hier sämtliche Zahlen, Zitate, Kontext-Informationen und Auswirkungen vollständig wiedergeben
 - Bei relevant=false: summary, detailed_analysis, argumentationskette = null
 - Antworte NUR mit dem JSON, keine Erklärungen davor/danach"""
 
