@@ -228,6 +228,8 @@ To check whether a different model could do better, we benchmarked three models 
 
 **Conclusion:** The bottleneck is not the model but the prompting approach. qwen3 is already the right model; to improve further we need to move beyond prompt engineering.
 
+**Update (2026-03-01):** Production switched to gpt-oss-120b via cloud proxy. Higher quality but required summary verbosity tuning (see v8 below). qwen3:14b-q8_0 remains as fallback when cloud is unavailable.
+
 ---
 
 ## Remaining Issues
@@ -551,6 +553,71 @@ Run-to-run variance of ±2% from model non-determinism (temperature 0.2 with thi
 
 ---
 
+### v8 — Model switch to gpt-oss-120b and summary verbosity tuning (2026-03-01 to 2026-03-07)
+
+**Commits:** `193600d` through `0a665c5` | **Branch:** `dev` | **Release:** v0.9
+
+#### Model switch: qwen3:14b → gpt-oss-120b
+
+The LLM backend was migrated from local Ollama (qwen3:14b-q8_0 on gpu1) to cloud processing via an Ollama-compatible proxy routing to Cerebras (gpt-oss-120b). This eliminated the dependency on gpu1 being awake — items are now processed 24/7 including weekends and nights.
+
+The migration went through several phases:
+1. **Cerebras provider** (`193600d`) — direct OpenAI-compatible integration with rate limiter
+2. **Ollama proxy** (`2052511`, `f42c346`) — switched to Ollama proxy on docker-ai that transparently routes to cloud, simplifying the codebase (removed Cerebras provider, single Ollama code path)
+
+#### Problem: summary verbosity
+
+After ~530 items were processed by gpt-oss-120b, users reported that summaries contained too many details. Quantitative analysis confirmed:
+
+| Metric | qwen3:14b (n=10,478) | gpt-oss-120b (n=532) |
+|--------|---------------------|---------------------|
+| Median words | 47 | 83 (+77%) |
+| Median sentences | 3 | 5 (+67%) |
+| Median chars | 363 | 663 (+83%) |
+
+Qualitative analysis of 3 topic-matched A/B pairs revealed:
+- gpt-oss lists **every** number (9.8 Mio, 6.6 Mio, 40 Mio, 200€, 400€) while qwen picks 1-2 key figures
+- gpt-oss names more actors with titles
+- gpt-oss treats summary like detailed_analysis — all facts instead of distilled key points
+
+#### Approach: iterative self-critique via gpt-oss
+
+Instead of manually engineering the prompt, we asked gpt-oss itself to suggest changes. The workflow:
+
+1. **Meta-prompt**: Sent gpt-oss the current prompt + 3 A/B comparison pairs (Pflegeheim costs, Krankenhaus reform, Frankfurt Haushalt) with qwen output as target
+2. **Round 1**: gpt-oss suggested hard caps ("max 45 Wörter", "EINE repräsentative Zahl"). Result: overcorrected — summaries dropped to 27-32 words (too short)
+3. **Round 2**: Fed overcorrection results back to gpt-oss, requested softer guidelines. gpt-oss suggested "idealerweise ca. 60 Wörter" as soft target. Result: 42-54 words — right on target
+
+#### Prompt changes (final)
+
+The summary field instruction changed from:
+```
+"summary": "4-8 Sätze: Was passiert? Wer betroffen? Kernpunkte? NUR FAKTEN aus dem Artikel."
+```
+to:
+```
+"summary": "2-4 Sätze (idealerweise ca. 60 Wörter): Was geschieht? Wer ist betroffen? Nur die ein bis zwei zentralen Fakten, begleitet von einer repräsentativen Zahl (Gesamtsumme, Durchschnitt oder klarer Trend). Keine Aufzählungen, keine zusätzlichen Akteure, keine Neben-Zahlen."
+```
+
+Added LÄNGEN-KONTROLLE section with soft guidelines and an example.
+
+#### Validation: 10-sample A/B test
+
+Tested on 10 random gpt-oss-processed articles, comparing old output (stored in DB) vs new prompt:
+
+| Metric | OLD (gpt-oss, old prompt) | NEW (gpt-oss, tuned prompt) |
+|--------|--------------------------|---------------------------|
+| Average words | 80w | 47w |
+| Reduction | — | 47% |
+
+All 9 relevant articles produced coherent, well-structured summaries that captured core facts without excessive detail. One article (Bavarian Pflegeheim) correctly flipped to irrelevant by the geographic filter — an improvement over the old prompt which let it through.
+
+#### Backup and reproducibility
+
+All comparison data, meta-prompts, and test results saved to `backups/prompt-tuning-2026-03-06/`.
+
+---
+
 ## Open Issues
 
 ### Sozialleistungen emerging as new catch-all (topic assignment)
@@ -572,7 +639,7 @@ Currently accepted as inherent limitation.
 
 ### Short term: Production monitoring
 
-Monitor topic classification quality on new items in production. The thinking mode change increases per-item latency from ~1s to ~8s — watch for queue buildup during peak fetch hours.
+Monitor topic classification quality on new items in production. With gpt-oss-120b via cloud proxy, latency is lower than local Ollama but subject to rate limits. Monitor summary quality for verbosity drift — the soft "ca. 60 Wörter" guideline may need periodic recalibration.
 
 ### Medium term: Eval set expansion
 
