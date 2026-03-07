@@ -602,6 +602,8 @@ class LLMWorker:
                     "llm_analysis": {
                         "provider": analysis.get("_provider", "unknown"),
                         "model": analysis.get("_model", "unknown"),
+                        "prompt_version": analysis.get("_prompt_version"),
+                        "prompt_model": analysis.get("_prompt_model"),
                         "relevance_score": analysis.get("relevance_score", 0.5),
                         "priority_suggestion": llm_priority,
                         "assigned_aks": llm_aks,

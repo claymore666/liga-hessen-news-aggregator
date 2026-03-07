@@ -200,13 +200,25 @@ PRIORITY_KEYWORDS = {
 class ItemProcessor:
     """LLM-based processor for item summarization and analysis."""
 
-    def __init__(self, llm_service: LLMService):
-        """Initialize processor with LLM service.
+    def __init__(
+        self,
+        llm_service: LLMService,
+        system_prompt: str | None = None,
+        prompt_model: str | None = None,
+        prompt_version: int | None = None,
+    ):
+        """Initialize processor with LLM service and optional DB-stored prompt.
 
         Args:
             llm_service: LLM service for text generation
+            system_prompt: Override system prompt (from DB). Falls back to hardcoded.
+            prompt_model: Which model this prompt was tuned for (for tracking).
+            prompt_version: Prompt version number (for tracking).
         """
         self.llm = llm_service
+        self._system_prompt = system_prompt or ANALYSIS_SYSTEM_PROMPT
+        self.prompt_model = prompt_model
+        self.prompt_version = prompt_version
 
     async def confirm_duplicate(
         self,
@@ -345,7 +357,7 @@ Datum: {date_str}"""
             # Use system prompt for base models (Option B approach)
             response = await self.llm.complete(
                 prompt,
-                system=ANALYSIS_SYSTEM_PROMPT,
+                system=self._system_prompt,
                 temperature=0.1,
                 max_tokens=6000,  # Sufficient headroom for full JSON response
             )
@@ -381,7 +393,7 @@ Datum: {date_str}"""
         try:
             response = await self.llm.complete(
                 prompt,
-                system=ANALYSIS_SYSTEM_PROMPT,
+                system=self._system_prompt,
                 temperature=0.1,
                 max_tokens=6000,
             )
@@ -412,14 +424,14 @@ Quelle: {source_name}
 Datum: {date_str}"""
 
         messages = [
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": prompt},
         ]
 
         try:
             response = await self.llm.complete(
                 prompt,
-                system=ANALYSIS_SYSTEM_PROMPT,
+                system=self._system_prompt,
                 temperature=0.1,
                 max_tokens=6000,
             )
@@ -691,6 +703,9 @@ Antworte NUR mit JA oder NEIN."""
         # Attach provider/model info from LLM response
         result["_provider"] = response.provider
         result["_model"] = response.model
+        if self.prompt_version is not None:
+            result["_prompt_version"] = self.prompt_version
+            result["_prompt_model"] = self.prompt_model
 
         return result
 
@@ -730,8 +745,36 @@ async def is_llm_enabled() -> bool:
     return settings.llm_enabled
 
 
+async def get_active_prompt(model: str) -> tuple[str | None, str | None, int | None]:
+    """Load the active prompt for a given model from DB.
+
+    Returns:
+        Tuple of (system_prompt, model, version) or (None, None, None) if not found.
+    """
+    from database import async_session_maker
+    from sqlalchemy import select
+    from models import LLMPrompt
+
+    try:
+        async with async_session_maker() as db:
+            prompt = await db.scalar(
+                select(LLMPrompt)
+                .where(LLMPrompt.model == model, LLMPrompt.active == True)  # noqa: E712
+                .order_by(LLMPrompt.version.desc())
+            )
+            if prompt:
+                return prompt.system_prompt, prompt.model, prompt.version
+    except Exception as e:
+        logger.warning(f"Could not load prompt from DB for {model}: {e}")
+
+    return None, None, None
+
+
 async def create_processor_from_settings() -> ItemProcessor | None:
     """Create processor instance from application settings.
+
+    Loads the active prompt from DB for the configured model.
+    Falls back to the hardcoded ANALYSIS_SYSTEM_PROMPT if no DB prompt exists.
 
     Returns:
         Configured ItemProcessor instance, or None if LLM is disabled
@@ -766,5 +809,17 @@ async def create_processor_from_settings() -> ItemProcessor | None:
             )
         )
 
+    # Load model-specific prompt from DB
+    system_prompt, prompt_model, prompt_version = await get_active_prompt(settings.ollama_model)
+    if system_prompt:
+        logger.info(f"Loaded prompt v{prompt_version} for {prompt_model} from DB")
+    else:
+        logger.info(f"No DB prompt for {settings.ollama_model}, using hardcoded default")
+
     llm_service = LLMService(providers)
-    return ItemProcessor(llm_service)
+    return ItemProcessor(
+        llm_service,
+        system_prompt=system_prompt,
+        prompt_model=prompt_model,
+        prompt_version=prompt_version,
+    )

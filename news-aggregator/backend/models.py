@@ -441,3 +441,21 @@ class MOTD(Base):
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class LLMPrompt(Base):
+    """Versioned LLM system prompts, each tuned for a specific model."""
+
+    __tablename__ = "llm_prompts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model: Mapped[str] = mapped_column(String(100), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    system_prompt: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("uq_llm_prompts_model_version", "model", "version", unique=True),
+    )
