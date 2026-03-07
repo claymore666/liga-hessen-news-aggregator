@@ -30,6 +30,18 @@ venv/
 *.log
 *.tmp
 .DS_Store
+dump*.txt
+edge.txt
+groq.txt.save
+
+# Backups (local only, not committed)
+backups/
+
+# HuggingFace cache
+.hf_cache/
+
+# Misc docs not for repo
+CEREBRAS_EMAIL_AUTOMATION.md
 
 # News-aggregator specific (if not needed here)
 news-aggregator/backend/venv/

@@ -21,6 +21,7 @@ data/
 # Caches
 unsloth_compiled_cache/
 .claude/
+.hf_cache/
 
 # Training data (keep final splits only)
 data/raw/
@@ -29,3 +30,6 @@ data/reviewed/
 # Temporary
 *.log
 *.tmp
+
+# Model backups
+*.pkl.backup-*
