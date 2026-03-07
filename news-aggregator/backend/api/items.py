@@ -1253,16 +1253,21 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
 
                 # Store analysis metadata
+                llm_meta = {
+                    "relevance_score": analysis.get("relevance_score", 0.5),
+                    "priority_suggestion": llm_priority,
+                    "assigned_aks": llm_aks,
+                    "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated
+                    "tags": analysis.get("tags", []),
+                    "reasoning": analysis.get("reasoning"),
+                    "provider": analysis.get("_provider"),
+                    "model": analysis.get("_model"),
+                    "prompt_version": analysis.get("_prompt_version"),
+                    "prompt_model": analysis.get("_prompt_model"),
+                }
                 item.metadata_ = {
                     **item.metadata_,
-                    "llm_analysis": {
-                        "relevance_score": analysis.get("relevance_score", 0.5),
-                        "priority_suggestion": llm_priority,
-                        "assigned_aks": llm_aks,
-                        "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated
-                        "tags": analysis.get("tags", []),
-                        "reasoning": analysis.get("reasoning"),
-                    },
+                    "llm_analysis": llm_meta,
                 }
 
                 await db.flush()
