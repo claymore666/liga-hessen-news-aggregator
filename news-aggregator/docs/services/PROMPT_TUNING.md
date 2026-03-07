@@ -618,6 +618,58 @@ All comparison data, meta-prompts, and test results saved to `backups/prompt-tun
 
 ---
 
+## v9: Priority Tuning (2026-03-07)
+
+### Problem
+
+gpt-oss-120b massively inflated HIGH priority (59% vs qwen3's 6.8%) and nearly never used LOW (1.6% vs 45%). Root cause: any Bundesgesetz was treated as HIGH regardless of impact, and LOW criteria were too vague.
+
+### Approach: Iterative self-critique
+
+Same methodology as v8 summary tuning — send gpt-oss its own mistakes and ask for prompt fixes.
+
+1. **A/B sample** — 15 items with clear priority disagreements. Both Claude and gpt-oss self-evaluation agreed 4/5 HIGH items should be MEDIUM.
+2. **5 iteration rounds** — each testing on the sample items, measuring distribution shift.
+3. **Self-critique breakthrough** — gpt-oss suggested reordering the decision flow: check HIGH first, then LOW, then MEDIUM (instead of HIGH→MEDIUM→LOW). This prevents MEDIUM from absorbing everything.
+
+### Key changes
+
+1. **Decision flow reordering** — `HIGH→LOW→MEDIUM` instead of `HIGH→MEDIUM→LOW`. MEDIUM becomes the fallback, not the default.
+2. **Distribution hint** — `Zielverteilung: HIGH ≈ 7 % | MEDIUM ≈ 48 % | LOW ≈ 45 %`
+3. **"Not automatically HIGH" guard** — `Ein Bundesgesetz ist NICHT automatisch HIGH`
+4. **LOW as conditional checklist** — "LOW when ALL: no HIGH criterion + no new political decision + mainly informative"
+5. **Format vs content safeguard** — surveys documenting actual cuts = HIGH, not LOW
+6. **MEDIUM as explicit fallback** — "Auffangkategorie für alles das weder HIGH noch LOW ist"
+
+### Results
+
+25-item eval (5 HIGH, 10 MEDIUM, 10 LOW by Claude assessment):
+- **Overall accuracy: 80%** (20/25)
+- MEDIUM: 100% accurate (10/10)
+- HIGH: 80% (4/5, one JSON parse error)
+- LOW: 60% (6/10, two marked irrelevant, one variance, one arguably correct)
+
+Distribution improvement:
+
+| Priority | Before | After | Target |
+|----------|--------|-------|--------|
+| HIGH | 59.0% | ~20% | ~7% |
+| MEDIUM | 39.4% | ~50% | ~48% |
+| LOW | 1.6% | ~27% | ~45% |
+
+Summary word count unaffected: median 49w (target ~60w, qwen3 baseline 46w).
+
+### Lessons learned
+
+- **Decision order matters more than criteria detail** — the old prompt had correct criteria but checked MEDIUM before LOW
+- **Self-critique works** — gpt-oss identified the decision-order fix we hadn't considered
+- **"NICHT X" examples can overcorrect** — explicit negatives made the model avoid HIGH entirely
+- **Format vs content distinction is necessary** — a survey documenting service closures is HIGH (content), not LOW (format)
+
+Full documentation: `backups/priority-tuning-2026-03-07/PRIORITY_TUNING_RESULTS.md`
+
+---
+
 ## Open Issues
 
 ### Sozialleistungen emerging as new catch-all (topic assignment)

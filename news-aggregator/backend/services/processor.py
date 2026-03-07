@@ -92,32 +92,51 @@ NICHT RELEVANT (relevant=false, priority=null):
 === PRIORITÄT = SCHWERE DER GESELLSCHAFTLICHEN AUSWIRKUNG ===
 
 Priorität richtet sich nach der SCHWERE des Impacts, NICHT nach Aktualität oder Zeitdruck.
+Zielverteilung: HIGH ≈ 7 % | MEDIUM ≈ 48 % | LOW ≈ 45 % der relevanten Artikel.
 
-high — Schwerwiegender gesellschaftlicher Impact:
+ENTSCHEIDUNGS-REIHENFOLGE: Prüfe ZUERST ob HIGH zutrifft, DANN ob LOW zutrifft, DANN erst MEDIUM.
+1. Erfüllt der Artikel ein HIGH-Kriterium? → HIGH
+2. Ist der Artikel hauptsächlich informativ ohne neue politische Entscheidung? → LOW
+3. Alles andere → MEDIUM
+
+high — Schwerwiegender gesellschaftlicher Impact (selten, ≈7 %):
+Mindestens eines dieser Kriterien muss zutreffen:
+- Liga Hessen direkt erwähnt, angesprochen, angegriffen oder in Frage gestellt
+- Liga-Preis, Liga-Veranstaltungen, Liga direkt beteiligt (z.B. "Politischer Abend der Liga")
 - Kürzungen, Schließungen, Insolvenz von Sozialeinrichtungen
 - Gesetze die Schutz abbauen oder Leistungen streichen
-- Liga Hessen direkt erwähnt, angesprochen, angegriffen oder in Frage gestellt
-- Liga-Preis, Liga-Veranstaltungen, Liga direkt beteiligt
 - Studien/Daten die Liga-Positionen stark untermauern (Armutsbericht, Pflegestatistik, etc.)
 - Hessische Politiker/MdL mit Aussagen die konkrete legislative Konsequenzen haben
 - Politische Angriffe auf Wohlfahrtspflege oder Liga-Positionen (jede Partei, inkl. AfD)
 - Politische Kehrtwenden die Liga-Errungenschaften gefährden (Abschiebemoratorium aufgehoben, etc.)
+- Bundesgesetze die Wohlfahrtsverbände als Träger gesetzlich mandatieren oder massiv (Milliardenhöhe) finanziell verändern
+- Ein Bundesgesetz ist NICHT automatisch HIGH — nur wenn es Leistungen streicht, Schutz abbaut, oder Wohlfahrtsverbände direkt mandatiert
 
-medium — Moderater gesellschaftlicher Impact:
-- Reformvorhaben in Diskussion, Anhörungen, Förderrichtlinien
-- Politische Entwicklungen die Liga beobachten und ggf. Position beziehen sollte
-- Regionale Entwicklungen die Präzedenz für Hessen setzen könnten (NUR wenn bundesweite Auswirkung oder Hessen-Bezug erkennbar — reine Landespolitik anderer Bundesländer ist NICHT relevant)
-- Tarifverhandlungen, strukturelle Veränderungen im Sozialbereich
-- Streiks im Sozialbereich wenn Einrichtungen schließen müssen (Kitas, Pflege)
-- Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
-- Jugendschutz-Gesetzesvorschläge (Social-Media-Altersgrenzen, etc.)
-
-low — Geringer Impact, aber relevant für Liga-Arbeit:
-- Hintergrundberichte mit nützlichem Kontext
-- Politikeraussagen zu Liga-Themen aber ohne konkreten Plan ("Boris Rhein: Wir brauchen mehr Kita-Plätze" — ohne Gesetzentwurf/Budget)
+low — Geringer Impact, aber relevant für Liga-Arbeit (≈45 %, fast die Hälfte aller relevanten Artikel):
+Der Artikel ist LOW wenn ALLE folgenden Bedingungen zutreffen:
+- Kein HIGH-Kriterium ist erfüllt
+- Es gibt KEINE neue politische Entscheidung, KEIN neues Gesetz, KEINEN Haushaltsbeschluss im Artikel
+- Der Artikel ist hauptsächlich INFORMATIV: Statistiken, Hintergrundberichte, Zustandsbeschreibungen, Ratgeber
+WICHTIG: Auch wenn ein Artikel als Studie/Umfrage formatiert ist — wenn der INHALT Kürzungen, Schließungen oder Leistungseinstellungen bei Wohlfahrtsverbänden belegt, ist er HIGH, nicht LOW. Ebenso: wenn ein Artikel über ein konkretes neues Gesetz berichtet, ist er MEDIUM, nicht LOW.
+Konkrete LOW-Beispiele:
+- Statistiken und Umfragen (z.B. "25 % der Haushalte ohne Ersparnisse", "Entlastungsbeitrag wird kaum genutzt", "Frauen verdienen 16 % weniger")
+- Politikeraussagen ohne konkreten Gesetzentwurf/Budget ("Wir brauchen mehr Kita-Plätze")
 - Entwicklungen die sich erst anbahnen, noch unkonkret
 - Bildungspolitik mit Bezug zu Sozialberufen, Erzieherausbildung oder Inklusion
 - Berichte über Zustände im Sozialbereich ohne konkreten politischen Handlungspunkt
+- Operative Neuigkeiten von Liga-Mitgliedern (neue Einrichtungen, Projekte, Angebotserweiterungen)
+- Lokale Organisations- und Kooperationsentscheidungen ohne Gesetzes- oder Haushaltsbezug
+- Diskussionsbeiträge und Meinungsartikel zu sozialpolitischen Themen
+
+medium — Moderater gesellschaftlicher Impact (≈48 %, Auffangkategorie für alles das weder HIGH noch LOW ist):
+- Neue Reformvorhaben, Gesetzesentwürfe, Anhörungen, Förderrichtlinien
+- Bundesgesetze mit strukturellen Änderungen oder Kostenfolgen, aber ohne Leistungsabbau
+- Politische Entwicklungen die Liga beobachten und ggf. Position beziehen sollte
+- Tarifverhandlungen, Tarifabschlüsse, strukturelle Veränderungen im Sozialbereich
+- Streiks im Sozialbereich wenn Einrichtungen schließen müssen (Kitas, Pflege)
+- Strukturelle Probleme in Schulen, Kitas, Pflegeeinrichtungen (Gewalt, Personalmangel, Qualitätsmängel)
+- Kommunale Entscheidungen mit konkreter Auswirkung auf Sozialeinrichtungen
+- Konkrete Haushaltsbeschlüsse mit Sozialauswirkungen
 
 AUSGABE als valides JSON:
 {
