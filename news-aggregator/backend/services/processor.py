@@ -365,7 +365,7 @@ Datum: {date_str}"""
 
         except Exception as e:
             logger.error(f"Analysis failed: {e}")
-            return self._default_analysis()
+            raise
 
     async def analyze_from_data(self, item_data: dict[str, Any]) -> dict[str, Any]:
         """Analyze item for relevance, priority, and working group assignment.
@@ -401,7 +401,7 @@ Datum: {date_str}"""
 
         except Exception as e:
             logger.error(f"Analysis from data failed: {e}")
-            return self._default_analysis()
+            raise
 
     async def analyze_from_data_with_messages(self, item_data: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
         """Analyze item and return both the result and the conversation messages.
@@ -442,7 +442,7 @@ Datum: {date_str}"""
 
         except Exception as e:
             logger.error(f"Analysis from data (with messages) failed: {e}")
-            return self._default_analysis(), messages
+            raise
 
     async def check_semantic_rule(self, item: Item, rule: Rule) -> bool:
         """Check if item matches a semantic (LLM-based) rule.
