@@ -304,13 +304,60 @@ docker compose logs backend | grep -i "browser pool"
    docker compose logs backend | grep "SPA fallback"
    ```
 
+### VectorDB Index Out of Sync (DB ↔ ChromaDB Drift)
+
+**Symptoms**: Log shows `VECTORDB SYNC CHECK: DB says N items indexed, ChromaDB has M items`
+
+This happens when items have the `vectordb_indexed` metadata flag set in PostgreSQL but are not actually in ChromaDB (e.g., after a ChromaDB volume reset, container rebuild, or data migration).
+
+**Diagnose**:
+```bash
+# Check the gap
+docker exec liga-news-db psql -U liga -d liga_news -t -c \
+  "SELECT COUNT(*) FROM items WHERE metadata::text LIKE '%vectordb_indexed%';"
+# Compare with ChromaDB count from classifier health endpoint
+```
+
+**Fix** — reset stale flags so the dedup worker re-indexes automatically:
+```bash
+# 1. Export ChromaDB IDs to a file
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+r = urllib.request.urlopen('http://classifier:8082/ids')
+d = json.loads(r.read())
+print(','.join(d.get('ids', [])))
+" > /tmp/chromadb_ids.txt
+
+# 2. Create SQL to reset flags for items NOT in ChromaDB
+IDS=$(cat /tmp/chromadb_ids.txt)
+cat > /tmp/reset_flags.sql << SQLEOF
+UPDATE items
+SET metadata = (metadata::jsonb - 'vectordb_indexed') - 'vectordb_indexed_at'
+WHERE id NOT IN ($IDS);
+SQLEOF
+
+# 3. Run it
+docker cp /tmp/reset_flags.sql liga-news-db:/tmp/reset_flags.sql
+docker exec liga-news-db psql -U liga -d liga_news -f /tmp/reset_flags.sql
+
+# 4. Monitor re-indexing (dedup worker processes ~50 items/3s automatically)
+docker logs -f liga-news-backend 2>&1 | grep "Indexed.*items"
+```
+
+Re-indexing 12,000+ items takes ~12 minutes. The dedup worker picks up unflagged items automatically in batches of 50.
+
 ### Duplicate Detection Issues
 
 **Symptoms**: Similar articles not being detected as duplicates
 
 **Check**:
 ```bash
-curl http://localhost:8082/health | jq '.duplicate_index_items'
+# From backend container (classifier not exposed on docker-ai host)
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+r = urllib.request.urlopen('http://classifier:8082/health')
+print(json.loads(r.read()).get('duplicate_index_items', 0))
+"
 ```
 
 **Common causes**:
@@ -318,7 +365,11 @@ curl http://localhost:8082/health | jq '.duplicate_index_items'
 1. **Duplicate index empty or small**
    Fix: Sync from search index
    ```bash
-   curl -X POST http://localhost:8082/sync-duplicate-store
+   docker exec liga-news-backend python3 -c "
+   import urllib.request
+   r = urllib.request.urlopen('http://classifier:8082/sync-duplicate-store',b'')
+   print(r.read().decode())
+   "
    ```
 
 2. **Threshold too high**

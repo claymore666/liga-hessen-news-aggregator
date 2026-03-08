@@ -30,7 +30,7 @@ This reduces noise while preserving access to all coverage angles.
 
 ## Components
 
-### 1. Classifier API (gpu1:8082)
+### 1. Classifier API (Docker internal: classifier:8082)
 
 Provides the `/find-duplicates` endpoint using ChromaDB for vector similarity search.
 
@@ -241,7 +241,7 @@ GET /api/items?group_duplicates=true
 
 ```bash
 # Find duplicates for a new item
-POST http://gpu1:8082/find-duplicates
+POST http://classifier:8082/find-duplicates
 {
   "title": "Pflegekosten steigen auf Rekordniveau",
   "content": "Die Eigenanteile für Pflegeheimbewohner...",
@@ -257,7 +257,7 @@ POST http://gpu1:8082/find-duplicates
 }
 
 # Index health
-GET http://gpu1:8082/health
+GET http://classifier:8082/health
 {
   "duplicate_index_items": 6268,
   "duplicate_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
@@ -292,28 +292,54 @@ When items are deleted from PostgreSQL (cleanup, deduplication), ChromaDB retain
 - Detection failures (items reference non-existent IDs)
 - False duplicate matches
 
-### Solution: Manual Sync
+### Solution: Manual Sync (Orphaned Vectors)
+
+When items are deleted from PostgreSQL but remain in ChromaDB:
 
 ```bash
-# On docker-ai
+# On docker-ai (classifier only accessible via Docker network)
 
 # 1. Get IDs from both stores
-chromadb_ids=$(curl -s 'http://gpu1:8082/ids' | jq -r '.ids[]' | sort)
-pg_ids=$(docker exec liga-news-db psql -U liga -d liga_news -t -A -c 'SELECT id FROM items;' | sort)
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+r = urllib.request.urlopen('http://classifier:8082/ids')
+for id in json.loads(r.read()).get('ids', []):
+    print(id)
+" | sort > /tmp/vector_ids.txt
 
-# 2. Find stale entries
-stale_ids=$(comm -23 <(echo "$chromadb_ids") <(echo "$pg_ids"))
+docker exec liga-news-db psql -U liga -d liga_news -t -A \
+  -c 'SELECT id FROM items;' | sort > /tmp/db_ids.txt
 
-# 3. Delete from ChromaDB
-stale_json=$(echo "$stale_ids" | jq -R . | jq -s .)
-curl -X POST 'http://gpu1:8082/delete' \
-  -H 'Content-Type: application/json' \
-  -d "{\"ids\": $stale_json}"
+# 2. Find orphans (in ChromaDB but not in DB)
+comm -23 /tmp/vector_ids.txt /tmp/db_ids.txt > /tmp/orphan_ids.txt
+echo "Orphaned vectors: $(wc -l < /tmp/orphan_ids.txt)"
+
+# 3. Delete orphans via backend container
+ORPHAN_IDS=$(cat /tmp/orphan_ids.txt | grep -v '^$' | jq -R . | jq -s .)
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+data = json.dumps({'ids': $ORPHAN_IDS}).encode()
+req = urllib.request.Request('http://classifier:8082/delete',
+    data=data, headers={'Content-Type': 'application/json'})
+print(urllib.request.urlopen(req).read().decode())
+"
 ```
 
-### Automatic Sync (TODO)
+### Solution: Re-index Missing Items (Stale Flags)
 
-Consider adding a scheduled job to sync indexes periodically.
+When PostgreSQL metadata flags say items are indexed but ChromaDB doesn't have them
+(e.g., after ChromaDB volume reset or container rebuild):
+
+```bash
+# See TROUBLESHOOTING.md → "VectorDB Index Out of Sync" for full procedure
+# Summary: reset vectordb_indexed flags → dedup worker re-indexes automatically
+```
+
+### Automatic Sync
+
+The dedup worker runs a periodic sync check (every few minutes) and logs a warning
+when the gap exceeds 50 items. The `vectordb_indexed` metadata flag tracks which
+items have been indexed. The worker automatically indexes any items missing the flag.
 
 ## Troubleshooting
 
@@ -321,17 +347,17 @@ Consider adding a scheduled job to sync indexes periodically.
 
 1. **Check classifier API health**:
    ```bash
-   curl http://gpu1:8082/health | jq '.duplicate_index_items'
+   curl http://classifier:8082/health | jq '.duplicate_index_items'
    ```
 
 2. **Verify item is indexed**:
    ```bash
-   curl http://gpu1:8082/ids | jq '.ids | map(select(. == "11075"))'
+   curl http://classifier:8082/ids | jq '.ids | map(select(. == "11075"))'
    ```
 
 3. **Test similarity manually**:
    ```bash
-   curl -X POST http://gpu1:8082/find-duplicates \
+   curl -X POST http://classifier:8082/find-duplicates \
      -H "Content-Type: application/json" \
      -d '{"title": "Test title", "content": "Test content", "threshold": 0.75}'
    ```
@@ -387,7 +413,7 @@ See "Synchronization" section above.
 ### Backend (.env)
 
 ```env
-CLASSIFIER_API_URL=http://gpu1:8082
+CLASSIFIER_API_URL=http://classifier:8082
 ```
 
 ### Threshold Tuning
@@ -401,23 +427,17 @@ duplicates = await self.relevance_filter.find_duplicates(
 )
 ```
 
-## Off-Hours Behavior (gpu1 Downtime)
+## Off-Hours Behavior
 
-### Problem
+### Current Setup
 
-The classifier API runs on gpu1, which has scheduled downtime:
-- **Active hours**: 7:00-16:00 (configurable)
-- **Weekends**: May be inactive depending on config
-- **Sleep/suspend**: Host suspends after idle timeout
+The classifier API runs on docker-ai (production) as a lightweight container, with embeddings generated via Ollama on gpu1. It runs 24/7 alongside the backend.
 
-During downtime, items are fetched and stored but:
-- Classification doesn't run
-- Duplicate detection doesn't run
-- Vector indexing doesn't run
+If gpu1's Ollama is unavailable (sleep/suspend), the classifier can't generate new embeddings, so classification and indexing pause until gpu1 wakes. Items queue up and are processed automatically when Ollama becomes available.
 
-### Solution: Backlog Processing
+### Backlog Processing
 
-The `ClassifierWorker` (backend/services/classifier_worker.py) runs continuously and catches up on missed work when gpu1 becomes available.
+The `ClassifierWorker` (backend/services/classifier_worker.py) runs continuously and catches up on missed work when embeddings become available.
 
 **Processing Priorities**:
 
@@ -502,8 +522,8 @@ Times vary based on backlog size and batch sizes.
 |--------|-------|
 | Embedding generation | ~50ms per item |
 | ChromaDB query | ~10ms |
-| Index size (6K items) | ~45 MB |
-| Memory usage | ~500 MB (includes model) |
+| Index size (23K items) | ~100 MB |
+| Memory usage | ~200 MB (embeddings via Ollama, no local model) |
 | Backlog batch size | 50 items (configurable) |
 | Idle sleep | 60s between checks |
 
