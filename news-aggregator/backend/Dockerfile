@@ -26,7 +26,8 @@ COPY requirements.txt .
 # Install Python dependencies and remove build-essential
 RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir setuptools
 
 # Install Playwright browser (Chromium only)
 RUN playwright install chromium
