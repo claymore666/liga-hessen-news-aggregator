@@ -95,24 +95,30 @@ class TestLLMWorkerLifecycle:
 class TestLLMWorkerPauseResume:
     """Tests for pause/resume functionality."""
 
-    def test_pause(self, worker):
+    @pytest.mark.asyncio
+    async def test_pause(self, worker):
         """Pause should set paused flag."""
-        worker.pause()
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.pause()
         assert worker._paused is True
 
-    def test_resume(self, worker):
+    @pytest.mark.asyncio
+    async def test_resume(self, worker):
         """Resume should clear paused flag."""
         worker._paused = True
-        worker.resume()
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.resume()
         assert worker._paused is False
 
-    def test_pause_resume_cycle(self, worker):
+    @pytest.mark.asyncio
+    async def test_pause_resume_cycle(self, worker):
         """Should handle pause/resume cycle."""
         assert worker._paused is False
-        worker.pause()
-        assert worker._paused is True
-        worker.resume()
-        assert worker._paused is False
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.pause()
+            assert worker._paused is True
+            await worker.resume()
+            assert worker._paused is False
 
 
 class TestLLMWorkerEnqueue:
@@ -262,6 +268,8 @@ class TestLLMWorkerProcessItems:
         mock_item = MagicMock()
         mock_item.id = 1
         mock_item.title = "Test Article"
+        mock_item.content = "Test content"
+        mock_item.url = "https://test.com/1"
         mock_item.channel = MagicMock()
         mock_item.channel.source = MagicMock()
         mock_item.channel.source.name = "Test Source"
@@ -269,6 +277,7 @@ class TestLLMWorkerProcessItems:
         mock_item.metadata_ = {}
         mock_item.priority_score = 50
         mock_item.assigned_aks = None
+        mock_item.published_at = None
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_item
@@ -277,14 +286,19 @@ class TestLLMWorkerProcessItems:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.commit = AsyncMock()
 
-        mock_processor = MagicMock()
-        mock_processor.analyze = AsyncMock(return_value={
+        analysis = {
             "summary": "Test summary",
             "priority": "medium",
+            "relevant": True,
             "relevance_score": 0.7,
             "assigned_aks": [],
             "tags": [],
-        })
+        }
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=(analysis, [{"role": "assistant", "content": "{}"}])
+        )
+        mock_processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
 
         with patch("services.llm_worker.async_session_maker") as mock_session:
             mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -409,27 +423,59 @@ class TestPriorityMapping:
         item.assigned_aks = None
         return item
 
-    @pytest.mark.asyncio
-    async def test_high_priority_mapping(self, worker, mock_item):
-        """High LLM priority should map to HIGH."""
-        from models import Priority
-
+    def _make_mock_db(self, mock_item):
+        """Create mock DB that tracks sql_update values."""
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_item
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.commit = AsyncMock()
+        return mock_db
 
-        mock_processor = MagicMock()
-        mock_processor.analyze = AsyncMock(return_value={
+    def _get_update_values(self, mock_db):
+        """Extract the values dict from the sql_update call.
+
+        The sql_update call is the second db.execute call (first is the SELECT).
+        """
+        calls = mock_db.execute.call_args_list
+        # Find the call that has a .values() clause (the UPDATE, not the SELECT)
+        for call in calls:
+            stmt = call[0][0] if call[0] else None
+            if stmt is not None and hasattr(stmt, 'compile'):
+                # Try to get the parameters from an UPDATE statement
+                try:
+                    # SQLAlchemy Update objects store parameters internally
+                    if hasattr(stmt, '_values'):
+                        return dict(stmt._values)
+                except Exception:
+                    pass
+        return None
+
+    @pytest.mark.asyncio
+    async def test_high_priority_mapping(self, worker, mock_item):
+        """High LLM priority should map to HIGH."""
+        from models import Priority
+
+        mock_item.content = "Test content"
+        mock_item.url = "https://test.com/1"
+        mock_item.published_at = None
+
+        mock_db = self._make_mock_db(mock_item)
+
+        analysis = {
             "summary": "Test",
             "priority": "high",
             "relevant": True,
             "relevance_score": 0.9,
             "assigned_aks": [],
             "tags": [],
-        })
+        }
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=(analysis, [{"role": "assistant", "content": "{}"}])
+        )
+        mock_processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
 
         with patch("services.llm_worker.async_session_maker") as mock_session:
             mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -437,30 +483,38 @@ class TestPriorityMapping:
             with patch("services.item_events.record_event", new_callable=AsyncMock):
                 await worker._process_items([1], mock_processor, is_fresh=True)
 
-        assert mock_item.priority == Priority.HIGH
-        assert mock_item.priority_score >= 90
+        # Verify via sql_update call args - find the UPDATE execute call
+        update_calls = [c for c in mock_db.execute.call_args_list if len(c[0]) > 0]
+        # The last execute before commit should be the UPDATE
+        update_stmt = update_calls[-1][0][0]
+        params = update_stmt.compile().params
+        assert params["priority"] == Priority.HIGH
+        assert params["priority_score"] >= 90
 
     @pytest.mark.asyncio
     async def test_medium_priority_mapping(self, worker, mock_item):
         """Medium LLM priority should map to MEDIUM."""
         from models import Priority
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_item
+        mock_item.content = "Test content"
+        mock_item.url = "https://test.com/1"
+        mock_item.published_at = None
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.commit = AsyncMock()
+        mock_db = self._make_mock_db(mock_item)
 
-        mock_processor = MagicMock()
-        mock_processor.analyze = AsyncMock(return_value={
+        analysis = {
             "summary": "Test",
             "priority": "medium",
             "relevant": True,
             "relevance_score": 0.6,
             "assigned_aks": [],
             "tags": [],
-        })
+        }
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=(analysis, [{"role": "assistant", "content": "{}"}])
+        )
+        mock_processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
 
         with patch("services.llm_worker.async_session_maker") as mock_session:
             mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -468,29 +522,35 @@ class TestPriorityMapping:
             with patch("services.item_events.record_event", new_callable=AsyncMock):
                 await worker._process_items([1], mock_processor, is_fresh=True)
 
-        assert mock_item.priority == Priority.MEDIUM
+        update_calls = [c for c in mock_db.execute.call_args_list if len(c[0]) > 0]
+        update_stmt = update_calls[-1][0][0]
+        params = update_stmt.compile().params
+        assert params["priority"] == Priority.MEDIUM
 
     @pytest.mark.asyncio
     async def test_irrelevant_priority_mapping(self, worker, mock_item):
         """Irrelevant items should map to NONE."""
         from models import Priority
 
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_item
+        mock_item.content = "Test content"
+        mock_item.url = "https://test.com/1"
+        mock_item.published_at = None
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.commit = AsyncMock()
+        mock_db = self._make_mock_db(mock_item)
 
-        mock_processor = MagicMock()
-        mock_processor.analyze = AsyncMock(return_value={
+        analysis = {
             "summary": "Test",
             "priority": "high",  # Even with high priority
             "relevant": False,  # Marked as irrelevant
             "relevance_score": 0.1,
             "assigned_aks": [],
             "tags": [],
-        })
+        }
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=(analysis, [{"role": "assistant", "content": "{}"}])
+        )
+        mock_processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
 
         with patch("services.llm_worker.async_session_maker") as mock_session:
             mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -498,4 +558,7 @@ class TestPriorityMapping:
             with patch("services.item_events.record_event", new_callable=AsyncMock):
                 await worker._process_items([1], mock_processor, is_fresh=True)
 
-        assert mock_item.priority == Priority.NONE
+        update_calls = [c for c in mock_db.execute.call_args_list if len(c[0]) > 0]
+        update_stmt = update_calls[-1][0][0]
+        params = update_stmt.compile().params
+        assert params["priority"] == Priority.NONE

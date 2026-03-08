@@ -96,32 +96,30 @@ class TestParseAnalysisResponse:
         assert "Line 1" in result["summary"]
 
     def test_parse_invalid_json_returns_default(self, processor):
-        """Invalid JSON should return default analysis with low priority."""
+        """Invalid JSON should return default analysis with None priority."""
         response = LLMResponse(
             text="RELEVANT: Nein\nBEGRÜNDUNG: Not relevant",
             model="test",
             provider="test",
         )
         result = processor._parse_analysis_response(response)
-        # Should use default which has low priority
-        assert result["priority"] == "low"
+        # Should use default which has None priority
+        assert result["priority"] is None
         assert result["relevant"] is False
         assert result["relevance_score"] == 0.0
-        # Summary should contain the raw text
-        assert "RELEVANT: Nein" in result["summary"]
 
     def test_parse_empty_response_returns_default(self, processor):
         """Empty response should return default analysis."""
         response = LLMResponse(text="", model="test", provider="test")
         result = processor._parse_analysis_response(response)
-        assert result["priority"] == "low"
+        assert result["priority"] is None
         assert result["relevant"] is False
 
     def test_parse_whitespace_only_returns_default(self, processor):
         """Whitespace-only response should return default analysis."""
         response = LLMResponse(text="   \n\t  ", model="test", provider="test")
         result = processor._parse_analysis_response(response)
-        assert result["priority"] == "low"
+        assert result["priority"] is None
 
     def test_parse_partial_json_returns_default(self, processor):
         """Incomplete JSON should return default analysis."""
@@ -131,7 +129,7 @@ class TestParseAnalysisResponse:
             provider="test",
         )
         result = processor._parse_analysis_response(response)
-        assert result["priority"] == "low"
+        assert result["priority"] is None
 
     def test_parse_json_array_returns_default(self, processor):
         """JSON array (not object) should return default analysis."""
@@ -142,16 +140,16 @@ class TestParseAnalysisResponse:
         )
         result = processor._parse_analysis_response(response)
         # Should fall back to default since we expect object not array
-        assert result["priority"] == "low"
+        assert result["priority"] is None
 
 
 class TestDefaultAnalysis:
     """Tests for _default_analysis method."""
 
     def test_default_analysis_has_low_priority(self, processor):
-        """Default analysis should have low priority, not medium."""
+        """Default analysis should have None priority (irrelevant)."""
         result = processor._default_analysis()
-        assert result["priority"] == "low"
+        assert result["priority"] is None
         assert result["relevant"] is False
         assert result["relevance_score"] == 0.0
 
@@ -159,17 +157,17 @@ class TestDefaultAnalysis:
         """Default analysis should preserve provided summary text."""
         result = processor._default_analysis("Some fallback text")
         assert result["summary"] == "Some fallback text"
-        assert result["priority"] == "low"
+        assert result["priority"] is None
 
     def test_default_analysis_has_empty_tags(self, processor):
         """Default analysis should have empty tags list."""
         result = processor._default_analysis()
         assert result["tags"] == []
 
-    def test_default_analysis_has_null_ak(self, processor):
-        """Default analysis should have None for assigned_ak."""
+    def test_default_analysis_has_empty_assigned_aks(self, processor):
+        """Default analysis should have empty assigned_aks list."""
         result = processor._default_analysis()
-        assert result["assigned_ak"] is None
+        assert result["assigned_aks"] == []
 
 
 class TestPriorityLogic:
@@ -253,19 +251,24 @@ class TestPriorityMapping:
     LLM outputs: critical, high, medium, low
     Stored priorities: high, medium, low, none
 
-    Mapping: critical→high, high→medium, medium→low, low→none
+    Mapping: critical→high, high→high, medium→medium, low→low, null/other→none
     """
 
     @staticmethod
     def map_llm_priority(llm_priority: str | None) -> "Priority":
-        """Map LLM output priority to stored priority enum."""
+        """Map LLM output priority to stored priority enum.
+
+        This matches the mapping in llm_worker.py _process_items.
+        """
         from models import Priority
 
         if llm_priority == "critical":
             return Priority.HIGH
         elif llm_priority == "high":
-            return Priority.MEDIUM
+            return Priority.HIGH
         elif llm_priority == "medium":
+            return Priority.MEDIUM
+        elif llm_priority == "low":
             return Priority.LOW
         else:
             return Priority.NONE
@@ -276,10 +279,10 @@ class TestPriorityMapping:
 
         # LLM output → Stored priority
         test_cases = [
-            ("critical", Priority.HIGH),  # critical → high
-            ("high", Priority.MEDIUM),    # high → medium
-            ("medium", Priority.LOW),     # medium → low
-            ("low", Priority.NONE),       # low → none
+            ("critical", Priority.HIGH),   # critical → high
+            ("high", Priority.HIGH),       # high → high
+            ("medium", Priority.MEDIUM),   # medium → medium
+            ("low", Priority.LOW),         # low → low
         ]
 
         for llm_priority, expected in test_cases:
@@ -392,8 +395,8 @@ class TestAnalyzeMethod:
         assert len(prompt) < 7000
 
     @pytest.mark.asyncio
-    async def test_analyze_returns_default_on_llm_error(self, processor):
-        """Analyze should return default analysis when LLM fails."""
+    async def test_analyze_raises_on_llm_error(self, processor):
+        """Analyze should raise exception when LLM fails."""
         item = MagicMock()
         item.title = "Test"
         item.content = "Content"
@@ -402,7 +405,5 @@ class TestAnalyzeMethod:
 
         processor.llm.complete = AsyncMock(side_effect=Exception("LLM Error"))
 
-        result = await processor.analyze(item)
-
-        assert result["priority"] == "low"
-        assert result["relevant"] is False
+        with pytest.raises(Exception, match="LLM Error"):
+            await processor.analyze(item)

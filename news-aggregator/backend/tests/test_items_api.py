@@ -519,12 +519,13 @@ class TestRefetchItem:
     async def test_refetch_non_social_item(
         self, client: AsyncClient, item_in_db: Item
     ):
-        """Refetch rejects non-x_scraper/linkedin items."""
-        # item_in_db is from RSS channel
+        """Refetch accepts all connector types including RSS."""
+        # item_in_db is from RSS channel - now accepted for refetch
         response = await client.post(f"/api/items/{item_in_db.id}/refetch")
 
-        assert response.status_code == 400
-        assert "x_scraper" in response.json()["detail"]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "started"
 
     @pytest.mark.asyncio
     async def test_refetch_item_not_found(self, client: AsyncClient):

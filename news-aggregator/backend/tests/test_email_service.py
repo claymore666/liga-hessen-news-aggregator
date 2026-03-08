@@ -85,7 +85,7 @@ class TestEmailConfig:
         assert config.subject_prefix == "[Liga News]"
         assert config.include_summary is True
         assert config.include_content is False
-        assert config.min_priority == Priority.NONE
+        assert config.min_priority == Priority.LOW
 
     def test_custom_values(self, email_config):
         """Should accept custom values."""

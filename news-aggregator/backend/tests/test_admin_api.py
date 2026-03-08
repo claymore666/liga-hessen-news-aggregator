@@ -239,32 +239,34 @@ class TestLogsEndpoint:
 
     @pytest.mark.asyncio
     async def test_get_logs(self, client: AsyncClient):
-        """GET /api/admin/logs returns log information."""
+        """GET /api/admin/logs returns paginated log entries."""
         response = await client.get("/api/admin/logs")
 
         assert response.status_code == 200
         data = response.json()
-        assert "lines" in data
+        assert "entries" in data
         assert "source" in data
-        assert "total_lines" in data
-        assert isinstance(data["lines"], list)
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert isinstance(data["entries"], list)
 
     @pytest.mark.asyncio
-    async def test_get_logs_with_limit(self, client: AsyncClient):
-        """GET /api/admin/logs respects lines parameter."""
-        response = await client.get("/api/admin/logs", params={"lines": 10})
+    async def test_get_logs_with_page_size(self, client: AsyncClient):
+        """GET /api/admin/logs respects page_size parameter."""
+        response = await client.get("/api/admin/logs", params={"page_size": 10})
 
         assert response.status_code == 200
         data = response.json()
-        assert data["total_lines"] <= 10
+        assert len(data["entries"]) <= 10
 
     @pytest.mark.asyncio
-    async def test_get_logs_invalid_limit(self, client: AsyncClient):
-        """Invalid lines parameter is rejected."""
-        # Lines too low
-        response = await client.get("/api/admin/logs", params={"lines": 0})
+    async def test_get_logs_invalid_page_size(self, client: AsyncClient):
+        """Invalid page_size parameter is rejected."""
+        # Page size too low
+        response = await client.get("/api/admin/logs", params={"page_size": 1})
         assert response.status_code == 422
 
-        # Lines too high
-        response = await client.get("/api/admin/logs", params={"lines": 2000})
+        # Page size too high
+        response = await client.get("/api/admin/logs", params={"page_size": 500})
         assert response.status_code == 422

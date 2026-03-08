@@ -30,11 +30,13 @@ class TestLLMStatus:
         self, client: AsyncClient, item_in_db: Item
     ):
         """Status shows unprocessed items count."""
+        # Mark item as needing processing
+        item_in_db.needs_llm_processing = True
+
         response = await client.get("/api/llm/status")
 
         assert response.status_code == 200
         data = response.json()
-        # item_in_db has no summary, so should be counted as unprocessed
         assert data["unprocessed_count"] >= 1
 
 

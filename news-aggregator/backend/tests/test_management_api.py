@@ -274,13 +274,13 @@ class TestAdminLogsAPI:
     @pytest.mark.asyncio
     async def test_get_logs(self, client: AsyncClient):
         """Test getting application logs."""
-        response = await client.get("/api/admin/logs", params={"lines": 50})
+        response = await client.get("/api/admin/logs", params={"page_size": 50})
 
         assert response.status_code == 200
         data = response.json()
-        assert "lines" in data
+        assert "entries" in data
         assert "source" in data
-        assert "total_lines" in data
+        assert "total" in data
 
 
 class TestSourcesOperationsAPI:

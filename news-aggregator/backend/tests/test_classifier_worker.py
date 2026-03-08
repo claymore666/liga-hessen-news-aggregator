@@ -95,15 +95,19 @@ class TestClassifierWorkerLifecycle:
 class TestClassifierWorkerPauseResume:
     """Tests for pause/resume functionality."""
 
-    def test_pause(self, worker):
+    @pytest.mark.asyncio
+    async def test_pause(self, worker):
         """Pause should set paused flag."""
-        worker.pause()
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.pause()
         assert worker._paused is True
 
-    def test_resume(self, worker):
+    @pytest.mark.asyncio
+    async def test_resume(self, worker):
         """Resume should clear paused flag."""
         worker._paused = True
-        worker.resume()
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.resume()
         assert worker._paused is False
 
 
@@ -253,9 +257,8 @@ class TestProcessUnclassifiedItems:
                 mock_cm.__aenter__ = mock_context_manager
                 mock_cm.__aexit__ = AsyncMock(return_value=None)
                 mock_session.return_value = mock_cm
-                with patch("services.classifier_worker.db_write_lock"):
-                    with patch("services.item_events.record_event", new_callable=AsyncMock):
-                        result = await worker._process_unclassified_items()
+                with patch("services.item_events.record_event", new_callable=AsyncMock):
+                    result = await worker._process_unclassified_items()
 
         assert result == 1
         assert worker._stats["processed"] == 1

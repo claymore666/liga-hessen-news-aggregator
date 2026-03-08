@@ -171,20 +171,19 @@ class TestFetchDueChannels:
 
     @pytest.mark.asyncio
     async def test_fetch_in_progress_skips(self):
-        """Test that concurrent fetches are skipped."""
+        """Test that concurrent fetches are skipped when lock is held."""
         import services.scheduler as scheduler_module
         from services.scheduler import fetch_due_channels
 
-        # Simulate a fetch already in progress
-        original_flag = scheduler_module._fetch_in_progress
-        scheduler_module._fetch_in_progress = True
+        # Acquire the lock to simulate a fetch already in progress
+        await scheduler_module._fetch_lock.acquire()
 
         try:
             result = await fetch_due_channels()
             assert result.get("skipped") is True
             assert result.get("reason") == "fetch_in_progress"
         finally:
-            scheduler_module._fetch_in_progress = original_flag
+            scheduler_module._fetch_lock.release()
 
     @pytest.mark.asyncio
     async def test_handles_fetch_errors(self, db_session: AsyncSession, channels_with_intervals):
