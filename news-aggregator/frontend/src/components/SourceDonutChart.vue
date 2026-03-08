@@ -7,7 +7,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js'
-import axios from 'axios'
+import api from '@/api/client'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -63,7 +63,7 @@ async function fetchData() {
     if (selectedPriority.value) params.priority = selectedPriority.value
     if (resolveGa.value) params.resolve_ga = resolveGa.value
 
-    const { data } = await axios.get('/api/stats/source-donut', { params })
+    const { data } = await api.get('/stats/source-donut', { params })
     items.value = data
     chartKey.value++
   } catch (e) {

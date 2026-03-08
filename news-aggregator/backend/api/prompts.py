@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import require_admin_key
 from database import get_db
 from models import LLMPrompt
 
@@ -133,7 +134,7 @@ async def get_prompt_version(
     return _prompt_response(prompt, include_prompt=True)
 
 
-@router.post("/admin")
+@router.post("/admin", dependencies=[Depends(require_admin_key)])
 async def create_prompt(
     data: PromptCreate,
     db: AsyncSession = Depends(get_db),
@@ -175,7 +176,7 @@ async def create_prompt(
     }
 
 
-@router.post("/admin/{model}/activate/{version}")
+@router.post("/admin/{model}/activate/{version}", dependencies=[Depends(require_admin_key)])
 async def activate_prompt(
     model: str,
     version: int,

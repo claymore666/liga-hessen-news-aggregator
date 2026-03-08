@@ -139,11 +139,16 @@ async_session_maker = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency for getting database sessions."""
+    """Dependency for getting database sessions.
+
+    Only commits if the session has pending changes (new/dirty/deleted objects),
+    avoiding unnecessary COMMIT statements on read-only requests.
+    """
     async with async_session_maker() as session:
         try:
             yield session
-            await session.commit()
+            if session.new or session.dirty or session.deleted:
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

@@ -15,6 +15,7 @@ const emit = defineEmits<{
 
 const rulesStore = useRulesStore()
 const loading = ref(false)
+const error = ref('')
 
 const form = ref({
   name: props.rule?.name ?? '',
@@ -56,6 +57,7 @@ const priorities: { value: Priority | null; label: string }[] = [
 ]
 
 const save = async () => {
+  error.value = ''
   loading.value = true
   try {
     if (isEditing.value && props.rule) {
@@ -64,6 +66,9 @@ const save = async () => {
       await rulesStore.createRule(form.value)
     }
     emit('saved')
+  } catch (e) {
+    console.error('Failed to save rule:', e)
+    error.value = e instanceof Error ? e.message : 'Speichern fehlgeschlagen'
   } finally {
     loading.value = false
   }
@@ -75,7 +80,7 @@ const currentRuleType = computed(() =>
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" role="dialog" aria-modal="true">
     <div class="w-full max-w-lg rounded-lg bg-white shadow-xl">
       <div class="flex items-center justify-between border-b border-gray-200 p-4">
         <h2 class="text-lg font-medium text-gray-900">
@@ -179,6 +184,8 @@ const currentRuleType = computed(() =>
             <label class="text-sm text-gray-700">Regel aktivieren</label>
           </div>
         </div>
+
+        <p v-if="error" class="text-red-600 text-sm mt-2">{{ error }}</p>
 
         <div class="mt-6 flex justify-end gap-3">
           <button

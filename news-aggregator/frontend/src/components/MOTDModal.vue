@@ -90,15 +90,25 @@ onMounted(() => {
  * Splits numbered items like "(1) ... (2) ... (3) ..." into a list,
  * with the text before the first number as a heading.
  */
+/**
+ * Escape HTML entities to prevent XSS from user-supplied MOTD content.
+ */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 const formattedMessage = computed(() => {
   const raw = motd.value?.message
   if (!raw) return ''
 
+  // Escape HTML entities first, then convert newlines to <br>
+  const escaped = escapeHtml(raw)
+
   // Split on (1), (2), (3), etc.
-  const parts = raw.split(/\(\d+\)\s*/)
+  const parts = escaped.split(/\(\d+\)\s*/)
   if (parts.length <= 1) {
     // No numbered items — just convert newlines
-    return raw.replace(/\n/g, '<br>')
+    return escaped.replace(/\n/g, '<br>')
   }
 
   const intro = parts[0].trim()
@@ -142,6 +152,8 @@ const formattedDate = computed(() => {
       <div
         v-if="isVisible"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+        role="dialog"
+        aria-modal="true"
         @click.self="dismiss"
       >
         <!-- Modal Content -->

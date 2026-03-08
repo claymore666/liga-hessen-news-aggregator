@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from api.auth import require_admin_key
 from config import settings as app_settings
 from database import get_db
 from models import Channel, Rule, Setting, Source
@@ -34,7 +35,7 @@ from schemas_config import (
 from connectors.registry import ConnectorRegistry
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_key)])
 
 
 @router.get("/admin/config/export", response_model=ConfigExport)

@@ -412,6 +412,7 @@ onMounted(() => {
             </button>
           </div>
           <div class="max-h-[60vh] overflow-y-auto p-4">
+            <!-- Server-generated HTML from backend email template — safe, not user-supplied -->
             <div v-html="preview.html_body" />
           </div>
           <div class="border-t border-gray-200 p-4">

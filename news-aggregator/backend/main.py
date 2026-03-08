@@ -295,7 +295,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # Stop log writer (all workers)
-    from api.admin.logs import stop_log_writer
     await stop_log_writer()
 
     # Shutdown - only leader stops background workers
@@ -325,7 +324,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.info(f"Worker {os.getpid()} shutdown complete")
 
     # Close Redis (all workers)
-    from services.redis_client import close_redis
     await close_redis()
 
 

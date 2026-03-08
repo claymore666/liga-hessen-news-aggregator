@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import require_admin_key
 from config import settings
 from database import get_db
 from models import Item, Priority, Setting
@@ -134,7 +135,7 @@ async def get_llm_settings() -> LLMSettingsResponse:
     )
 
 
-@router.post("/llm/prompt", response_model=PromptResponse)
+@router.post("/llm/prompt", response_model=PromptResponse, dependencies=[Depends(require_admin_key)])
 async def send_prompt(request: PromptRequest) -> PromptResponse:
     """Send a prompt to the LLM and get a response.
 
@@ -180,7 +181,7 @@ class ModelSelectResponse(BaseModel):
     message: str
 
 
-@router.put("/llm/model", response_model=ModelSelectResponse)
+@router.put("/llm/model", response_model=ModelSelectResponse, dependencies=[Depends(require_admin_key)])
 async def select_ollama_model(
     request: ModelSelectRequest,
     db: AsyncSession = Depends(get_db),
@@ -442,7 +443,7 @@ async def get_llm_status(db: AsyncSession = Depends(get_db)) -> LLMStatusRespons
     )
 
 
-@router.post("/llm/enable", response_model=LLMToggleResponse)
+@router.post("/llm/enable", response_model=LLMToggleResponse, dependencies=[Depends(require_admin_key)])
 async def enable_llm(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -508,7 +509,7 @@ async def enable_llm(
     )
 
 
-@router.post("/llm/disable", response_model=LLMToggleResponse)
+@router.post("/llm/disable", response_model=LLMToggleResponse, dependencies=[Depends(require_admin_key)])
 async def disable_llm(db: AsyncSession = Depends(get_db)) -> LLMToggleResponse:
     """Disable LLM processing at runtime."""
     # Update or create setting
@@ -575,7 +576,7 @@ async def get_worker_status() -> WorkerStatusResponse:
     )
 
 
-@router.post("/llm/worker/pause")
+@router.post("/llm/worker/pause", dependencies=[Depends(require_admin_key)])
 async def pause_worker() -> dict:
     """Pause LLM worker processing.
 
@@ -598,7 +599,7 @@ async def pause_worker() -> dict:
     return {"status": "command_queued", "message": "Pause command queued"}
 
 
-@router.post("/llm/worker/resume")
+@router.post("/llm/worker/resume", dependencies=[Depends(require_admin_key)])
 async def resume_worker() -> dict:
     """Resume LLM worker processing."""
     from services.worker_status import read_state, write_command
@@ -649,7 +650,7 @@ async def get_classifier_worker_status() -> ClassifierWorkerStatusResponse:
     )
 
 
-@router.post("/classifier/worker/pause")
+@router.post("/classifier/worker/pause", dependencies=[Depends(require_admin_key)])
 async def pause_classifier_worker() -> dict:
     """Pause classifier worker processing.
 
@@ -671,7 +672,7 @@ async def pause_classifier_worker() -> dict:
     return {"status": "command_queued", "message": "Pause command queued"}
 
 
-@router.post("/classifier/worker/resume")
+@router.post("/classifier/worker/resume", dependencies=[Depends(require_admin_key)])
 async def resume_classifier_worker() -> dict:
     """Resume classifier worker processing."""
     from services.worker_status import read_state, write_command

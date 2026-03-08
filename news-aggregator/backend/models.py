@@ -5,9 +5,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import ARRAY, JSON, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-import uuid
 
 from database import Base
 

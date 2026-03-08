@@ -19,6 +19,7 @@ const sourcesStore = useSourcesStore()
 
 const connectors = ref<ConnectorInfo[]>([])
 const loading = ref(false)
+const error = ref('')
 const validating = ref(false)
 const validationResult = ref<{ valid: boolean; message: string } | null>(null)
 
@@ -145,6 +146,7 @@ const validateConfig = async () => {
 const save = async () => {
   if (!props.source) return
 
+  error.value = ''
   loading.value = true
   try {
     const config = buildConfig()
@@ -166,6 +168,9 @@ const save = async () => {
       })
     }
     emit('saved')
+  } catch (e) {
+    console.error('Failed to save channel:', e)
+    error.value = e instanceof Error ? e.message : 'Speichern fehlgeschlagen'
   } finally {
     loading.value = false
   }
@@ -186,7 +191,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" role="dialog" aria-modal="true">
     <div class="w-full max-w-lg rounded-lg bg-white shadow-xl">
       <div class="flex items-center justify-between border-b border-gray-200 p-4">
         <h2 class="text-lg font-medium text-gray-900">
@@ -314,6 +319,8 @@ onMounted(async () => {
             </div>
           </div>
         </div>
+
+        <p v-if="error" class="text-red-600 text-sm mt-2">{{ error }}</p>
 
         <div class="mt-6 flex justify-end gap-3">
           <button type="button" class="btn btn-secondary" @click="emit('close')">Abbrechen</button>

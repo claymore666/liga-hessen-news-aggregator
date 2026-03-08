@@ -24,14 +24,6 @@ export const useItemsStore = defineStore('items', () => {
 
   const unreadCount = computed(() => items.value.filter((i) => !i.is_read).length)
 
-  const highItems = computed(() =>
-    items.value.filter((i) => i.priority === 'high' && !i.is_read)
-  )
-
-  const highPriorityItems = computed(() =>
-    items.value.filter((i) => ['high', 'medium'].includes(i.priority) && !i.is_read)
-  )
-
   async function fetchItems(params?: { page?: number; page_size?: number }) {
     loading.value = true
     error.value = null
@@ -203,8 +195,8 @@ export const useItemsStore = defineStore('items', () => {
     }
   }
 
-  function setFilter(key: keyof typeof filters.value, value: unknown) {
-    filters.value[key] = value as never
+  function setFilter<K extends keyof typeof filters.value>(key: K, value: typeof filters.value[K]) {
+    filters.value[key] = value
   }
 
   function clearFilters() {
@@ -248,8 +240,6 @@ export const useItemsStore = defineStore('items', () => {
     total,
     filters,
     unreadCount,
-    highItems,
-    highPriorityItems,
     fetchItems,
     fetchItem,
     markAsRead,

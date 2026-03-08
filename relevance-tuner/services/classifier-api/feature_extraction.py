@@ -241,7 +241,7 @@ def extract_features(title: str, content: str, source: str = "") -> np.ndarray:
         source: Source name (e.g., "FAZ (Frankfurter Allgemeine)")
 
     Returns:
-        np.ndarray of shape (27,) with feature values
+        np.ndarray of shape (37,) with feature values
     """
     full_text = f"{title} {content}"
     text_lower = _normalize(full_text)

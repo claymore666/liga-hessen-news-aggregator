@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     app_name: str = "News Aggregator"
     debug: bool = False
 
+    # Admin API key (required for admin endpoints)
+    admin_api_key: str = ""
+
     # Instance identification
     instance_type: str = "production"  # production | training | development
 

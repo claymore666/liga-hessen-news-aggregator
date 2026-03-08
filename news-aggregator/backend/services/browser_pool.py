@@ -85,7 +85,12 @@ class BrowserPool:
 
         browser: Browser | None = None
 
-        async with self._semaphore:
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=120.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Browser pool: timed out waiting for available slot (120s)")
+
+        try:
             # Capture generation before we start so we can detect stale errors
             gen_before = self._generation
 
@@ -126,6 +131,8 @@ class BrowserPool:
                         await browser.close()
                     except Exception as e:
                         logger.debug("Error closing browser: %s", e)
+        finally:
+            self._semaphore.release()
 
     async def _handle_error(self, error_generation: int):
         """Handle browser error. Only trigger restart if still on the same generation."""

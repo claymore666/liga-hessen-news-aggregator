@@ -819,13 +819,26 @@ def start_scheduler() -> None:
     scheduler.start()
     logger.info("Scheduler started")
 
-    # Write state and initial jobs to DB (fire-and-forget via event loop)
+    # Write state and initial jobs to DB
     import asyncio
     try:
         loop = asyncio.get_running_loop()
         from services.worker_status import write_state
-        loop.create_task(write_state("scheduler", running=True))
-        loop.create_task(_sync_scheduler_stats())
+
+        async def _safe_write_state():
+            try:
+                await write_state("scheduler", running=True)
+            except Exception as e:
+                logger.warning(f"Failed to write scheduler state: {e}")
+
+        async def _safe_sync_stats():
+            try:
+                await _sync_scheduler_stats()
+            except Exception as e:
+                logger.warning(f"Failed to sync scheduler stats: {e}")
+
+        loop.create_task(_safe_write_state())
+        loop.create_task(_safe_sync_stats())
     except RuntimeError:
         pass
 
@@ -835,12 +848,19 @@ def stop_scheduler() -> None:
     scheduler.shutdown(wait=False)
     logger.info("Scheduler stopped")
 
-    # Write state to DB (fire-and-forget via event loop)
+    # Write state to DB
     import asyncio
     try:
         loop = asyncio.get_running_loop()
         from services.worker_status import write_state
-        loop.create_task(write_state("scheduler", running=False))
+
+        async def _safe_write_stopped():
+            try:
+                await write_state("scheduler", running=False)
+            except Exception as e:
+                logger.warning(f"Failed to write scheduler stopped state: {e}")
+
+        loop.create_task(_safe_write_stopped())
     except RuntimeError:
         pass
 

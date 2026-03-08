@@ -10,6 +10,7 @@ Fresh items always take priority over backlog processing.
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 from sqlalchemy import case, func, or_, select
@@ -59,6 +60,8 @@ class LLMWorker:
         self._poll_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
         self._processor = None
+        self._processor_created_at: float = 0.0
+        self._processor_ttl: float = 300.0  # Reload prompt every 5 minutes
 
         # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
@@ -163,11 +166,15 @@ class LLMWorker:
             await write_state("llm", running=True, stopped_due_to_errors=False)
 
     async def _get_processor(self):
-        """Get or create the LLM processor."""
+        """Get or create the LLM processor, refreshing after TTL expires."""
         from services.processor import create_processor_from_settings
 
-        if self._processor is None:
+        now = time.monotonic()
+        if self._processor is None or (now - self._processor_created_at) > self._processor_ttl:
+            if self._processor is not None:
+                logger.info("Refreshing LLM processor (prompt TTL expired)")
             self._processor = await create_processor_from_settings()
+            self._processor_created_at = now
         return self._processor
 
     async def _run(self):

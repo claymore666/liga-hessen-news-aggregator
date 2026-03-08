@@ -680,7 +680,6 @@ Antworte NUR mit JA oder NEIN."""
 
             # Try to extract summary from partial/invalid JSON using regex
             # This handles cases where JSON is truncated but summary field is complete
-            import re
             summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)', text)
             if summary_match:
                 extracted_summary = summary_match.group(1)
@@ -715,7 +714,7 @@ Antworte NUR mit JA oder NEIN."""
             "summary": summary,
             "relevant": False,
             "relevance_score": 0.0,
-            "priority": "low",
+            "priority": None,
             "assigned_aks": [],
             "matched_rules": [],
             "tags": [],

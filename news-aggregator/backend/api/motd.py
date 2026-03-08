@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import require_admin_key
 from database import get_db
 from models import MOTD
 
@@ -70,7 +71,7 @@ async def get_motd(db: AsyncSession = Depends(get_db)) -> MOTDResponse:
     )
 
 
-@router.post("/admin", response_model=MOTDUpdateResponse)
+@router.post("/admin", response_model=MOTDUpdateResponse, dependencies=[Depends(require_admin_key)])
 async def set_motd(
     data: MOTDCreate,
     db: AsyncSession = Depends(get_db),
@@ -107,7 +108,7 @@ async def set_motd(
     )
 
 
-@router.delete("/admin", response_model=MOTDUpdateResponse)
+@router.delete("/admin", response_model=MOTDUpdateResponse, dependencies=[Depends(require_admin_key)])
 async def clear_motd(db: AsyncSession = Depends(get_db)) -> MOTDUpdateResponse:
     """Clear/deactivate the current MOTD (admin only)."""
     result = await db.execute(select(MOTD).where(MOTD.active == True))  # noqa: E712

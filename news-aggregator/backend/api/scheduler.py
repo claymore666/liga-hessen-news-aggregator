@@ -3,9 +3,10 @@
 import logging
 
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from api.auth import require_admin_key
 from config import settings
 from services.scheduler import scheduler, get_job_status, start_scheduler, stop_scheduler
 
@@ -45,7 +46,7 @@ async def get_scheduler_status() -> SchedulerStatusResponse:
     )
 
 
-@router.post("/scheduler/start")
+@router.post("/scheduler/start", dependencies=[Depends(require_admin_key)])
 async def start_scheduler_endpoint() -> dict[str, str]:
     """Start the scheduler if not already running."""
     if scheduler.running:
@@ -59,7 +60,7 @@ async def start_scheduler_endpoint() -> dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {e}")
 
 
-@router.post("/scheduler/stop")
+@router.post("/scheduler/stop", dependencies=[Depends(require_admin_key)])
 async def stop_scheduler_endpoint() -> dict[str, str]:
     """Stop the scheduler if running."""
     if not scheduler.running:
@@ -73,7 +74,7 @@ async def stop_scheduler_endpoint() -> dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Failed to stop scheduler: {e}")
 
 
-@router.put("/scheduler/interval", response_model=IntervalUpdateResponse)
+@router.put("/scheduler/interval", response_model=IntervalUpdateResponse, dependencies=[Depends(require_admin_key)])
 async def update_fetch_interval(request: IntervalUpdateRequest) -> IntervalUpdateResponse:
     """Change the fetch interval for the main fetch job.
 

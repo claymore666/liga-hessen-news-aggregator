@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import api from '@/api/client'
 
 const props = defineProps<{
   days: number
@@ -40,7 +40,7 @@ async function fetchTopics() {
   try {
     const params: Record<string, any> = { days: props.days }
     if (props.days >= 30) params.limit = 10
-    const { data } = await axios.get('/api/stats/topic-counts', { params })
+    const { data } = await api.get('/stats/topic-counts', { params })
     topics.value = data.topics
     totalItems.value = data.total_items
   } catch (e) {

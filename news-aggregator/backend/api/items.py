@@ -8,6 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from api.auth import require_admin_key
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel
@@ -429,24 +430,59 @@ async def get_items_by_topic(
     )
 
 
-@router.post("/items/retry-queue/process")
+@router.post("/items/retry-queue/process", dependencies=[Depends(require_admin_key)])
 async def trigger_retry_processing(
-    background_tasks: BackgroundTasks,
     batch_size: int = Query(10, ge=1, le=50, description="Number of items to process"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Manually trigger LLM retry processing.
+    """Queue retry items to the LLM worker for processing.
 
-    Processes items marked with needs_llm_processing=True, prioritized by
-    classifier confidence (high > unknown > edge_case).
+    Finds items with needs_llm_processing=True and adds them to the
+    LLM worker's fresh queue for standard processing (with topic extraction
+    and prompt tracking).
     """
-    from services.scheduler import retry_llm_processing
+    from services.llm_worker import get_worker
 
-    background_tasks.add_task(retry_llm_processing, batch_size)
+    worker = get_worker()
+    if not worker or not worker._running:
+        raise HTTPException(status_code=503, detail="LLM worker is not running")
+
+    # Find items needing processing
+    retry_priority = json_extract_path(Item.metadata_, "retry_priority")
+    priority_order = case(
+        (retry_priority == "high", 1),
+        (retry_priority == "unknown", 2),
+        (retry_priority == "edge_case", 3),
+        else_=4,
+    )
+    query = (
+        select(Item.id)
+        .where(
+            Item.needs_llm_processing == True,  # noqa: E712
+            retry_priority != "low",
+        )
+        .order_by(priority_order, Item.fetched_at.desc())
+        .limit(batch_size)
+    )
+    result = await db.execute(query)
+    item_ids = [row[0] for row in result.all()]
+
+    if not item_ids:
+        return {"status": "no_items", "queued": 0, "message": "No items in retry queue"}
+
+    # Queue to LLM worker
+    queued = 0
+    for item_id in item_ids:
+        try:
+            worker._fresh_queue.put_nowait(item_id)
+            queued += 1
+        except Exception:
+            break  # Queue full
 
     return {
-        "status": "started",
-        "batch_size": batch_size,
-        "message": "Retry processing started in background. Check logs for progress.",
+        "status": "queued",
+        "queued": queued,
+        "message": f"Queued {queued} items to LLM worker for processing.",
     }
 
 
@@ -715,7 +751,7 @@ async def bulk_archive(
     )
 
 
-@router.post("/items/{item_id}/reprocess")
+@router.post("/items/{item_id}/reprocess", dependencies=[Depends(require_admin_key)])
 async def reprocess_single_item(
     item_id: int,
     background_tasks: BackgroundTasks,
@@ -970,6 +1006,8 @@ Verlinkter Artikel von {article.source_domain}:
 async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
     """Scrape a tweet page to extract article links from cards.
 
+    Uses the shared browser pool to respect concurrency limits.
+
     Args:
         tweet_url: Full URL to the tweet
 
@@ -977,21 +1015,15 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
         List of article URLs found in the tweet's cards
     """
     import json
-    import random
     from pathlib import Path
-    from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
+    from services.browser_pool import browser_pool
 
     links = []
     cookie_file = Path("/app/data/x_cookies.json")
 
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
-
+        async with browser_pool.get_browser() as browser:
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
                 viewport={"width": 1920, "height": 1080},
@@ -1038,7 +1070,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
                         if resolved not in links:
                             links.append(resolved)
 
-            await browser.close()
+            await context.close()
 
     except Exception as e:
         logger.warning(f"Error scraping tweet for links: {e}")
@@ -1191,16 +1223,21 @@ async def mark_all_as_read(
 
 # Background task for reprocessing
 async def _reprocess_items_task(item_ids: list[int], force: bool):
-    """Background task to reprocess items through LLM."""
+    """Background task to reprocess items through LLM.
+
+    Uses the 3-phase read-process-write pattern to avoid holding DB
+    connections during long-running LLM calls. Includes topic extraction.
+    """
     from services.processor import create_processor_from_settings
 
     processor = await create_processor_from_settings()
     processed = 0
     errors = 0
 
-    async with async_session_maker() as db:
-        for item_id in item_ids:
-            try:
+    for item_id in item_ids:
+        try:
+            # Phase 1: Read item data (release connection immediately)
+            async with async_session_maker() as db:
                 result = await db.execute(
                     select(Item)
                     .where(Item.id == item_id)
@@ -1214,78 +1251,98 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                 if not force and item.metadata_.get("llm_analysis"):
                     continue
 
-                # Run LLM analysis
-                analysis = await processor.analyze(item)
+                source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
+                item_data = {
+                    "title": item.title,
+                    "content": item.content,
+                    "source_name": source_name,
+                    "published_at": item.published_at,
+                }
+                old_metadata = dict(item.metadata_) if item.metadata_ else {}
+                old_priority_score = item.priority_score or 0
 
-                # Update item
+            # Phase 2: LLM processing — NO connection held
+            analysis, conversation = await processor.analyze_from_data_with_messages(item_data)
+
+            # Override self-contradictory output (relevant=False but priority set)
+            llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+            if analysis.get("relevant") is False:
+                llm_priority = None
+
+            # Topic extraction via follow-up chat turn
+            topic = "Sonstiges"
+            topic_suggestion = None
+            if analysis.get("relevant") is not False:
+                try:
+                    topic, topic_suggestion = await processor.extract_topics(conversation)
+                except Exception as topic_err:
+                    logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
+
+            # Phase 3: Quick write — update item in database
+            async with async_session_maker() as db:
+                result = await db.execute(select(Item).where(Item.id == item_id))
+                item = result.scalar_one_or_none()
+                if not item:
+                    continue
+
                 if analysis.get("summary"):
                     item.summary = analysis["summary"]
-
-                # Set detailed analysis
                 if analysis.get("detailed_analysis"):
                     item.detailed_analysis = analysis["detailed_analysis"]
 
-                # Map LLM priority directly (matches llm_worker mapping)
-                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-                if analysis.get("relevant") is False:
-                    llm_priority = None
-
+                # Map LLM priority (matches llm_worker mapping)
                 if llm_priority == "critical":
                     item.priority = Priority.HIGH
-                    item.priority_score = max(item.priority_score or 0, 95)
+                    item.priority_score = max(old_priority_score, 95)
                 elif llm_priority == "high":
                     item.priority = Priority.HIGH
-                    item.priority_score = max(item.priority_score or 0, 90)
+                    item.priority_score = max(old_priority_score, 90)
                 elif llm_priority == "medium":
                     item.priority = Priority.MEDIUM
-                    item.priority_score = max(item.priority_score or 0, 70)
+                    item.priority_score = max(old_priority_score, 70)
                 elif llm_priority == "low":
                     item.priority = Priority.LOW
-                    item.priority_score = max(item.priority_score or 0, 40)
+                    item.priority_score = max(old_priority_score, 40)
                 else:
                     item.priority = Priority.NONE
-                    item.priority_score = min(item.priority_score or 100, 20)
+                    item.priority_score = min(old_priority_score, 20)
 
-                # Set assigned_aks from LLM analysis
                 llm_aks = analysis.get("assigned_aks", [])
                 if llm_aks:
                     item.assigned_aks = llm_aks
-                    item.assigned_ak = llm_aks[0] if llm_aks else None  # Deprecated field
+                    item.assigned_ak = llm_aks[0] if llm_aks else None
 
-                # Store analysis metadata
                 llm_meta = {
                     "relevance_score": analysis.get("relevance_score", 0.5),
                     "priority_suggestion": llm_priority,
                     "assigned_aks": llm_aks,
-                    "assigned_ak": llm_aks[0] if llm_aks else None,  # Deprecated
+                    "assigned_ak": llm_aks[0] if llm_aks else None,
                     "tags": analysis.get("tags", []),
+                    "topic": topic,
+                    "topic_suggestion": topic_suggestion,
                     "reasoning": analysis.get("reasoning"),
                     "provider": analysis.get("_provider"),
                     "model": analysis.get("_model"),
                     "prompt_version": analysis.get("_prompt_version"),
                     "prompt_model": analysis.get("_prompt_model"),
+                    "reprocessed_at": datetime.utcnow().isoformat(),
                 }
-                item.metadata_ = {
-                    **item.metadata_,
-                    "llm_analysis": llm_meta,
-                }
+                item.metadata_ = {**old_metadata, "llm_analysis": llm_meta}
 
-                await db.flush()
+                await db.commit()
                 processed += 1
 
-                if processed % 10 == 0:
-                    logger.info(f"Reprocessed {processed}/{len(item_ids)} items")
+            if processed % 10 == 0:
+                logger.info(f"Reprocessed {processed}/{len(item_ids)} items")
 
-            except Exception as e:
-                logger.error(f"Error reprocessing item {item_id}: {e}")
-                errors += 1
-
-        await db.commit()
+        except Exception as e:
+            logger.error(f"Error reprocessing item {item_id}: {e}")
+            errors += 1
 
     logger.info(f"Reprocessing complete: {processed} processed, {errors} errors")
 
 
-@router.post("/items/reprocess")
+@router.post("/items/reprocess", dependencies=[Depends(require_admin_key)])
 async def reprocess_items(
     background_tasks: BackgroundTasks,
     source_id: int | None = Query(None, description="Only reprocess items from this source"),
@@ -1392,7 +1449,7 @@ class PrefilterBatchRequest(BaseModel):
     days: int | None = None
 
 
-@router.post("/items/{item_id}/prefilter")
+@router.post("/items/{item_id}/prefilter", dependencies=[Depends(require_admin_key)])
 async def prefilter_item(
     item_id: int,
     db: AsyncSession = Depends(get_db),
@@ -1531,7 +1588,7 @@ async def _prefilter_batch_task(item_ids: list[int]):
     logger.info(f"Pre-filter batch complete: {checked} checked, {filtered} filtered out")
 
 
-@router.post("/items/prefilter")
+@router.post("/items/prefilter", dependencies=[Depends(require_admin_key)])
 async def prefilter_items_batch(
     request_body: PrefilterBatchRequest,
     background_tasks: BackgroundTasks,

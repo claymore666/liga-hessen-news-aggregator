@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     logger.info("Loading embedding classifier...")
     try:
         classifier = EmbeddingClassifier.load("models/embedding_classifier_nomic-v2.pkl")
-        info = classifier.get_info()
+        info = await classifier.get_info()
         logger.info(f"Classifier loaded: {info}")
 
         # Initialize vector store (shares embedder with classifier)
@@ -45,14 +45,14 @@ async def lifespan(app: FastAPI):
         duplicate_store = DuplicateStore(
             persist_dir="/app/data/duplicatedb",
         )
-        logger.info(f"Duplicate store ready: {duplicate_store.get_stats()}")
+        logger.info(f"Duplicate store ready: {await duplicate_store.get_stats()}")
 
         # Auto-sync: if duplicate store has fewer items than search store,
         # sync missing items from search to duplicate index.
         # Wrapped in try/except: Ollama (gpu1) may be asleep at startup.
         try:
             vs_count = vector_store.get_stats()["total_items"]
-            ds_count = duplicate_store.get_stats()["total_items"]
+            ds_count = (await duplicate_store.get_stats())["total_items"]
             if ds_count < vs_count:
                 logger.info(
                     f"Duplicate store ({ds_count}) behind search store ({vs_count}), "
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
                 total_synced = 0
                 for i in range(0, len(items), batch_size):
                     batch = items[i:i + batch_size]
-                    synced = duplicate_store.add_items_batch(batch)
+                    synced = await duplicate_store.add_items_batch(batch)
                     total_synced += synced
                     if synced > 0:
                         logger.info(f"Synced batch {i//batch_size + 1}: {synced} items")
@@ -75,8 +75,8 @@ async def lifespan(app: FastAPI):
         # Warm up with a test prediction (non-fatal if Ollama is unreachable)
         try:
             logger.info("Warming up models...")
-            _ = classifier.predict("Test", "Test content", "test")
-            _ = duplicate_store.find_duplicates("Test", "Test content")
+            _ = await classifier.predict("Test", "Test content", "test")
+            _ = await duplicate_store.find_duplicates("Test", "Test content")
             logger.info("Models ready!")
         except Exception as e:
             logger.warning(f"Warmup skipped (Ollama may be unavailable): {e}")
@@ -102,7 +102,7 @@ app = FastAPI(
 class ClassifyRequest(BaseModel):
     """Request model for classification."""
     title: str
-    content: str
+    content: str = Field(max_length=100000)
     source: str = ""
 
 
@@ -121,8 +121,8 @@ class ClassifyResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     """Request model for semantic search."""
-    query: str
-    n_results: int = 10
+    query: str = Field(max_length=100000)
+    n_results: int = Field(default=10, ge=1, le=100)
     source: Optional[str] = None  # Filter by source
 
 
@@ -152,8 +152,8 @@ class SimilarRequest(BaseModel):
 class DuplicateRequest(BaseModel):
     """Request model for finding semantic duplicates."""
     title: str
-    content: str
-    threshold: float = 0.75  # Cosine similarity threshold (paraphrase model)
+    content: str = Field(max_length=100000)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)  # Cosine similarity threshold (paraphrase model)
     n_results: int = 5
     fetched_after: str | None = None  # ISO timestamp - only match items fetched after this time
 
@@ -174,7 +174,7 @@ class IndexRequest(BaseModel):
 
 class IndexBatchRequest(BaseModel):
     """Request model for batch indexing."""
-    items: list[IndexRequest]
+    items: list[IndexRequest] = Field(max_length=500)
 
 
 class IndexResponse(BaseModel):
@@ -239,9 +239,9 @@ async def health():
     if classifier is None:
         raise HTTPException(status_code=503, detail="Classifier not loaded")
 
-    info = classifier.get_info()
+    info = await classifier.get_info()
     vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
-    ds_stats = duplicate_store.get_stats() if duplicate_store else {}
+    ds_stats = await duplicate_store.get_stats() if duplicate_store else {}
 
     return HealthResponse(
         status="ok",
@@ -271,7 +271,7 @@ async def classify(request: ClassifyRequest):
         raise HTTPException(status_code=503, detail="Classifier not loaded")
 
     try:
-        result = classifier.predict(
+        result = await classifier.predict(
             title=request.title,
             content=request.content,
             source=request.source,
@@ -298,7 +298,7 @@ async def search(request: SearchRequest):
         # Build filter if source specified
         filter_metadata = {"source": request.source} if request.source else None
 
-        results = vector_store.search(
+        results = await vector_store.search(
             query=request.query,
             n_results=request.n_results,
             filter_metadata=filter_metadata,
@@ -358,7 +358,7 @@ async def find_duplicates(request: DuplicateRequest):
 
     try:
         # Use dedicated duplicate store with paraphrase embeddings
-        duplicates = duplicate_store.find_duplicates(
+        duplicates = await duplicate_store.find_duplicates(
             title=request.title,
             content=request.content,
             threshold=request.threshold,
@@ -388,7 +388,7 @@ async def index_item(request: IndexRequest):
         raise HTTPException(status_code=503, detail="Vector store not initialized")
 
     try:
-        added = vector_store.add_item(
+        added = await vector_store.add_item(
             item_id=request.id,
             title=request.title,
             content=request.content,
@@ -397,17 +397,31 @@ async def index_item(request: IndexRequest):
 
         # Also add to duplicate store
         if duplicate_store:
-            duplicate_store.add_item(
-                item_id=request.id,
-                title=request.title,
-                content=request.content,
-                metadata=request.metadata,
-            )
+            try:
+                await duplicate_store.add_item(
+                    item_id=request.id,
+                    title=request.title,
+                    content=request.content,
+                    metadata=request.metadata,
+                )
+            except Exception as dup_err:
+                # Rollback: remove from vector store to keep indexes consistent
+                logger.error(f"Duplicate store indexing failed, rolling back vector store: {dup_err}")
+                try:
+                    vector_store.collection.delete(ids=[request.id])
+                except Exception as rollback_err:
+                    logger.error(f"Rollback from vector store also failed: {rollback_err}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Duplicate store indexing failed (vector store rolled back): {dup_err}",
+                )
 
         return IndexResponse(
             indexed=1 if added else 0,
             total_in_store=vector_store.get_stats()["total_items"],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Indexing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -435,16 +449,31 @@ async def index_batch(request: IndexBatchRequest):
             for item in request.items
         ]
 
-        added = vector_store.add_items_batch(items)
+        added = await vector_store.add_items_batch(items)
 
         # Also add to duplicate store
         if duplicate_store:
-            duplicate_store.add_items_batch(items)
+            try:
+                await duplicate_store.add_items_batch(items)
+            except Exception as dup_err:
+                # Rollback: remove newly added items from vector store
+                logger.error(f"Duplicate store batch indexing failed, rolling back vector store: {dup_err}")
+                batch_ids = [item["id"] for item in items]
+                try:
+                    vector_store.collection.delete(ids=batch_ids)
+                except Exception as rollback_err:
+                    logger.error(f"Rollback from vector store also failed: {rollback_err}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Duplicate store batch indexing failed (vector store rolled back): {dup_err}",
+                )
 
         return IndexResponse(
             indexed=added,
             total_in_store=vector_store.get_stats()["total_items"],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Batch indexing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -501,7 +530,7 @@ async def get_storage_sizes():
     ds_size = _get_dir_size("/app/data/duplicatedb")
 
     vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
-    ds_items = duplicate_store.get_stats()["total_items"] if duplicate_store else 0
+    ds_items = (await duplicate_store.get_stats())["total_items"] if duplicate_store else 0
 
     return StorageSizeResponse(
         search_index_size_bytes=vs_size,
@@ -537,11 +566,11 @@ async def sync_duplicate_store():
         return SyncResponse(
             synced=0,
             skipped=0,
-            total_in_duplicate_index=duplicate_store.get_stats()["total_items"],
+            total_in_duplicate_index=(await duplicate_store.get_stats())["total_items"],
         )
 
     # Add to duplicate index in batches
-    synced = duplicate_store.add_items_batch(items)
+    synced = await duplicate_store.add_items_batch(items)
     skipped = len(items) - synced
 
     logger.info(f"Sync complete: {synced} synced, {skipped} skipped")
@@ -549,7 +578,7 @@ async def sync_duplicate_store():
     return SyncResponse(
         synced=synced,
         skipped=skipped,
-        total_in_duplicate_index=duplicate_store.get_stats()["total_items"],
+        total_in_duplicate_index=(await duplicate_store.get_stats())["total_items"],
     )
 
 

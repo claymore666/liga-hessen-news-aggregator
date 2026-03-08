@@ -11,7 +11,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { formatDistanceToNow } from 'date-fns'
 import { de } from 'date-fns/locale'
-import axios from 'axios'
+import api from '@/api/client'
 import TopicWordCloud from '@/components/TopicWordCloud.vue'
 import SourceDonutChart from '@/components/SourceDonutChart.vue'
 import PriorityBadge from '@/components/PriorityBadge.vue'
@@ -53,7 +53,7 @@ const totalItems = ref(0)
 async function loadItems() {
   itemsLoading.value = true
   try {
-    const { data } = await axios.get('/api/items', {
+    const { data } = await api.get('/items', {
       params: {
         page: 1,
         page_size: 30,

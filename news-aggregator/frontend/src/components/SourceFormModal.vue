@@ -15,6 +15,7 @@ const emit = defineEmits<{
 
 const sourcesStore = useSourcesStore()
 const loading = ref(false)
+const error = ref('')
 
 const form = ref({
   name: props.source?.name ?? '',
@@ -26,6 +27,7 @@ const form = ref({
 const isEditing = computed(() => !!props.source)
 
 const save = async () => {
+  error.value = ''
   loading.value = true
   try {
     if (isEditing.value && props.source) {
@@ -45,6 +47,9 @@ const save = async () => {
       })
     }
     emit('saved')
+  } catch (e) {
+    console.error('Failed to save source:', e)
+    error.value = e instanceof Error ? e.message : 'Speichern fehlgeschlagen'
   } finally {
     loading.value = false
   }
@@ -52,7 +57,7 @@ const save = async () => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" role="dialog" aria-modal="true">
     <div class="w-full max-w-lg rounded-lg bg-white shadow-xl">
       <div class="flex items-center justify-between border-b border-gray-200 p-4">
         <h2 class="text-lg font-medium text-gray-900">
@@ -123,6 +128,8 @@ const save = async () => {
             </span>
           </div>
         </div>
+
+        <p v-if="error" class="text-red-600 text-sm mt-2">{{ error }}</p>
 
         <div class="mt-6 flex justify-end gap-3">
           <button
