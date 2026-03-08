@@ -27,7 +27,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir setuptools
+    && pip install --no-cache-dir 'setuptools<76'
 
 # Install Playwright browser (Chromium only)
 RUN playwright install chromium
@@ -45,9 +45,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 # DATABASE_URL must be provided at runtime (PostgreSQL required)
 
-# Create non-root user and set ownership
-RUN useradd -r -s /bin/false -d /app appuser && chown -R appuser:appuser /app
-USER appuser
+# Note: Running as root inside container for compatibility with
+# volume mounts and Playwright browser. Network-isolated via Docker.
 
 # Expose port
 EXPOSE 8000
