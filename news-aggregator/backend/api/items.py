@@ -1258,8 +1258,6 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     "source_name": source_name,
                     "published_at": item.published_at,
                 }
-                old_metadata = dict(item.metadata_) if item.metadata_ else {}
-                old_priority_score = item.priority_score or 0
 
             # Phase 2: LLM processing — NO connection held
             analysis, conversation = await processor.analyze_from_data_with_messages(item_data)
@@ -1279,38 +1277,30 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
 
             # Phase 3: Quick write — update item in database
+            # Uses atomic json_merge to avoid overwriting classifier's
+            # pre_filter if it wrote between our Phase 1 read and now
             async with async_session_maker() as db:
-                result = await db.execute(select(Item).where(Item.id == item_id))
-                item = result.scalar_one_or_none()
-                if not item:
-                    continue
-
-                if analysis.get("summary"):
-                    item.summary = analysis["summary"]
-                if analysis.get("detailed_analysis"):
-                    item.detailed_analysis = analysis["detailed_analysis"]
+                from database import json_merge
+                from sqlalchemy import update as sql_update
 
                 # Map LLM priority (matches llm_worker mapping)
                 if llm_priority == "critical":
-                    item.priority = Priority.HIGH
-                    item.priority_score = max(old_priority_score, 95)
+                    new_priority = Priority.HIGH
+                    new_score = 95
                 elif llm_priority == "high":
-                    item.priority = Priority.HIGH
-                    item.priority_score = max(old_priority_score, 90)
+                    new_priority = Priority.HIGH
+                    new_score = 90
                 elif llm_priority == "medium":
-                    item.priority = Priority.MEDIUM
-                    item.priority_score = max(old_priority_score, 70)
+                    new_priority = Priority.MEDIUM
+                    new_score = 70
                 elif llm_priority == "low":
-                    item.priority = Priority.LOW
-                    item.priority_score = max(old_priority_score, 40)
+                    new_priority = Priority.LOW
+                    new_score = 40
                 else:
-                    item.priority = Priority.NONE
-                    item.priority_score = min(old_priority_score, 20)
+                    new_priority = Priority.NONE
+                    new_score = int(analysis.get("relevance_score", 0) * 100)
 
                 llm_aks = analysis.get("assigned_aks", [])
-                if llm_aks:
-                    item.assigned_aks = llm_aks
-                    item.assigned_ak = llm_aks[0] if llm_aks else None
 
                 llm_meta = {
                     "relevance_score": analysis.get("relevance_score", 0.5),
@@ -1327,8 +1317,24 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     "prompt_model": analysis.get("_prompt_model"),
                     "reprocessed_at": datetime.utcnow().isoformat(),
                 }
-                item.metadata_ = {**old_metadata, "llm_analysis": llm_meta}
 
+                update_values = {
+                    "priority": new_priority,
+                    "priority_score": new_score,
+                    "needs_llm_processing": False,
+                    "metadata_": json_merge(Item.metadata_, {"llm_analysis": llm_meta}),
+                }
+                if analysis.get("summary"):
+                    update_values["summary"] = analysis["summary"]
+                if analysis.get("detailed_analysis"):
+                    update_values["detailed_analysis"] = analysis["detailed_analysis"]
+                if llm_aks:
+                    update_values["assigned_aks"] = llm_aks
+                    update_values["assigned_ak"] = llm_aks[0] if llm_aks else None
+
+                await db.execute(
+                    sql_update(Item).where(Item.id == item_id).values(**update_values)
+                )
                 await db.commit()
                 processed += 1
 

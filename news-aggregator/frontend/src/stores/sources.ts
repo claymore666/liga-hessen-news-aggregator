@@ -6,7 +6,8 @@ import type { Source, SourceCreate, Channel, ChannelCreate, ConnectorType } from
 export const useSourcesStore = defineStore('sources', () => {
   const sources = ref<Source[]>([])
   const currentSource = ref<Source | null>(null)
-  const loading = ref(false)
+  const loadingCount = ref(0)
+  const loading = computed(() => loadingCount.value > 0)
   const fetchingSourceId = ref<number | null>(null)
   const fetchingChannelId = ref<number | null>(null)
   const error = ref<string | null>(null)
@@ -49,7 +50,7 @@ export const useSourcesStore = defineStore('sources', () => {
   )
 
   async function fetchSources(params?: { enabled?: boolean; has_errors?: boolean }) {
-    loading.value = true
+    loadingCount.value++
     error.value = null
     try {
       const response = await sourcesApi.list(params)
@@ -58,12 +59,12 @@ export const useSourcesStore = defineStore('sources', () => {
       error.value = e instanceof Error ? e.message : 'Failed to fetch sources'
       throw e
     } finally {
-      loading.value = false
+      loadingCount.value--
     }
   }
 
   async function fetchSource(id: number) {
-    loading.value = true
+    loadingCount.value++
     error.value = null
     try {
       const response = await sourcesApi.get(id)
@@ -76,12 +77,12 @@ export const useSourcesStore = defineStore('sources', () => {
       error.value = e instanceof Error ? e.message : 'Failed to fetch source'
       throw e
     } finally {
-      loading.value = false
+      loadingCount.value--
     }
   }
 
   async function createSource(data: SourceCreate) {
-    loading.value = true
+    loadingCount.value++
     error.value = null
     try {
       const response = await sourcesApi.create(data)
@@ -91,12 +92,12 @@ export const useSourcesStore = defineStore('sources', () => {
       error.value = e instanceof Error ? e.message : 'Failed to create source'
       throw e
     } finally {
-      loading.value = false
+      loadingCount.value--
     }
   }
 
   async function updateSource(id: number, data: Partial<Source>) {
-    loading.value = true
+    loadingCount.value++
     error.value = null
     try {
       const response = await sourcesApi.update(id, data)
@@ -108,12 +109,12 @@ export const useSourcesStore = defineStore('sources', () => {
       error.value = e instanceof Error ? e.message : 'Failed to update source'
       throw e
     } finally {
-      loading.value = false
+      loadingCount.value--
     }
   }
 
   async function deleteSource(id: number) {
-    loading.value = true
+    loadingCount.value++
     error.value = null
     try {
       await sourcesApi.delete(id)
@@ -123,7 +124,7 @@ export const useSourcesStore = defineStore('sources', () => {
       error.value = e instanceof Error ? e.message : 'Failed to delete source'
       throw e
     } finally {
-      loading.value = false
+      loadingCount.value--
     }
   }
 

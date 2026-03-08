@@ -2,14 +2,12 @@
 import { computed, ref } from 'vue'
 import type { Item, Priority, ItemEvent } from '@/types'
 import {
-  StarIcon,
   CheckIcon,
   EnvelopeOpenIcon,
   ArchiveBoxIcon,
   ClockIcon,
   XMarkIcon
 } from '@heroicons/vue/24/outline'
-import { StarIcon as StarIconSolid } from '@heroicons/vue/24/solid'
 import { itemsApi } from '@/api'
 
 const props = defineProps<{

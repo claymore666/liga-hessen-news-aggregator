@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import axios from 'axios'
 import api from '@/api/client'
 
 const props = defineProps<{
@@ -17,6 +18,7 @@ interface TopicCount {
 const topics = ref<TopicCount[]>([])
 const loading = ref(false)
 const totalItems = ref(0)
+const abortController = ref<AbortController | null>(null)
 
 const pastelColors = [
   '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
@@ -36,19 +38,26 @@ function getColor(index: number): string {
 }
 
 async function fetchTopics() {
+  abortController.value?.abort()
+  abortController.value = new AbortController()
   loading.value = true
   try {
     const params: Record<string, any> = { days: props.days }
     if (props.days >= 30) params.limit = 10
-    const { data } = await api.get('/stats/topic-counts', { params })
+    const { data } = await api.get('/stats/topic-counts', { params, signal: abortController.value.signal })
     topics.value = data.topics
     totalItems.value = data.total_items
   } catch (e) {
+    if (axios.isCancel(e)) return
     console.error('Failed to fetch topics', e)
   } finally {
     loading.value = false
   }
 }
+
+onUnmounted(() => {
+  abortController.value?.abort()
+})
 
 function navigateToTopic(topic: string) {
   router.push({ path: '/items', query: { topic } })

@@ -1,7 +1,7 @@
 # Frontend Dockerfile - Multi-stage build
 
 # Stage 1: Build
-FROM node:20-alpine AS builder
+FROM node:20-alpine3.21 AS builder
 
 WORKDIR /app
 
@@ -18,13 +18,19 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production
-FROM nginx:alpine
+FROM nginx:1.27-alpine
 
 # Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Ensure nginx can write to required directories
+RUN chown -R nginx:nginx /var/cache/nginx /var/log/nginx /run && \
+    chmod -R 755 /var/cache/nginx /var/log/nginx /run
+
+USER nginx
 
 # Expose port
 EXPOSE 80

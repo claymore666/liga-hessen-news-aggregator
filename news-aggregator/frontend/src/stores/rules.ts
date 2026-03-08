@@ -110,7 +110,11 @@ export const useRulesStore = defineStore('rules', () => {
   }
 
   function reorderRules(newOrder: number[]) {
-    const reordered = newOrder.map((id) => rules.value.find((r) => r.id === id)!)
+    const reordered = newOrder.map(id => {
+      const rule = rules.value.find(r => r.id === id)
+      if (!rule) throw new Error(`Rule ${id} not found during reorder`)
+      return rule
+    })
     rules.value = reordered
   }
 

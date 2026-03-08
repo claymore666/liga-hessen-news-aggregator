@@ -41,6 +41,7 @@ interface ItemEntry {
   priority: Priority
   is_read: boolean
   published_at: string
+  assigned_aks: string[]
   source?: { name: string }
   channel?: { connector_type: string }
   metadata?: Record<string, any>
@@ -221,8 +222,8 @@ onMounted(() => {
                   <SourceIcon v-if="item.channel" :connector-type="item.channel.connector_type" size="sm" />
                   <span class="max-w-20 truncate">{{ item.metadata?.source_domain ?? item.source?.name ?? '' }}</span>
                   <span class="text-gray-500">{{ formatTime(item.published_at) }}</span>
-                  <span v-if="item.metadata?.llm_analysis?.assigned_ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
-                    {{ item.metadata.llm_analysis.assigned_ak }}
+                  <span v-for="ak in item.assigned_aks" :key="ak" class="rounded bg-blue-300 px-1 text-xs font-medium text-black">
+                    {{ ak }}
                   </span>
                 </span>
               </div>

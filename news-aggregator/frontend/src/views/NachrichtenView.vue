@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { useItemsStore, useSourcesStore, useUiStore } from '@/stores'
+import { useItemsStore, useSourcesStore } from '@/stores'
 import { ArrowPathIcon } from '@heroicons/vue/24/outline'
 import FilterBar from '@/components/nachrichten/FilterBar.vue'
 import MessageList from '@/components/nachrichten/MessageList.vue'
 import TopicList from '@/components/nachrichten/TopicList.vue'
 import MessageDetail from '@/components/nachrichten/MessageDetail.vue'
 import FeedbackPanel from '@/components/nachrichten/FeedbackPanel.vue'
+import axios from 'axios'
 import { itemsApi } from '@/api'
 import type { TopicGroup, TopicItemBrief } from '@/api'
 import type { Priority } from '@/types'
@@ -16,18 +17,20 @@ import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 const route = useRoute()
 const itemsStore = useItemsStore()
 const sourcesStore = useSourcesStore()
-const uiStore = useUiStore()
 
-// Grid columns: 1/3-2/3 when sidebar collapsed, fixed 400px otherwise
-const gridColumns = computed(() => uiStore.messageListGridColumns)
+// Grid columns: always 50-50 split
+const gridColumns = '1fr 1fr'
 
 // View mode: 'date' (default) or 'topic'
 const viewMode = ref<'date' | 'topic'>('topic')
 const topicGroups = ref<TopicGroup[]>([])
 const topicUngroupedItems = ref<TopicItemBrief[]>([])
 const topicLoading = ref(false)
+const abortController = ref<AbortController | null>(null)
 
 const loadTopics = async () => {
+  abortController.value?.abort()
+  abortController.value = new AbortController()
   topicLoading.value = true
   try {
     const since = itemsStore.filters.since || undefined
@@ -35,6 +38,7 @@ const loadTopics = async () => {
     topicGroups.value = data.topics
     topicUngroupedItems.value = data.ungrouped_items
   } catch (e) {
+    if (axios.isCancel(e)) return
     console.error('Failed to load topics:', e)
     topicGroups.value = []
     topicUngroupedItems.value = []
@@ -79,6 +83,7 @@ const startReadTimer = (id: number) => {
 
 onUnmounted(() => {
   clearReadTimer()
+  abortController.value?.abort()
 })
 
 const selectedItem = computed(() => itemsStore.currentItem)

@@ -30,14 +30,9 @@ export const useUiStore = defineStore('ui', () => {
   // Sidebar width in pixels
   const sidebarWidth = computed(() => sidebarCollapsed.value ? 64 : 256)
 
-  // Grid template columns for the two-column layout
-  // Always 50-50 split - sidebar width affects both equally
-  const messageListGridColumns = computed(() => '1fr 1fr')
-
   return {
     sidebarCollapsed,
     sidebarWidth,
-    messageListGridColumns,
     toggleSidebar,
     setSidebarCollapsed,
     periodDays,

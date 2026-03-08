@@ -29,6 +29,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[]) {
 
       if (keyMatch && ctrlMatch && shiftMatch && altMatch) {
         event.preventDefault()
+        event.stopImmediatePropagation()
         shortcut.action()
         return
       }

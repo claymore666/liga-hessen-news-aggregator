@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -258,17 +258,26 @@ async def import_config(
         "merge",
         description="Import mode: 'replace' clears all config first, 'merge' adds new items only",
     ),
+    confirm_delete: bool = Query(
+        False,
+        description="Required for replace mode: confirms that existing items will be deleted via cascade",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> ConfigImportResult:
     """Import configuration with transaction rollback on failure.
 
     Modes:
     - **replace**: Clear all sources/channels/rules/settings and import fresh.
-      Items (news) are NOT deleted.
+      WARNING: Items are cascade-deleted with their channels. Set confirm_delete=true to proceed.
     - **merge**: Add new items, skip existing (matched by name).
 
     Uses database transaction - rolls back completely on any error.
     """
+    if mode == "replace" and not confirm_delete:
+        raise HTTPException(
+            status_code=400,
+            detail="Replace mode deletes all items via cascade. Set confirm_delete=true to proceed.",
+        )
     # First, validate the config
     validation = await validate_config(config, db)
     if not validation.valid:
@@ -290,22 +299,11 @@ async def import_config(
             # Note: Items are NOT deleted (they reference channels but we want to keep data)
             # Channels will be cascade deleted with sources
 
-            # First, get all channel IDs that will be deleted
-            # We need to null out channel_id in items to preserve them
-            channels_to_delete = await db.execute(select(Channel.id))
-            channel_ids = [c[0] for c in channels_to_delete.fetchall()]
-
-            if channel_ids:
-                # Import items model to update them
-                from models import Item
-                # Set channel_id to NULL for existing items (orphan them temporarily)
-                # Actually, let's just delete channels - items have ON DELETE CASCADE
-                # So we need a different approach: delete sources without cascading to items
-                # But our model has cascade="all, delete-orphan" on channels
-
-                # For now, let's warn and proceed - items will be deleted with their channels
+            # Warn about cascade: deleting sources cascades to channels and items
+            channel_count = await db.scalar(select(func.count(Channel.id)))
+            if channel_count:
                 logger.warning(
-                    f"Replace mode will delete {len(channel_ids)} channels and their items"
+                    f"Replace mode: deleting {channel_count} channels and their items (cascade)"
                 )
 
             await db.execute(delete(Rule))

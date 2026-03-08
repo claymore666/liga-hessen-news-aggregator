@@ -2,9 +2,8 @@
 fastapi>=0.115.0,<1.0
 uvicorn[standard]>=0.32.0
 
-# ML classifiers (sklearn/lightgbm only, no PyTorch)
+# ML classifiers (sklearn only, no PyTorch)
 scikit-learn>=1.3.0,<2.0
-lightgbm>=4.0.0,<5.0
 numpy>=1.24.0,<2.4.0  # numpy 2.4+ requires X86_V2 (SSE4.2), docker-ai VM only has SSE2
 
 # Embeddings via Ollama HTTP API

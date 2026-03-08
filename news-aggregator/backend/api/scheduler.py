@@ -81,7 +81,7 @@ async def update_fetch_interval(request: IntervalUpdateRequest) -> IntervalUpdat
     Note: This updates the running scheduler but does not persist across restarts.
     To persist, update the FETCH_INTERVAL_MINUTES environment variable.
     """
-    job = scheduler.get_job("fetch_all_sources")
+    job = scheduler.get_job("fetch_due_channels")
     if job is None:
         raise HTTPException(
             status_code=404,
@@ -91,7 +91,7 @@ async def update_fetch_interval(request: IntervalUpdateRequest) -> IntervalUpdat
     try:
         # Reschedule with new interval
         scheduler.reschedule_job(
-            "fetch_all_sources",
+            "fetch_due_channels",
             trigger=IntervalTrigger(minutes=request.minutes),
         )
 

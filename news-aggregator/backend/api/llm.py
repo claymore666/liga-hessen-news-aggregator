@@ -163,7 +163,7 @@ async def send_prompt(request: PromptRequest) -> PromptResponse:
         logger.error(f"LLM prompt failed: {e}")
         raise HTTPException(
             status_code=503,
-            detail=f"LLM request failed: {e}",
+            detail="LLM request failed. Check server logs for details.",
         )
 
 
@@ -317,82 +317,105 @@ async def get_unprocessed_count(db: AsyncSession) -> int:
 
 
 async def reprocess_unprocessed_items(limit: int = 100) -> int:
-    """Background task to reprocess items without LLM analysis."""
-    from database import async_session_maker
+    """Background task to reprocess items without LLM analysis.
+
+    Uses 3-phase pattern (read → LLM → write) with atomic json_merge
+    to avoid race conditions with concurrent classifier writes.
+    """
+    from database import async_session_maker, json_merge
     from services.processor import create_processor_from_settings
-    from services.pipeline import Pipeline
+    from sqlalchemy import update as sql_update
 
     logger.info(f"Starting background reprocessing of up to {limit} unprocessed items")
 
-    async with async_session_maker() as db:
-        # Get processor
-        processor = await create_processor_from_settings()
-        if not processor:
-            logger.warning("LLM processor not available, skipping reprocess")
-            return 0
+    processor = await create_processor_from_settings()
+    if not processor:
+        logger.warning("LLM processor not available, skipping reprocess")
+        return 0
 
-        # Get unprocessed items
+    # Phase 1: Read item IDs and data
+    async with async_session_maker() as db:
         result = await db.execute(
-            select(Item)
+            select(Item.id, Item.title, Item.content, Item.channel_id, Item.published_at)
             .where((Item.summary.is_(None)) | (Item.summary == ""))
             .order_by(Item.published_at.desc())
             .limit(limit)
         )
-        items = result.scalars().all()
+        item_rows = result.all()
 
-        if not items:
-            logger.info("No unprocessed items found")
-            return 0
+    if not item_rows:
+        logger.info("No unprocessed items found")
+        return 0
 
-        logger.info(f"Found {len(items)} unprocessed items to process")
+    logger.info(f"Found {len(item_rows)} unprocessed items to process")
 
-        processed = 0
-        for item in items:
-            try:
-                # Get source name for context
+    processed = 0
+    for row in item_rows:
+        try:
+            # Phase 1: Read source name
+            async with async_session_maker() as db:
                 from models import Channel, Source
-                channel = await db.get(Channel, item.channel_id)
+                channel = await db.get(Channel, row.channel_id)
                 source_name = "Unknown"
                 if channel:
                     source = await db.get(Source, channel.source_id)
                     if source:
                         source_name = source.name
+                item_data = {
+                    "title": row.title,
+                    "content": row.content,
+                    "source_name": source_name,
+                    "published_at": row.published_at,
+                }
 
-                # Run LLM analysis
-                analysis = await processor.analyze(item, source_name=source_name)
+            # Phase 2: LLM processing — NO connection held
+            analysis = await processor.analyze_from_data(item_data)
 
-                # Update item
-                item.summary = analysis.get("summary")
-                item.detailed_analysis = analysis.get("detailed_analysis")
+            llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
+            if llm_priority == "critical":
+                new_priority = Priority.HIGH
+                new_score = 95
+            elif llm_priority == "high":
+                new_priority = Priority.HIGH
+                new_score = 90
+            elif llm_priority == "medium":
+                new_priority = Priority.MEDIUM
+                new_score = 70
+            elif llm_priority == "low":
+                new_priority = Priority.LOW
+                new_score = 40
+            else:
+                new_priority = Priority.NONE
+                new_score = int(analysis.get("relevance_score", 0) * 100)
 
-                # Map priority string to enum (critical→high, high→medium, medium→low, low→none)
-                llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
-                if llm_priority == "critical":
-                    item.priority = Priority.HIGH
-                elif llm_priority == "high":
-                    item.priority = Priority.MEDIUM
-                elif llm_priority == "medium":
-                    item.priority = Priority.LOW
-                else:
-                    item.priority = Priority.NONE
+            llm_aks = analysis.get("assigned_aks", [])
 
-                item.priority_score = int(analysis.get("relevance_score", 0) * 100)
+            # Phase 3: Quick write with atomic metadata merge
+            async with async_session_maker() as db:
+                update_values = {
+                    "summary": analysis.get("summary"),
+                    "detailed_analysis": analysis.get("detailed_analysis"),
+                    "priority": new_priority,
+                    "priority_score": new_score,
+                    "needs_llm_processing": False,
+                    "metadata_": json_merge(Item.metadata_, {"llm_analysis": analysis}),
+                }
+                if llm_aks:
+                    update_values["assigned_aks"] = llm_aks
+                    update_values["assigned_ak"] = llm_aks[0] if llm_aks else None
 
-                # Store in metadata (use metadata_ to avoid SQLAlchemy naming conflict)
-                if item.metadata_ is None:
-                    item.metadata_ = {}
-                item.metadata_["llm_analysis"] = analysis
-
+                await db.execute(
+                    sql_update(Item).where(Item.id == row.id).values(**update_values)
+                )
                 await db.commit()
                 processed += 1
-                logger.debug(f"Processed item {item.id}: {item.title[:50]}...")
+                logger.debug(f"Processed item {row.id}: {row.title[:50]}...")
 
-            except Exception as e:
-                logger.error(f"Error processing item {item.id}: {e}")
-                await db.rollback()
+        except Exception as e:
+            logger.error(f"Error processing item {row.id}: {e}")
 
-        logger.info(f"Background reprocessing completed: {processed}/{len(items)} items")
-        return processed
+    logger.info(f"Background reprocessing completed: {processed}/{len(item_rows)} items")
+    return processed
 
 
 @router.get("/llm/status", response_model=LLMStatusResponse)

@@ -185,8 +185,13 @@ watch(
 )
 
 onMounted(async () => {
-  const response = await connectorsApi.list()
-  connectors.value = response.data
+  try {
+    const response = await connectorsApi.list()
+    connectors.value = response.data
+  } catch (e) {
+    console.error('Failed to load connectors:', e)
+    error.value = e instanceof Error ? e.message : 'Connector-Typen konnten nicht geladen werden'
+  }
 })
 </script>
 

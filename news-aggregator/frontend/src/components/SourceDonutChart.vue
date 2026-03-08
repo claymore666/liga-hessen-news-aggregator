@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { Doughnut } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -7,6 +7,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js'
+import axios from 'axios'
 import api from '@/api/client'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
@@ -26,6 +27,7 @@ const loading = ref(false)
 const selectedPriority = ref<string | null>(null)
 const resolveGa = ref<string | null>(null)
 const chartKey = ref(0)
+const abortController = ref<AbortController | null>(null)
 
 const priorities = [
   { key: null, label: 'Alle' },
@@ -57,21 +59,28 @@ const googleShades = [
 ]
 
 async function fetchData() {
+  abortController.value?.abort()
+  abortController.value = new AbortController()
   loading.value = true
   try {
     const params: Record<string, any> = { days: props.days }
     if (selectedPriority.value) params.priority = selectedPriority.value
     if (resolveGa.value) params.resolve_ga = resolveGa.value
 
-    const { data } = await api.get('/stats/source-donut', { params })
+    const { data } = await api.get('/stats/source-donut', { params, signal: abortController.value.signal })
     items.value = data
     chartKey.value++
   } catch (e) {
+    if (axios.isCancel(e)) return
     console.error('Failed to fetch data', e)
   } finally {
     loading.value = false
   }
 }
+
+onUnmounted(() => {
+  abortController.value?.abort()
+})
 
 const top10 = computed(() => {
   const sorted = [...items.value]

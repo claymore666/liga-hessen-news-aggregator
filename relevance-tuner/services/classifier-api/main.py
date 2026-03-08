@@ -4,7 +4,9 @@ FastAPI service for news relevance classification and semantic search.
 Embeddings generated via Ollama HTTP API (no local GPU required).
 """
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -12,6 +14,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from classifier import EmbeddingClassifier, VectorStore, DuplicateStore
+
+__version__ = "2.1.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,13 +90,18 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Cleanup: close HTTP clients
+    if classifier:
+        await classifier.embedder.close()
+    if duplicate_store:
+        await duplicate_store.embedder.close()
     logger.info("Shutting down classifier service")
 
 
 app = FastAPI(
     title="Embedding Classifier API",
     description="News relevance classification and semantic search (embeddings via Ollama)",
-    version="2.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -449,6 +458,9 @@ async def index_batch(request: IndexBatchRequest):
             for item in request.items
         ]
 
+        # Before adding to vector store, check which IDs already exist
+        existing_vs_ids = set(vector_store.collection.get(ids=[str(item["id"]) for item in items], include=[])["ids"])
+
         added = await vector_store.add_items_batch(items)
 
         # Also add to duplicate store
@@ -456,11 +468,13 @@ async def index_batch(request: IndexBatchRequest):
             try:
                 await duplicate_store.add_items_batch(items)
             except Exception as dup_err:
-                # Rollback: remove newly added items from vector store
+                # Rollback: only remove IDs that were newly added (not pre-existing)
                 logger.error(f"Duplicate store batch indexing failed, rolling back vector store: {dup_err}")
                 batch_ids = [item["id"] for item in items]
+                newly_added = [id for id in batch_ids if id not in existing_vs_ids]
                 try:
-                    vector_store.collection.delete(ids=batch_ids)
+                    if newly_added:
+                        vector_store.collection.delete(ids=newly_added)
                 except Exception as rollback_err:
                     logger.error(f"Rollback from vector store also failed: {rollback_err}")
                 raise HTTPException(
@@ -484,7 +498,7 @@ async def root():
     """Root endpoint with API info."""
     return {
         "service": "Embedding Classifier API",
-        "version": "2.1.0",
+        "version": __version__,
         "endpoints": {
             "/health": "Health check with index item counts (GET)",
             "/storage": "Storage sizes for search and duplicate indexes (GET)",
@@ -505,7 +519,6 @@ async def root():
 
 def _get_dir_size(path: str) -> int:
     """Get total size of a directory in bytes."""
-    import os
     total = 0
     if os.path.exists(path):
         for dirpath, dirnames, filenames in os.walk(path):
@@ -526,8 +539,9 @@ async def get_storage_sizes():
     - Search index: nomic embeddings for semantic search
     - Duplicate index: paraphrase embeddings for duplicate detection
     """
-    vs_size = _get_dir_size("/app/data/vectordb")
-    ds_size = _get_dir_size("/app/data/duplicatedb")
+    loop = asyncio.get_event_loop()
+    vs_size = await loop.run_in_executor(None, _get_dir_size, "/app/data/vectordb")
+    ds_size = await loop.run_in_executor(None, _get_dir_size, "/app/data/duplicatedb")
 
     vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
     ds_items = (await duplicate_store.get_stats())["total_items"] if duplicate_store else 0

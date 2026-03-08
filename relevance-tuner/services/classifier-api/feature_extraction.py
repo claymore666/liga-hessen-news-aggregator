@@ -201,6 +201,38 @@ AK_KEYWORDS = {
 
 
 # ============================================================================
+# Pre-compiled regex patterns (avoid recompiling per keyword per call)
+# ============================================================================
+
+def _compile_substring_re(keywords: set) -> re.Pattern:
+    """Compile a regex that matches any keyword as a substring (case-insensitive)."""
+    # Sort by length descending so longer keywords match first (greedy)
+    sorted_kws = sorted(keywords, key=len, reverse=True)
+    return re.compile('|'.join(re.escape(kw) for kw in sorted_kws), re.IGNORECASE)
+
+def _compile_word_boundary_re(keywords: set) -> re.Pattern:
+    """Compile a regex that matches any keyword with word boundaries (case-insensitive)."""
+    sorted_kws = sorted(keywords, key=len, reverse=True)
+    return re.compile(r'\b(?:' + '|'.join(re.escape(kw) for kw in sorted_kws) + r')\b', re.IGNORECASE)
+
+_HESSEN_RE = _compile_substring_re(HESSEN_KEYWORDS)
+_OTHER_BUNDESLAENDER_RE = _compile_word_boundary_re(OTHER_BUNDESLAENDER)
+_SOCIAL_RE = _compile_substring_re(SOCIAL_KEYWORDS)
+
+# Per-Bundesland patterns (word boundary)
+_BUNDESLAND_RES = {
+    key: _compile_word_boundary_re(kws)
+    for key, kws in BUNDESLAND_KEYWORDS.items()
+}
+
+# Per-AK topic patterns (substring)
+_AK_RES = {
+    key: _compile_substring_re(kws)
+    for key, kws in AK_KEYWORDS.items()
+}
+
+
+# ============================================================================
 # Feature extraction
 # ============================================================================
 
@@ -246,20 +278,19 @@ def extract_features(title: str, content: str, source: str = "") -> np.ndarray:
     full_text = f"{title} {content}"
     text_lower = _normalize(full_text)
 
-    # Geographic features
-    hessen_hits = _count_keyword_hits(full_text, HESSEN_KEYWORDS)
-    other_hits = _count_keyword_hits(full_text, OTHER_BUNDESLAENDER, word_boundary=True)
+    # Geographic features (using pre-compiled patterns)
+    hessen_hits = len(_HESSEN_RE.findall(full_text))
+    other_hits = len(_OTHER_BUNDESLAENDER_RE.findall(full_text))
 
     has_hessen = float(hessen_hits > 0)
-    title_has_hessen = float(_count_keyword_hits(title, HESSEN_KEYWORDS) > 0)
+    title_has_hessen = float(bool(_HESSEN_RE.search(title)))
     geo_ratio = hessen_hits / (hessen_hits + other_hits + 1)  # 0-1 range
 
     # Per-Bundesland detection (15 other states, word-boundary matching)
     state_features = []
     for state_key in BUNDESLAND_KEYWORDS:
         state_features.append(
-            float(_count_keyword_hits(full_text, BUNDESLAND_KEYWORDS[state_key],
-                                      word_boundary=True) > 0)
+            float(bool(_BUNDESLAND_RES[state_key].search(full_text)))
         )
 
     # Bundesweit/federal signal
@@ -291,13 +322,13 @@ def extract_features(title: str, content: str, source: str = "") -> np.ndarray:
         text_lower,
     )))
 
-    # Social policy topic signal
-    has_social_keywords = float(_count_keyword_hits(full_text, SOCIAL_KEYWORDS) > 0)
+    # Social policy topic signal (using pre-compiled pattern)
+    has_social_keywords = float(bool(_SOCIAL_RE.search(full_text)))
 
     # Per-AK topic keyword hits (count, not just boolean — intensity matters)
     ak_features = []
     for ak_key in AK_KEYWORDS:
-        hits = _count_keyword_hits(full_text, AK_KEYWORDS[ak_key])
+        hits = len(_AK_RES[ak_key].findall(full_text))
         ak_features.append(float(hits))
 
     # Source-aware combo features (interaction terms for FP reduction)

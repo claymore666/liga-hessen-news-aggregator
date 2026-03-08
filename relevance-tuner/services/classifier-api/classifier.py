@@ -21,7 +21,7 @@ from chromadb.config import Settings
 import httpx
 import numpy as np
 
-from feature_extraction import extract_features, FEATURE_VERSION
+from feature_extraction import extract_features
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,10 @@ class OllamaEmbedder:
             result = False
         self._availability_cache = (result, now)
         return result
+
+    async def close(self):
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
 
     async def encode(
         self,
@@ -151,7 +155,7 @@ class EmbeddingClassifier:
     """
 
     # Classifier version info (updated when model is retrained)
-    VERSION = "2.1.0-multilabel"
+    VERSION = "2.1.0"
     TRAINED_AT = "2026-01-13"
     TRAINING_ITEMS = 1680
 
@@ -208,7 +212,7 @@ class EmbeddingClassifier:
         features_info = ""
         if instance.feature_scaler is not None:
             features_info = f", features=v{instance.feature_version}"
-        print(f"Loaded classifier: {instance.backend} (multilabel={instance.multilabel}{features_info})")
+        logger.info(f"Loaded classifier: {instance.backend} (multilabel={instance.multilabel}{features_info})")
         return instance
 
     async def predict(
@@ -355,7 +359,7 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},
         )
 
-        print(f"VectorStore initialized: {self.collection.count()} items in collection")
+        logger.info(f"VectorStore initialized: {self.collection.count()} items in collection")
 
     async def add_item(
         self,
@@ -625,7 +629,7 @@ class DuplicateStore:
             metadata={"hnsw:space": "cosine"},
         )
 
-        print(f"DuplicateStore initialized: {self.collection.count()} items in collection")
+        logger.info(f"DuplicateStore initialized: {self.collection.count()} items in collection")
 
     @staticmethod
     def _normalize_fetched_at(meta: dict) -> dict:

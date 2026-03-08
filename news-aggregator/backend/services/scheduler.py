@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from config import settings
@@ -611,10 +611,10 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
 
         await db.commit()
 
-        # Count remaining items
-        count_query = select(Item).where(Item.needs_llm_processing == True)  # noqa: E712
-        remaining_result = await db.execute(count_query)
-        remaining = len(remaining_result.scalars().all())
+        # Count remaining items (use COUNT instead of loading all into memory)
+        remaining = await db.scalar(
+            select(func.count(Item.id)).where(Item.needs_llm_processing == True)  # noqa: E712
+        ) or 0
 
     if processed > 0:
         logger.info(f"LLM retry complete: {processed} processed, {errors} errors, {remaining} remaining")

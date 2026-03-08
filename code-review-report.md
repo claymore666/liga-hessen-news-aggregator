@@ -1,15 +1,15 @@
 # Code Review Report
 
 **Project**: Liga Hessen News Aggregator
-**Language(s)**: Python (FastAPI backend, ML classifier), TypeScript/Vue 3 (frontend)
+**Language(s)**: Python (FastAPI backend, classifier API), TypeScript/Vue.js (frontend)
 **Date**: 2026-03-08
-**Scope**: Full codebase — backend, frontend, classifier API, training pipeline
-**Files reviewed**: 962 source files
-**Lines of code**: ~280,000 (258k Python, 15k TypeScript, 7k Vue)
+**Scope**: Full codebase — backend services, API endpoints, frontend components, classifier API, Docker/infrastructure
+**Files reviewed**: 184 source files
+**Lines of code**: ~55,000
 
 ## Executive Summary
 
-This is a mature, production-running news aggregation system with solid architecture — clear separation of API/services/connectors, async processing pipeline, ML classification, and versioned LLM prompt management. The biggest risks are: (1) **synchronous blocking calls in the classifier API's async endpoints**, meaning one slow Ollama call blocks all concurrent requests; (2) **silent error swallowing** in several code paths that marks failed items as "irrelevant" instead of retrying; and (3) **no authentication on any endpoint**, including admin operations that control LLM prompts, worker lifecycle, and data deletion. The codebase is well-tested (612 tests, 93.9% pass rate) but 37 tests are stale relative to recent code changes. The single highest-value improvement would be adding retry logic and proper error propagation throughout the LLM/classifier processing pipeline.
+The codebase is a well-structured, production-running news aggregation system with strong architectural patterns (3-phase DB release for LLM calls, leader election for workers, parallel channel fetching). However, several **critical correctness bugs** remain: a priority mapping mismatch silently downgrades items on batch reprocess, a scheduler API endpoint references a non-existent job ID, and non-atomic metadata writes in reprocess endpoints create race conditions already solved elsewhere in the codebase. On the infrastructure side, all three Docker containers run as root, 48 MB of binary files are tracked in git, and Python dependencies lack upper version bounds. The frontend is clean TypeScript with no type errors, but has XSS surface via `v-html`, race conditions from unsuperseded API calls, and a non-functional save button left in production. The single highest-impact change would be **fixing the priority mapping in `api/llm.py`** (C-1), as it silently corrupts data quality on every batch reprocess.
 
 ## Tooling Results
 
@@ -17,189 +17,319 @@ This is a mature, production-running news aggregation system with solid architec
 
 | Tool | Version | Findings | Notes |
 |------|---------|----------|-------|
-| ruff | 0.15.5 | 444 default, 1877 extended | Installed for review |
-| py_compile | 3.12.13 | 0 syntax errors | All core files clean |
-| pytest | 9.0.2 | 575 pass, 37 fail, 9 skip | Run inside Docker container |
+| ruff | 0.15.5 | 64 unused imports (F401), 128 unused variables (F841) | Backend + classifier |
+| vue-tsc | (bundled) | 0 errors | Frontend passes cleanly |
+| npm audit | npm 10.x | 7 vulnerabilities (3 high, 4 moderate) | minimatch ReDoS, rollup path traversal |
+| pip-audit | — | Skipped | PEP 668 blocks host install |
+| pytest | — | Skipped on host | 612 passed, 0 failed, 9 skipped (last Docker run) |
 
-**Build**: Pass (Docker containers build and run successfully)
-**Tests**: 575 passed, 37 failed, 9 skipped (93.9% pass rate)
+**Build**: Pass (all three services build successfully)
+**Tests**: 612 passed, 0 failed, 9 skipped (backend, last Docker run)
 
 ## Findings
 
-### Critical
+### 🔴 Critical
 
-#### C-1: Synchronous blocking in classifier API async endpoints — `classifier-api/main.py:264+`
+#### C-1: Priority mapping in `reprocess_unprocessed_items` silently downgrades every item — `api/llm.py:368-377`
 
-All FastAPI endpoints are `async def` but call synchronous methods: `classifier.predict()` makes blocking `httpx.Client` HTTP calls to Ollama, `vector_store.search()` does blocking ChromaDB operations. **One slow Ollama call (up to 120s timeout) blocks all concurrent requests** to the classifier API.
+The priority mapping here shifts everything down one level: `critical→HIGH, high→MEDIUM, medium→LOW, low→NONE`. Every other code path (`llm_worker.py:577-591`, `api/items.py:1294-1308`) correctly maps `critical→HIGH, high→HIGH, medium→MEDIUM, low→LOW`. Any admin batch reprocess via this endpoint systematically downgrades priorities — a HIGH-priority policy item silently becomes MEDIUM.
 
-**Fix:** Use `httpx.AsyncClient` in `OllamaEmbedder` or wrap calls with `await asyncio.to_thread(...)`.
+**Fix:**
+```python
+if llm_priority == "critical":
+    item.priority = Priority.HIGH
+elif llm_priority == "high":
+    item.priority = Priority.HIGH  # was: Priority.MEDIUM
+elif llm_priority == "medium":
+    item.priority = Priority.MEDIUM  # was: Priority.LOW
+elif llm_priority == "low":
+    item.priority = Priority.LOW  # was: Priority.NONE
+else:
+    item.priority = Priority.NONE
+```
 
-#### C-2: No authentication on admin endpoints — all API files
+---
 
-All endpoints including prompt management (`api/prompts.py:136,178`), worker control (`api/workers.py`), item reprocessing (`api/items.py`), and classifier data deletion (`classifier-api/main.py:590`) are completely unprotected. An attacker who reaches port 8000 could change the LLM system prompt to exfiltrate data or produce malicious outputs.
+#### C-2: Scheduler interval update references wrong job ID — `api/scheduler.py:84,94`
 
-**Mitigation (current):** Port 8000 is not exposed on docker-ai's LAN (SSH tunnel only). But this is defense by obscurity, not defense in depth.
+`get_job("fetch_all_sources")` and `reschedule_job("fetch_all_sources", ...)` reference a job ID that does not exist. The actual job registered in `services/scheduler.py:770` uses ID `"fetch_due_channels"`. The PUT `/scheduler/interval` endpoint always returns 404.
 
-**Fix:** Add API key middleware or bearer token auth for admin endpoints at minimum. Read key from env var.
+**Fix:** Replace `"fetch_all_sources"` with `"fetch_due_channels"` on lines 84 and 94.
 
-#### C-3: Reprocess endpoint holds DB connections during LLM calls — `api/items.py:1192-1280`
+---
 
-`_reprocess_items_task` calls `processor.analyze(item)` while holding a DB session open. Each LLM call takes 3-60 seconds. With 471 items, this holds a DB connection for ~23 minutes straight. The LLM worker was specifically refactored to use a read-process-write pattern to avoid this. The reprocess endpoint should use the same pattern.
+#### C-3: Reprocess endpoints use non-atomic metadata writes — `api/items.py:1330`, `api/llm.py:382-384`
 
-**Fix:** Refactor to use `analyze_from_data()` with the 3-phase pattern from `llm_worker.py`.
+`api/items.py` reads `old_metadata` in Phase 1, processes LLM in Phase 2 (10-60s), then writes `{**old_metadata, "llm_analysis": llm_meta}` in Phase 3 using a stale snapshot. `api/llm.py` mutates `item.metadata_` in-place via ORM. Both ignore the concurrent-safe `json_merge` pattern already used in `llm_worker.py:648`.
 
-#### C-4: Reprocess endpoint skips topic extraction — `api/items.py:1218`
+If the classifier worker writes `pre_filter` metadata between Phase 1 and Phase 3, the classifier's update is silently overwritten.
 
-`_reprocess_items_task` uses `processor.analyze(item)` instead of `analyze_from_data_with_messages()`. Reprocessed items never get topic classification, meaning they lack topic labels that items processed by the LLM worker receive.
+**Fix:** Use `json_merge` with a `sql_update` statement, same pattern as `llm_worker.py` Phase 3.
 
-**Fix:** Use `analyze_from_data_with_messages()` and add the topic extraction step.
+---
 
-#### C-5: XSS via v-html in frontend — `MOTDModal.vue:179`, `SettingsView.vue:415`
+#### C-4: `reorderRules` can produce array with `undefined` entries — `frontend/src/stores/rules.ts:112-115`
 
-`v-html="formattedMessage"` renders MOTD content as raw HTML without sanitization. While currently admin-only content, a compromised admin account or future user-facing MOTD would allow script injection.
+The function maps over `newOrder` IDs using `.find()` with a non-null assertion (`!`). If any ID doesn't match, `find()` returns `undefined` — the `!` suppresses the TypeScript error, corrupting reactive state and causing runtime crashes when templates iterate over `rules`.
 
-**Fix:** Use a sanitization library (DOMPurify) or render with `v-text` and CSS for formatting.
+**Fix:**
+```ts
+const reordered = newOrder.map(id => {
+  const rule = rules.value.find(r => r.id === id)
+  if (!rule) throw new Error(`Rule ${id} not found`)
+  return rule
+})
+```
 
-#### C-6: Index inconsistency on partial failure — `classifier-api/main.py:390-413`
+---
 
-In `/index`, if `vector_store.add_item()` succeeds but `duplicate_store.add_item()` fails, the item exists in the search index but not the duplicate index. No rollback is attempted. The response reports success even though stores are now inconsistent.
+#### C-5: All three Docker containers run as root — all Dockerfiles
 
-**Fix:** Wrap both operations in a try block; if the second fails, roll back the first (delete from search store) or return a partial-success response.
+No `USER` directive in any Dockerfile. Running as root increases blast radius of container escapes.
 
-### Warning
+**Fix:** Add `RUN useradd -r -s /bin/false appuser` + `USER appuser` to backend and classifier Dockerfiles. Use `USER nginx` for the frontend.
 
-#### W-1: Processor prompt caching without invalidation — `llm_worker.py:165-171`
+---
 
-`_get_processor` caches the processor instance (and its prompt) forever. Changing the active prompt via the `/prompts/admin` API has no effect until the LLM worker restarts. The API acknowledges this in a comment but there is no signal mechanism.
+#### C-6: 48 MB of binary files tracked in git
 
-**Fix:** Add a `_prompt_cache_ttl` (e.g., 5 minutes) or a `/admin/reload-prompt` endpoint that signals the worker.
+- `relevance-tuner/services/classifier-api/models/embedding_classifier_nomic-v2.pkl` (34.8 MB)
+- `relevance-tuner/services/classifier-api/models/embedding_classifier_nomic-v2.pkl.backup-20260116` (11.8 MB)
+- `news-aggregator/backups/liga_news_20260110_175203.db.gz` (1.8 MB)
 
-#### W-2: `retry_llm_processing` is a divergent, inferior code path — `scheduler.py:495-622`
+These bloat every clone permanently. The DB backup may contain PII.
 
-This function still exists and is callable via API but uses an older processing pattern without topic extraction, prompt tracking, or duplicate confirmation. Items processed through this path get inferior treatment compared to the LLM worker.
+**Fix:** Use Git LFS for model files. Remove backup from git with `git rm --cached`. Add `news-aggregator/backups/` to `.gitignore`.
 
-**Fix:** Remove the function or redirect it to use the LLM worker's processing path.
+---
 
-#### W-3: 37 failing tests — various test files
+#### C-7: httpx.AsyncClient never closed in classifier — `classifier-api/classifier.py:42`
 
-Tests are stale relative to code changes:
-- `test_proxy_manager.py` (8 failures) — ProxyManager API changes
-- `test_llm_worker.py` (5) — worker pause/resume changes
-- `test_classifier_toggles.py` (5) — toggle API changes
-- `test_admin_api.py` (3) — logs endpoint changes
-- `test_processor.py` (2) — parse/default analysis changes
-- Others: 13 failures across 6 more files
+`OllamaEmbedder.__init__` creates `self._client = httpx.AsyncClient(...)` but has no `close()` method. Two instances leak connections on every shutdown.
 
-**Fix:** Update tests to match current code. Priority: `test_processor.py` (validates the error propagation fix from C-3).
+**Fix:** Add `async def close(self)` calling `await self._client.aclose()`. Call from lifespan teardown.
 
-#### W-4: No input size limits on classifier API — `classifier-api/main.py:102, 175`
+---
 
-`ClassifyRequest` accepts unbounded `content` strings. `IndexBatchRequest` accepts unbounded item lists. A malicious or buggy caller could send a multi-megabyte request or thousands of items, causing OOM or blocking the service.
+### 🟡 Warning
 
-**Fix:** Add `max_length` validators on Pydantic models: `content: str = Field(max_length=50000)`, `items: list = Field(max_length=500)`.
+#### W-1: Empty `admin_api_key` disables all admin authentication — `api/auth.py:14-15`
 
-#### W-5: O(n^2) lookup in batch indexing — `classifier.py:414, 667`
+If `ADMIN_API_KEY` is unset or empty, the guard returns immediately — unauthenticated access to all admin endpoints (config import/export, scheduler control, worker management).
 
-`documents.append(texts[new_items.index(item)][:2000])` does a linear scan of `new_items` for each item. For a batch of 5000 items = 25 million comparisons.
+**Fix:** Log a warning at startup when `admin_api_key` is empty. Consider requiring it in production.
 
-**Fix:** Use `enumerate()` and index by position, or build a dict mapping item to text.
+---
 
-#### W-6: TOCTOU race in ChromaDB add_item — `classifier.py:356-377`
+#### W-2: Leader election lock file not resilient to crashes — `main.py:33-52`
 
-The check-then-add pattern (`get(ids=[item_id])` then `add(...)`) is not atomic. Concurrent requests can both see the item as non-existing and both attempt to add.
+If the leader worker crashes (OOM, unhandled exception), the lock file is never cleaned up. No other worker can become leader until container restart. Background workers (scheduler, LLM, classifier) stop permanently.
 
-**Fix:** Use `upsert()` instead of get-then-add.
+**Fix:** Use `fcntl.flock` (auto-releases on process death) instead of `O_CREAT | O_EXCL`.
 
-#### W-7: `_default_analysis` returns inconsistent priority — `processor.py:718`
+---
 
-`_default_analysis` returns `priority: "low"` for failed items, but the system uses `priority: None` for irrelevant items. This inconsistency can cause items to appear in LOW priority views when they should be filtered out.
+#### W-3: Config import replace mode cascades deletion to all items — `api/config.py:298-313`
 
-**Fix:** Change to `"priority": None` to match the irrelevant item convention.
+Replace mode deletes all sources, cascading to channels and items — destroying all historical news data with no confirmation step.
 
-#### W-8: `get_db()` auto-commits on success — `database.py:141-149`
+**Fix:** Add `confirm_delete_items: bool = Query(False)` parameter required for replace mode.
 
-Every request (including read-only GETs) issues a COMMIT. Any accidental writes in GET handlers are silently committed. This is unnecessary overhead and a safety concern.
+---
 
-**Fix:** Make commit explicit in write endpoints, or use separate read-only session factory for GET endpoints.
+#### W-4: `reprocess_unprocessed_items` processes items synchronously in HTTP request — `api/llm.py:330-394`
 
-#### W-9: Missing error handling in frontend form saves — `SourceFormModal.vue:28`, `RuleFormModal.vue:58`, `ChannelFormModal.vue:145`
+Unlike `api/items.py` which uses `background_tasks.add_task(...)`, this endpoint processes all items synchronously. Each LLM call takes 10-60s, causing timeouts on any non-trivial batch.
 
-Three modal save functions have no error handling. If the API call fails, the user sees no feedback and the modal stays open.
+**Fix:** Move processing loop into a BackgroundTasks handler.
 
-**Fix:** Add try/catch with user-visible error display (toast or inline error message).
+---
 
-#### W-10: No retry logic for transient Ollama failures in classifier — `classifier.py:82-86`
+#### W-5: LLM worker backoff sleep is not interruptible — `services/llm_worker.py:237-239`
 
-`encode()` does a single HTTP call with no retry. Transient network blips or Ollama model-loading delays fail the entire request.
+`await asyncio.sleep(backoff)` with up to 300s. If LLM recovers during sleep, or fresh items arrive, the worker is stuck waiting.
 
-**Fix:** Add retry with exponential backoff (3 attempts, 1s/2s/4s delays).
+**Fix:** Use `asyncio.wait` on a wake event with timeout.
 
-### Info
+---
+
+#### W-6: Stale `old_metadata` and `old_priority_score` in 3-phase reprocess — `api/items.py:1261,1330`
+
+Phase 1 captures `old_metadata` and `old_priority_score`. Phase 2 (10-60s LLM call) elapses. Phase 3 uses stale values for `max(old_priority_score, X)` comparisons.
+
+**Fix:** Re-read current `priority_score` in Phase 3, or use SQL `GREATEST()` in the update.
+
+---
+
+#### W-7: `v-html` with MOTD content relies on fragile manual escaping — `frontend/src/components/MOTDModal.vue:191`
+
+`escapeHtml()` escapes `&`, `<`, `>` but not quotes. Pattern is fragile — reordering escape and HTML construction steps would introduce XSS.
+
+**Fix:** Use DOMPurify or refactor to Vue template rendering.
+
+---
+
+#### W-8: `v-html` for email preview trusts server content — `frontend/src/views/SettingsView.vue:416`
+
+`v-html="preview.html_body"` renders server-generated HTML that includes RSS feed titles/summaries. A malicious source could inject script tags.
+
+**Fix:** Render in a sandboxed `<iframe srcdoc="...">`.
+
+---
+
+#### W-9: No request cancellation for superseded API calls (race condition) — multiple frontend components
+
+When filters change rapidly, multiple API requests fire. Slower earlier responses can overwrite fresher data.
+
+**Files:** `TopicWordCloud.vue`, `SourceDonutChart.vue`, `NachrichtenView.vue`
+
+**Fix:** Use `AbortController` to cancel in-flight requests when a new one starts.
+
+---
+
+#### W-10: `saveSettings` is a no-op with TODO in production — `frontend/src/views/SettingsView.vue:93-99`
+
+"Einstellungen speichern" button shows success message but contains `// TODO: Implement settings API`. Users think settings are saved when they aren't.
+
+**Fix:** Either implement the API call or disable/remove the non-functional button.
+
+---
+
+#### W-11: Keyboard shortcut `r` conflicts between global and page-level — `useKeyboardShortcuts.ts:67`, `NachrichtenView.vue:176`
+
+Both global (`r` = navigate to Rules) and page-level (`r` = toggle relevance) handlers fire simultaneously on the Nachrichten page.
+
+**Fix:** Have page-specific shortcuts call `event.stopImmediatePropagation()`.
+
+---
+
+#### W-12: Shared `loading` flag across concurrent store operations — `frontend/src/stores/sources.ts`
+
+A single `loading` ref shared by 5 operations. First to complete sets `loading = false`, hiding in-progress state of concurrent operations.
+
+**Fix:** Use a counter: `loadingCount++` on start, `loadingCount--` in `finally`.
+
+---
+
+#### W-13: Classifier batch rollback deletes pre-existing items — `classifier-api/main.py:458-469`
+
+On failure, rollback does `collection.delete(ids=batch_ids)` using ALL request IDs, not just newly-added ones. Pre-existing items get deleted.
+
+**Fix:** Track which IDs were actually added and only roll back those.
+
+---
+
+#### W-14: Synchronous `os.walk` blocks async event loop — `classifier-api/main.py:506-518`
+
+`_get_dir_size` uses synchronous I/O in an async endpoint. Stalls all concurrent requests during directory walk.
+
+**Fix:** `await asyncio.get_event_loop().run_in_executor(None, _get_dir_size, path)`
+
+---
+
+#### W-15: Backend Python dependencies lack upper version bounds — `backend/requirements.txt`
+
+All deps use only `>=` (e.g., `fastapi>=0.115.0`). A future install could pull incompatible major versions.
+
+**Fix:** Add upper bounds: `fastapi>=0.115.0,<1.0`, `sqlalchemy>=2.0.0,<3.0`, etc.
+
+---
+
+#### W-16: `build-essential` left in production images — backend + classifier Dockerfiles
+
+~200 MB of compiler toolchain remains in production images, increasing attack surface and image size.
+
+**Fix:** Multi-stage build or `apt-get purge -y build-essential && apt-get autoremove -y`.
+
+---
+
+#### W-17: No resource limits on any Docker service — both compose files
+
+On docker-ai (2-core VM), a runaway process could OOM the host.
+
+**Fix:** Add `deploy.resources.limits.memory` to compose services.
+
+---
+
+#### W-18: Frontend base images unpinned — `frontend/Dockerfile`
+
+`node:20-alpine` and `nginx:alpine` have no patch versions. Future pulls could break builds.
+
+**Fix:** Pin to specific versions: `node:20.11-alpine`, `nginx:1.27-alpine`.
+
+---
+
+#### W-19: `send_prompt` error response leaks internal details — `api/llm.py:162-167`
+
+`detail=f"LLM request failed: {e}"` may expose Ollama URLs, model names, connection details.
+
+**Fix:** Return generic error; log details server-side.
+
+---
+
+### 🔵 Info
 
 | ID | File | Finding |
 |----|------|---------|
-| I-1 | `models.py:8,10` | Unused imports: `UUID`, `ARRAY`, `uuid` |
-| I-2 | `processor.py:683` | Redundant `import re` inside method (already at module level) |
-| I-3 | `main.py:298,328` | Redefined `stop_log_writer` and `close_redis` (F811) |
-| I-4 | `scripts/backfill_topics.py` | 6 duplicate dictionary keys silently overwritten (F601) |
-| I-5 | Various (7 files) | f-strings without placeholders (F541) |
-| I-6 | 24 prod files, 20 test files | 44 unused imports (F401) |
-| I-7 | 3 prod files, 8 test files | 11 unused variables (F841) |
-| I-8 | 123 locations | `datetime.utcnow()` deprecated in Python 3.12+ (DTZ003) |
-| I-9 | `pipeline.py:521-524` | Monkey-patching ORM objects with dynamic attributes |
-| I-10 | `main.py:86-225` | Hand-rolled SQL migrations without rollback mechanism |
-| I-11 | `classifier.py:47` | Docstring says "30s cache" but `_availability_ttl = 900.0` (15 min) |
-| I-12 | `feature_extraction.py:245` | Comment says "shape (27,)" but actual array has 37 elements |
-| I-13 | `classifier-api/requirements.txt` | Loosely pinned deps (`>=` without upper bounds except numpy) |
-| I-14 | Frontend: `ItemsView.vue`, `ItemDetailView.vue` | 2 entire view files (~664 lines) are dead code (not routed) |
-| I-15 | Frontend: `stores/items.ts:27-33` | `highItems` and `highPriorityItems` computed never used |
-| I-16 | Frontend: 3 components | Direct `axios` import bypassing shared API client |
-| I-17 | Frontend: all modals | Missing `role="dialog"`, `aria-modal`, `aria-labelledby` |
-| I-18 | Frontend: `stores/items.ts:207` | `value as never` cast bypasses type checking |
-| I-19 | `browser_pool.py:88` | No timeout on semaphore acquisition (hangs forever if all slots occupied) |
-| I-20 | `scheduler.py:827-830` | Fire-and-forget tasks that silently swallow exceptions |
-| I-21 | `article_extractor.py:69-74` | Googlebot user-agent impersonation for paywall bypass |
-| I-22 | `items.py:970-1047` | `_scrape_tweet_for_links` bypasses browser pool concurrency limits |
+| I-1 | `api/config.py:300` | Unused import `Item` in config import replace mode |
+| I-2 | Multiple files | `datetime.utcnow()` deprecated since Python 3.12 |
+| I-3 | `api/config.py:298-309` | Dead code block in config import (import + warning, no action) |
+| I-4 | `database.py:75-79` | `json_merge` uses manual SQL string interpolation (not exploitable, input is internal) |
+| I-5 | Backend-wide | 64 unused imports (F401) and 128 unused variables (F841) flagged by ruff |
+| I-6 | `frontend/src/stores/ui.ts:35` | `messageListGridColumns` always returns `'1fr 1fr'` — dead computed |
+| I-7 | Frontend types + templates | Deprecated `assigned_ak` (singular) still referenced alongside `assigned_aks` (plural) |
+| I-8 | `frontend/src/components/nachrichten/FeedbackPanel.vue:5,12` | Unused imports `StarIcon`, `StarIconSolid` |
+| I-9 | `frontend/src/components/nachrichten/TopicList.vue` | ~120 lines of item row template duplicated 3 times |
+| I-10 | All modal components | No focus trapping (HeadlessUI `Dialog` available but unused) |
+| I-11 | `frontend/src/main.ts` | No global error boundary (`app.config.errorHandler`) |
+| I-12 | `frontend/src/router/index.ts:66` | No fallback for missing `meta.title` — would show "undefined - Liga Hessen News" |
+| I-13 | `frontend/src/views/UebersichtView.vue:224-226` | Displays deprecated `assigned_ak` instead of `assigned_aks` |
+| I-14 | `frontend/src/components/ChannelFormModal.vue:187-190` | `onMounted` fetch has no error handling |
+| I-15 | `frontend/src/views/SourceDetailView.vue` | Minimal stub with incomplete functionality vs `SourcesView` |
+| I-16 | `classifier-api/main.py`, `classifier.py` | Three different version strings (`"2.0.0"`, `"2.1.0"`, `"2.1.0-multilabel"`) |
+| I-17 | `classifier-api/requirements.txt:7` | `lightgbm` dependency may be unused (~30 MB) |
+| I-18 | `classifier-api/classifier.py:211,358,628` | `print()` used instead of `logger` in 3 places |
+| I-19 | `classifier-api/feature_extraction.py:221-224` | Regex patterns recompiled per keyword per classification (100+ compilations/request) |
+| I-20 | `.env.example` | Outdated — references `llama3.2`, missing `CLASSIFIER_*`, `GPU1_*`, `REDIS_URL` vars |
+| I-21 | npm audit | 7 frontend vulnerabilities (3 high) — fixable via `npm audit fix` |
+| I-22 | `classifier-api/Dockerfile` | Python 3.11 vs backend 3.12 — undocumented reason |
 
 ## Metrics Summary
 
 | Category | Issues | Critical | Warning | Info |
 |----------|--------|----------|---------|------|
-| Error Handling & Robustness | 11 | 2 | 3 | 6 |
-| Performance & Efficiency | 3 | 1 | 1 | 1 |
-| Dead Code & Unused | 9 | 0 | 0 | 9 |
+| Error Handling & Robustness | 10 | 3 | 5 | 2 |
+| Performance & Efficiency | 5 | 0 | 3 | 2 |
+| Dead Code & Unused | 8 | 0 | 1 | 7 |
 | Code Style & Idioms | 4 | 0 | 0 | 4 |
-| Concurrency | 4 | 1 | 1 | 2 |
-| Testing | 1 | 0 | 1 | 0 |
-| Dependencies | 1 | 0 | 0 | 1 |
-| Configuration & Environment | 1 | 0 | 1 | 0 |
-| Logging & Observability | 1 | 0 | 0 | 1 |
-| Security | 3 | 2 | 0 | 1 |
-| Architecture | 2 | 1 | 1 | 0 |
-| Project Hygiene | 2 | 0 | 0 | 2 |
-| Frontend | 8 | 1 | 2 | 5 |
-| **Total** | **50** | **8** | **10** | **32** |
+| Concurrency | 4 | 1 | 3 | 0 |
+| Testing | 0 | 0 | 0 | 0 |
+| Dependencies | 4 | 0 | 2 | 2 |
+| Configuration & Environment | 2 | 0 | 1 | 1 |
+| Logging & Observability | 2 | 0 | 1 | 1 |
+| Security | 7 | 2 | 4 | 1 |
+| Architecture | 1 | 0 | 0 | 1 |
+| Project Hygiene | 4 | 1 | 2 | 1 |
+| **Total** | **51** | **7** | **19** | **25** |
 
 ## What's Done Well
 
-1. **Clean service architecture**: Clear separation between API endpoints, services, connectors, and data models. Each connector follows a consistent interface. The pipeline orchestration is well-designed with separate stages (fetch, classify, enrich, deduplicate).
+1. **3-phase read-process-write pattern** in `llm_worker.py` — releases DB connections during long LLM calls, preventing pool exhaustion. This is a sophisticated pattern that most async Python projects get wrong. The `json_merge` atomic metadata update in the same file is well-designed.
 
-2. **LLM worker's 3-phase read-process-write pattern**: The worker releases DB connections during long-running LLM calls, preventing connection pool exhaustion. This is a sophisticated pattern that shows production-informed engineering.
+2. **Comprehensive test suite** — 612 tests covering API endpoints, services, edge cases, and error paths. Test fixtures are well-organized with a clean `conftest.py`. The recent test overhaul brought the suite fully green.
 
-3. **Comprehensive connector coverage**: 14 news source connectors (RSS, X/Twitter, LinkedIn, Mastodon, Bluesky, Instagram, Telegram, Google Alerts, HTML, PDF) with consistent error handling and structured metadata extraction.
+3. **Clean TypeScript frontend** — vue-tsc reports zero type errors. Vue 3 Composition API is used consistently. Stores are well-separated by domain (items, sources, rules, ui). Keyboard shortcuts and composables show good code reuse.
 
-4. **Operational tooling**: DB-stored versioned prompts with per-item tracking, Wake-on-LAN integration for GPU power management, processing analytics with disagreement detection, and MOTD system for user communication. The project has mature operational practices.
-
-5. **Documentation**: Extensive architecture docs, troubleshooting guides, prompt tuning methodology, and CLAUDE.md with deployment procedures and API endpoint reference.
+4. **Robust connector architecture** — RSS, Mastodon, X scraper, Google Alerts, and other connectors follow a consistent pattern. The article extractor has a thoughtful fallback chain (httpx+trafilatura → Wayback Machine → Playwright SPA).
 
 ## Top Recommendations
 
-1. **Fix the classifier API's async blocking** (C-1). Switch `OllamaEmbedder` to `httpx.AsyncClient` and make `encode()` async. This unblocks concurrent classifier requests and prevents a single slow Ollama call from freezing the entire API. ~2-4 hours.
+1. **Fix priority mapping in `api/llm.py`** (C-1). This is a data quality bug that silently downgrades every item processed through the batch reprocess endpoint. Copy the mapping from `llm_worker.py`. ~5 minutes.
 
-2. **Refactor `_reprocess_items_task` to match `llm_worker`** (C-3, C-4). Use the 3-phase pattern and `analyze_from_data_with_messages()` so reprocessed items get topic extraction, don't hold DB connections, and produce consistent results. ~2-3 hours.
+2. **Fix scheduler job ID mismatch** (C-2). The PUT `/scheduler/interval` endpoint is completely broken — it always returns 404. Change `"fetch_all_sources"` to `"fetch_due_channels"`. ~2 minutes.
 
-3. **Add API key auth for admin endpoints** (C-2). A simple middleware that checks `X-API-Key` header against an env var for all `/admin`, `/prompts/admin`, and destructive endpoints. ~1-2 hours for backend, then update frontend to send the key.
+3. **Use `json_merge` in reprocess endpoints** (C-3). The concurrent-safe pattern already exists in `llm_worker.py`. Apply the same approach to `api/items.py:1330` and `api/llm.py:382-384`. ~30 minutes.
 
-4. **Fix the 37 failing tests** (W-3). Most failures are from stale assertions after recent code changes. The `test_processor.py` failures are particularly important since they should validate the error propagation fix. ~3-4 hours.
+4. **Add non-root users to Dockerfiles** (C-5) and **remove `build-essential`** (W-16). Both are straightforward 2-3 line changes per Dockerfile that significantly reduce security exposure and image size. ~20 minutes.
 
-5. **Add retry logic to classifier Ollama calls** (W-10) and input validation limits (W-4). Prevents transient failures from causing unnecessary errors and protects against oversized requests. ~1-2 hours.
+5. **Run `npm audit fix`** (I-21) and **pin frontend base images** (W-18). Quick wins for dependency health. ~10 minutes.

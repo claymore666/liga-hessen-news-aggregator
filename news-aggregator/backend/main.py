@@ -30,30 +30,50 @@ from services.dedup_worker import (
 
 LEADER_LOCK_FILE = "/tmp/liga-worker-leader"
 
-# Clean up stale lock file from previous runs (before forking)
-try:
-    os.unlink(LEADER_LOCK_FILE)
-except FileNotFoundError:
-    pass
+# File descriptor for leader lock — kept open for the lifetime of the leader process.
+# fcntl.flock auto-releases when the process dies, avoiding stale lock files.
+_leader_lock_fd: int | None = None
 
 
 def _try_become_leader() -> bool:
-    """Try to become the worker leader using a lock file.
+    """Try to become the worker leader using flock.
 
     Only the leader process runs background workers (scheduler, LLM, classifier).
     All processes serve API requests.
+
+    Uses fcntl.flock which auto-releases on process death, preventing stale locks
+    when the leader crashes (OOM, unhandled exception).
     """
+    import fcntl
+
+    global _leader_lock_fd
     try:
-        fd = os.open(LEADER_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(LEADER_LOCK_FILE, os.O_CREAT | os.O_WRONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
+        os.fsync(fd)
+        _leader_lock_fd = fd  # Keep fd open — lock held until process exits
         return True
-    except FileExistsError:
+    except (OSError, BlockingIOError):
+        try:
+            os.close(fd)
+        except Exception:
+            pass
         return False
 
 
 def _release_leader() -> None:
-    """Release the leader lock file."""
+    """Release the leader lock."""
+    import fcntl
+
+    global _leader_lock_fd
+    if _leader_lock_fd is not None:
+        try:
+            fcntl.flock(_leader_lock_fd, fcntl.LOCK_UN)
+            os.close(_leader_lock_fd)
+        except Exception:
+            pass
+        _leader_lock_fd = None
     try:
         os.unlink(LEADER_LOCK_FILE)
     except FileNotFoundError:
@@ -242,6 +262,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.info(f"Worker {os.getpid()}: elected as leader, will run background tasks")
     else:
         logging.info(f"Worker {os.getpid()}: API-only mode (another worker is leader)")
+
+    # Warn if admin API key is not configured
+    if not settings.admin_api_key:
+        logging.warning(
+            "ADMIN_API_KEY is not set — admin endpoints are accessible without authentication. "
+            "Set ADMIN_API_KEY in .env for production use."
+        )
 
     # Startup - all workers init DB, only leader runs migrations
     await init_db()

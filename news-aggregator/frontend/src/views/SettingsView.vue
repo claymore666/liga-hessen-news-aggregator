@@ -20,7 +20,6 @@ import {
   type StorageStats
 } from '@/api'
 
-const saved = ref(false)
 const loadingModels = ref(false)
 const ollamaAvailable = ref(false)
 const ollamaModels = ref<OllamaModel[]>([])
@@ -89,14 +88,6 @@ const cleanupExecuting = ref(false)
 const cleanupResult = ref<{ deleted: number; by_priority: Record<string, number> } | null>(null)
 const storage = ref<StorageStats | null>(null)
 const storageLoading = ref(false)
-
-const saveSettings = async () => {
-  // TODO: Implement settings API
-  saved.value = true
-  setTimeout(() => {
-    saved.value = false
-  }, 2000)
-}
 
 const previewBriefing = async () => {
   previewing.value = true
@@ -412,8 +403,8 @@ onMounted(() => {
             </button>
           </div>
           <div class="max-h-[60vh] overflow-y-auto p-4">
-            <!-- Server-generated HTML from backend email template — safe, not user-supplied -->
-            <div v-html="preview.html_body" />
+            <!-- Server-generated HTML from backend email template — sandboxed for safety -->
+            <iframe :srcdoc="preview.html_body" sandbox="" class="w-full" style="width: 100%; min-height: 400px; border: 1px solid #e5e7eb; border-radius: 0.5rem;" />
           </div>
           <div class="border-t border-gray-200 p-4">
             <button
@@ -812,15 +803,6 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Save Button -->
-    <div class="flex items-center justify-end gap-4">
-      <span v-if="saved" class="flex items-center gap-1 text-sm text-green-600">
-        <CheckIcon class="h-4 w-4" />
-        Gespeichert
-      </span>
-      <button type="button" class="btn btn-primary" @click="saveSettings">
-        Einstellungen speichern
-      </button>
-    </div>
+    <!-- Note: Individual sections (LLM, Scheduler, Housekeeping) have their own save controls -->
   </div>
 </template>

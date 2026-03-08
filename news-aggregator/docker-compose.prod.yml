@@ -33,6 +33,7 @@ services:
     image: redis:7-alpine
     container_name: liga-news-redis
     restart: unless-stopped
+    mem_limit: 256m
     command: >
       redis-server
       --maxmemory 256mb
@@ -51,6 +52,7 @@ services:
     image: postgres:17-alpine
     container_name: liga-news-db
     restart: unless-stopped
+    mem_limit: 512m
     command:
       - postgres
       - -c
@@ -85,6 +87,7 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-backend
     restart: unless-stopped
+    mem_limit: 2g
     ulimits:
       core: 0  # Disable core dumps to prevent disk exhaustion
     pids_limit: 500  # Prevent runaway Chrome processes - 2 browsers × ~100 PIDs each + headroom
@@ -162,6 +165,7 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-frontend
     restart: unless-stopped
+    mem_limit: 256m
     ports:
       - "3001:80"
     depends_on:
@@ -186,6 +190,7 @@ services:
       dockerfile: Dockerfile
     container_name: liga-classifier
     restart: unless-stopped
+    mem_limit: 1g
     environment:
       - OLLAMA_BASE_URL=http://172.17.0.1:11434
     volumes:

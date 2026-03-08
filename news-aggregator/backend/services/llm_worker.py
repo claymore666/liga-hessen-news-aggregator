@@ -62,6 +62,7 @@ class LLMWorker:
         self._processor = None
         self._processor_created_at: float = 0.0
         self._processor_ttl: float = 300.0  # Reload prompt every 5 minutes
+        self._wake_event = asyncio.Event()  # Signal to interrupt backoff sleep
 
         # Statistics (protected by _stats_lock for thread-safe updates)
         self._stats = {
@@ -139,6 +140,7 @@ class LLMWorker:
         """
         try:
             self._fresh_queue.put_nowait(item_id)
+            self._wake_event.set()  # Interrupt backoff sleep if waiting
             logger.debug(f"Enqueued fresh item {item_id} (queue size: {self._fresh_queue.qsize()})")
             return True
         except asyncio.QueueFull:
@@ -234,9 +236,15 @@ class LLMWorker:
                     await write_state("llm", running=True, stopped_due_to_errors=True)
 
                 # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                # Interruptible via _wake_event (set when new items arrive)
                 backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
-                logger.info(f"Backing off for {backoff:.0f}s before retry")
-                await asyncio.sleep(backoff)
+                logger.info(f"Backing off for {backoff:.0f}s before retry (interruptible)")
+                self._wake_event.clear()
+                try:
+                    await asyncio.wait_for(self._wake_event.wait(), timeout=backoff)
+                    logger.info("Backoff interrupted by wake event")
+                except asyncio.TimeoutError:
+                    pass
 
         logger.info("LLM worker loop ended")
 

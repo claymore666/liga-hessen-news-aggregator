@@ -33,6 +33,7 @@ services:
     image: redis:7-alpine
     container_name: liga-news-redis
     restart: unless-stopped
+    mem_limit: 256m
     command: >
       redis-server
       --maxmemory 256mb
@@ -51,6 +52,7 @@ services:
     image: postgres:17-alpine
     container_name: liga-news-db
     restart: unless-stopped
+    mem_limit: 512m
     command:
       - postgres
       - -c
@@ -85,6 +87,7 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-backend
     restart: unless-stopped
+    mem_limit: 2g
     ulimits:
       core: 0  # Disable core dumps to prevent disk exhaustion
     pids_limit: 500  # Prevent runaway Chrome processes from X scraper
@@ -161,6 +164,7 @@ services:
       dockerfile: Dockerfile
     container_name: liga-news-frontend
     restart: unless-stopped
+    mem_limit: 256m
     ports:
       - "3000:80"
     logging:
@@ -184,6 +188,7 @@ services:
       context: ../relevance-tuner/services/classifier-api
       dockerfile: Dockerfile
     container_name: liga-classifier
+    mem_limit: 1g
     ports:
       - "8082:8082"
     environment:
