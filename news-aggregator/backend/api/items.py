@@ -1016,7 +1016,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
     """
     import json
     from pathlib import Path
-    from playwright_stealth import Stealth
+    from playwright_stealth import stealth_async
     from services.browser_pool import browser_pool
 
     links = []
@@ -1038,8 +1038,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
                 logger.debug("Loaded X.com cookies for refetch")
 
             page = await context.new_page()
-            stealth = Stealth()
-            await stealth.apply_stealth_async(page)
+            await stealth_async(page)
 
             await page.goto(tweet_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)  # Wait for JS to render

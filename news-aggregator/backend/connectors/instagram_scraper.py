@@ -11,7 +11,7 @@ import re
 from datetime import datetime, UTC
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout
-from playwright_stealth import Stealth
+from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
@@ -128,8 +128,7 @@ class InstagramScraperConnector(BaseConnector):
                 page = await context.new_page()
 
                 # Apply stealth mode
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                await stealth_async(page)
 
                 # Navigate to profile
                 url = f"https://www.instagram.com/{config.username}/"
@@ -331,8 +330,7 @@ class InstagramScraperConnector(BaseConnector):
                 try:
                     page = await context.new_page()
 
-                    stealth = Stealth()
-                    await stealth.apply_stealth_async(page)
+                    await stealth_async(page)
 
                     url = f"https://www.instagram.com/{config.username}/"
                     await page.goto(url, timeout=20000)

@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from playwright_stealth import Stealth
+from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
@@ -221,8 +221,7 @@ class LinkedInConnector(BaseConnector):
                 page = await context.new_page()
 
                 # Apply stealth mode
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                await stealth_async(page)
 
                 # Build URL based on profile type
                 if config.profile_type == "company":
@@ -486,8 +485,7 @@ Verlinkter Artikel von {article.source_domain}:
                 )
                 await context.add_cookies(cookies)
                 page = await context.new_page()
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                await stealth_async(page)
 
                 response = await page.goto(config.profile_url, timeout=15000)
 

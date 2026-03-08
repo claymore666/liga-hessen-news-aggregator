@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout
-from playwright_stealth import Stealth
+from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field
 
 from .base import BaseConnector, RawItem
@@ -191,8 +191,7 @@ class XScraperConnector(BaseConnector):
                 page = await context.new_page()
 
                 # Apply stealth mode
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
+                await stealth_async(page)
 
                 # Navigate to profile
                 url = f"https://x.com/{config.username}"
@@ -678,8 +677,7 @@ Verlinkter Artikel von {article.source_domain}:
                 )
                 try:
                     page = await context.new_page()
-                    stealth = Stealth()
-                    await stealth.apply_stealth_async(page)
+                    await stealth_async(page)
 
                     url = f"https://x.com/{config.username}"
                     response = await page.goto(url, timeout=15000)
