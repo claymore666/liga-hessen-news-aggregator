@@ -6,10 +6,16 @@ Uses heuristic detection to identify news articles and trafilatura for content e
 
 import logging
 import re
+import ssl
 from dataclasses import dataclass
 from urllib.parse import urlparse, parse_qs, urljoin
 
 import httpx
+
+# Permissive SSL context for servers with weak/legacy TLS ciphers
+# (e.g., wzb.eu uses ECDHE-RSA-AES256-SHA which OpenSSL 3.0 SECLEVEL=2 rejects)
+_legacy_ssl_ctx = ssl.create_default_context()
+_legacy_ssl_ctx.set_ciphers("DEFAULT@SECLEVEL=1")
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -259,14 +265,25 @@ class ArticleExtractor:
             # Check if this is a known news domain (for Wayback fallback)
             is_news_domain = any(d in domain for d in NEWS_DOMAINS)
 
-            async with httpx.AsyncClient(
-                timeout=self.timeout,
-                follow_redirects=True,
-                verify=True,
-            ) as client:
-                # Try Googlebot headers first for better paywall bypass
-                response = await client.get(url, headers=self.GOOGLEBOT_HEADERS)
-                response.raise_for_status()
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    verify=True,
+                ) as client:
+                    # Try Googlebot headers first for better paywall bypass
+                    response = await client.get(url, headers=self.GOOGLEBOT_HEADERS)
+                    response.raise_for_status()
+            except ssl.SSLError:
+                # Retry with relaxed ciphers for servers with legacy TLS
+                logger.debug(f"SSL handshake failed for {domain}, retrying with legacy ciphers")
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    verify=_legacy_ssl_ctx,
+                ) as client:
+                    response = await client.get(url, headers=self.GOOGLEBOT_HEADERS)
+                    response.raise_for_status()
 
             html = response.text
             soup = BeautifulSoup(html, "lxml")
