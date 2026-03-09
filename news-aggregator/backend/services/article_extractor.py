@@ -274,7 +274,9 @@ class ArticleExtractor:
                     # Try Googlebot headers first for better paywall bypass
                     response = await client.get(url, headers=self.GOOGLEBOT_HEADERS)
                     response.raise_for_status()
-            except ssl.SSLError:
+            except (ssl.SSLError, httpx.ConnectError) as e:
+                if not isinstance(e, ssl.SSLError) and "SSL" not in str(e):
+                    raise
                 # Retry with relaxed ciphers for servers with legacy TLS
                 logger.debug(f"SSL handshake failed for {domain}, retrying with legacy ciphers")
                 async with httpx.AsyncClient(
