@@ -5,7 +5,7 @@ from fastapi import Header, HTTPException
 from config import settings
 
 
-async def require_admin_key(x_admin_key: str = Header()) -> None:
+async def require_admin_key(x_admin_key: str = Header(default="")) -> None:
     """Verify the admin API key.
 
     Raises 403 if ADMIN_API_KEY is configured and the provided key doesn't match.
