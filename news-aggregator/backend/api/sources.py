@@ -437,9 +437,10 @@ async def update_channel(
 
     update_data = update.model_dump(exclude_unset=True)
 
-    # If config changes, recalculate identifier
+    # If config changes, merge with existing config and recalculate identifier
     if "config" in update_data:
-        new_config = update_data["config"]
+        new_config = {**(channel.config or {}), **update_data["config"]}
+        update_data["config"] = new_config
         connector_type_str = channel.connector_type.value if hasattr(channel.connector_type, 'value') else channel.connector_type
         new_identifier = Channel.extract_identifier(connector_type_str, new_config)
 
