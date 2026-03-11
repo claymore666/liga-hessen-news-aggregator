@@ -24,7 +24,7 @@ Usage:
     print(response.text)
 """
 
-from .base import BaseLLMProvider, LLMResponse
+from .base import BaseLLMProvider, LLMResponse, RateLimitError
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
 from .service import LLMService
@@ -35,4 +35,5 @@ __all__ = [
     "OllamaProvider",
     "OpenRouterProvider",
     "LLMService",
+    "RateLimitError",
 ]

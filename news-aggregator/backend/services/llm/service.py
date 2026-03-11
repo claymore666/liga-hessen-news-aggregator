@@ -3,7 +3,9 @@
 import logging
 from typing import Sequence
 
-from .base import BaseLLMProvider, LLMResponse
+import httpx
+
+from .base import BaseLLMProvider, LLMResponse, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,8 @@ class LLMService:
             RuntimeError: If all providers fail
         """
         errors = []
+        all_rate_limited = True
+        retry_after = None
 
         for provider in self.providers:
             try:
@@ -71,14 +75,35 @@ class LLMService:
                 logger.info(f"LLM response from {provider.provider_name}")
                 return response
 
+            except httpx.HTTPStatusError as e:
+                error_msg = f"{provider.provider_name}: {str(e)}"
+                logger.warning(f"Provider failed: {error_msg}")
+                errors.append(error_msg)
+                if e.response.status_code == 429:
+                    ra = e.response.headers.get("retry-after")
+                    if ra:
+                        try:
+                            retry_after = max(retry_after or 0, float(ra))
+                        except ValueError:
+                            pass
+                else:
+                    all_rate_limited = False
+                continue
+
             except Exception as e:
                 error_msg = f"{provider.provider_name}: {str(e)}"
                 logger.warning(f"Provider failed: {error_msg}")
                 errors.append(error_msg)
+                all_rate_limited = False
                 continue
 
         # All providers failed
         error_summary = "; ".join(errors)
+        if all_rate_limited and errors:
+            raise RateLimitError(
+                f"All LLM providers rate-limited: {error_summary}",
+                retry_after=retry_after,
+            )
         raise RuntimeError(f"All LLM providers failed: {error_summary}")
 
     async def chat(
@@ -101,6 +126,8 @@ class LLMService:
             RuntimeError: If all providers fail
         """
         errors = []
+        all_rate_limited = True
+        retry_after = None
 
         for provider in self.providers:
             try:
@@ -114,13 +141,34 @@ class LLMService:
                 logger.info(f"LLM chat response from {provider.provider_name}")
                 return response
 
+            except httpx.HTTPStatusError as e:
+                error_msg = f"{provider.provider_name}: {str(e)}"
+                logger.warning(f"Provider chat failed: {error_msg}")
+                errors.append(error_msg)
+                if e.response.status_code == 429:
+                    ra = e.response.headers.get("retry-after")
+                    if ra:
+                        try:
+                            retry_after = max(retry_after or 0, float(ra))
+                        except ValueError:
+                            pass
+                else:
+                    all_rate_limited = False
+                continue
+
             except Exception as e:
                 error_msg = f"{provider.provider_name}: {str(e)}"
                 logger.warning(f"Provider chat failed: {error_msg}")
                 errors.append(error_msg)
+                all_rate_limited = False
                 continue
 
         error_summary = "; ".join(errors)
+        if all_rate_limited and errors:
+            raise RateLimitError(
+                f"All LLM providers rate-limited (chat): {error_summary}",
+                retry_after=retry_after,
+            )
         raise RuntimeError(f"All LLM providers failed (chat): {error_summary}")
 
     async def check_availability(self) -> dict[str, bool]:

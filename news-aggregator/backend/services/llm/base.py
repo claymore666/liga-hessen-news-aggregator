@@ -1,6 +1,17 @@
 """Base LLM provider interface."""
 
 from abc import ABC, abstractmethod
+
+
+class RateLimitError(RuntimeError):
+    """Raised when all LLM providers are rate-limited (429).
+
+    Signals the caller to back off rather than retry immediately.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 from typing import Any
 
 from pydantic import BaseModel, Field

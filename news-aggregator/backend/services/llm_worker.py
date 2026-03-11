@@ -18,6 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker
 from models import Channel, Item, Priority
+from services.llm.base import RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,22 @@ class LLMWorker:
             except asyncio.CancelledError:
                 logger.info("LLM worker cancelled")
                 break
+            except RateLimitError as e:
+                consecutive_errors += 1
+                # Use Retry-After header if available, otherwise exponential backoff
+                if e.retry_after:
+                    backoff = min(300.0, e.retry_after)
+                else:
+                    backoff = min(300.0, 60.0 * (2 ** min(consecutive_errors - 1, 2)))
+                logger.warning(
+                    f"Rate-limited ({consecutive_errors}x), backing off {backoff:.0f}s"
+                )
+                self._wake_event.clear()
+                try:
+                    await asyncio.wait_for(self._wake_event.wait(), timeout=backoff)
+                    logger.info("Rate-limit backoff interrupted by wake event")
+                except asyncio.TimeoutError:
+                    pass
             except Exception as e:
                 consecutive_errors += 1
                 logger.error(f"LLM worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
@@ -341,6 +358,9 @@ class LLMWorker:
 
             processed = await self._process_items(item_ids, processor, is_fresh=True)
 
+        except RateLimitError:
+            raise  # Let outer loop handle backoff
+
         except Exception as e:
             logger.error(f"Error processing fresh items: {e}")
             async with self._stats_lock:
@@ -406,6 +426,8 @@ class LLMWorker:
 
         try:
             processed = await self._process_items(item_ids, processor, is_fresh=False)
+        except RateLimitError:
+            raise  # Let outer loop handle backoff
         except Exception as e:
             logger.error(f"Error processing backlog items: {e}")
             async with self._stats_lock:
@@ -569,6 +591,9 @@ class LLMWorker:
                         topic, topic_suggestion = await processor.extract_topics(conversation_messages)
                         logger.debug(f"Extracted topic for item {item_id}: {topic}" +
                                      (f" (suggestion: {topic_suggestion})" if topic_suggestion else ""))
+                    except RateLimitError:
+                        # Main analysis succeeded — save item, but stop batch
+                        logger.warning(f"Rate-limited during topic extraction for item {item_id}, saving without topic")
                     except Exception as topic_err:
                         logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
 
@@ -751,6 +776,15 @@ class LLMWorker:
                     self._stats[stats_key] += 1
 
                 logger.info(f"LLM {item_type}: {item_data['title'][:40]}... -> {llm_priority}")
+
+            except RateLimitError as e:
+                logger.warning(
+                    f"Rate-limited processing {item_type} item {item_id}: {e}"
+                )
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+                # Don't try more items — all providers are exhausted
+                raise
 
             except Exception as e:
                 logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
