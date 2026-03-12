@@ -28,6 +28,25 @@ from services.dedup_worker import (
     stop_dedup_worker,
 )
 
+def _write_msmtp_config() -> None:
+    """Write /etc/msmtprc from settings so sendmail works inside the container."""
+    try:
+        with open("/etc/msmtprc", "w") as f:
+            f.write(
+                f"account default\n"
+                f"host {settings.smtp_host}\n"
+                f"port {settings.smtp_port}\n"
+                f"from {settings.smtp_from}\n"
+                f"auto_from off\n"
+                f"syslog on\n"
+            )
+        os.chmod("/etc/msmtprc", 0o644)
+    except PermissionError:
+        logging.debug("Could not write /etc/msmtprc (not root), skipping")
+    except Exception as e:
+        logging.warning(f"Failed to write msmtp config: {e}")
+
+
 LEADER_LOCK_FILE = "/tmp/liga-worker-leader"
 
 # File descriptor for leader lock — kept open for the lifetime of the leader process.
@@ -269,6 +288,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "ADMIN_API_KEY is not set — admin endpoints are accessible without authentication. "
             "Set ADMIN_API_KEY in .env for production use."
         )
+
+    # Configure msmtp (sendmail) relay from settings
+    _write_msmtp_config()
 
     # Startup - all workers init DB, only leader runs migrations
     await init_db()

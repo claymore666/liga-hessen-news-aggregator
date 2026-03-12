@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     digest_max_items: int = 50
     digest_skip_empty: bool = True
 
+    # SMTP relay for sendmail (msmtp)
+    smtp_host: str = "172.17.0.1"  # Docker host gateway
+    smtp_port: int = 25
+    smtp_from: str = "noreply@liga-hessen.de"
+
     # API
     api_prefix: str = "/api"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
