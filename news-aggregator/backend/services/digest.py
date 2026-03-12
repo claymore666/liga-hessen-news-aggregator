@@ -193,6 +193,14 @@ async def generate_digest(db) -> int:
     )
     cutoff_utc = cutoff.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
+    # Check if a digest already exists for this cutoff
+    existing = await db.scalar(
+        select(Digest).where(Digest.date == cutoff_utc)
+    )
+    if existing:
+        logger.info(f"Digest already exists for {cutoff_utc.isoformat()} (id={existing.id})")
+        return existing.id
+
     # Determine 'since': last digest date or 24h ago
     last_digest = await db.scalar(
         select(Digest)
