@@ -36,19 +36,19 @@ wesentliche neue Entwicklung gibt.
 Erstelle einen strukturierten JSON-Output mit exakt diesem Schema:
 
 {
-  "editorial_intro": "1-2 Sätze, die das Tagesthema zusammenfassen",
+  "editorial_intro": "1-2 Sätze, die den Nachrichtentag zusammenfassen",
   "urgent": [
     {
       "item_ref": 1,
-      "headline": "Kurze Überschrift",
-      "context": "2-3 Sätze: Was ist passiert und warum ist es für die Liga relevant?"
+      "headline": "Kurze Überschrift (nah am Original)",
+      "context": "2-3 Sätze: Was genau ist passiert? Welche Fakten, Zahlen, Entscheidungen?"
     }
   ],
   "top_stories": [
     {
       "item_ref": 2,
-      "headline": "Kurze Überschrift",
-      "context": "2-3 Sätze Kontext mit Liga-Bezug"
+      "headline": "Kurze Überschrift (nah am Original)",
+      "context": "2-3 Sätze: Was ist passiert und welche Bedeutung hat es?"
     }
   ],
   "further_news": [
@@ -62,8 +62,12 @@ Erstelle einen strukturierten JSON-Output mit exakt diesem Schema:
 Regeln:
 - "urgent": Nur Artikel, die SOFORTIGE Reaktion erfordern (Gesetzesfristen, Budgetkürzungen). \
 Oft leer — das ist normal.
-- "top_stories": 3-5 wichtigste Artikel. Erkläre WARUM es für die Liga relevant ist.
+- "top_stories": 3-5 wichtigste Artikel. Beschreibe WAS passiert ist — Fakten, Zahlen, \
+Entscheidungen, Hintergründe. KEINE Handlungsempfehlungen, keine Vorschläge was die Liga \
+tun sollte/könnte/müsste.
 - "further_news": Restliche Artikel als Einzeiler. Kann leer sein bei wenig Artikeln.
+- Headlines: Bleib nah am Originaltitel, erfinde keine neuen Überschriften.
+- Stil: Journalistisch-informativ, wie ein Pressespiegel. Berichte was ist, nicht was sein sollte.
 - item_ref verweist auf die Nummer in eckigen Klammern [N] aus der Eingabe.
 - Antworte NUR mit validem JSON, kein Markdown, kein Text drumherum.
 """
