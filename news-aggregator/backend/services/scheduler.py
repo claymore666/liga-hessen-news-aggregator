@@ -803,6 +803,28 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Daily digest (Mon-Fri at cutoff + delay)
+    if settings.digest_enabled:
+        from services.digest import generate_and_send_digest
+
+        digest_minute = settings.digest_cutoff_minute + settings.digest_send_delay_minutes
+        digest_hour = settings.digest_cutoff_hour + (digest_minute // 60)
+        digest_minute = digest_minute % 60
+        scheduler.add_job(
+            generate_and_send_digest,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=digest_hour,
+            minute=digest_minute,
+            timezone="Europe/Berlin",
+            id="daily_digest",
+            name="Generate and send daily digest",
+            replace_existing=True,
+        )
+        logger.info(
+            f"Daily digest scheduled at {digest_hour:02d}:{digest_minute:02d} Europe/Berlin (Mon-Fri)"
+        )
+
     # NOTE: LLM retry processing is now handled by the LLM worker (llm_worker.py)
     # which runs continuously and processes items with priority ordering.
     # The old 5-minute interval job has been removed for efficiency.

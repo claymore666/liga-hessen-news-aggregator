@@ -155,6 +155,16 @@ class Settings(BaseSettings):
     proxy_known_max: int = 100  # Maximum known good proxies to store
     proxy_https_pool_min: int = 0  # HTTPS proxies optional; X scraper falls back to direct connection
 
+    # Daily Digest
+    digest_enabled: bool = False
+    digest_cutoff_hour: int = 17  # Europe/Berlin
+    digest_cutoff_minute: int = 0
+    digest_send_delay_minutes: int = 10
+    digest_recipients: str = ""  # comma-separated
+    digest_lookback_days: int = 5  # dedup window
+    digest_max_items: int = 50
+    digest_skip_empty: bool = True
+
     # API
     api_prefix: str = "/api"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]

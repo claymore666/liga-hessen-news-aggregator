@@ -435,7 +435,7 @@ async def health_check() -> dict[str, str]:
 
 
 # Import and include routers
-from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config, analytics, motd, prompts  # noqa: E402
+from api import items, sources, connectors, rules, stats, email, proxies, llm, admin, config, analytics, motd, prompts, digest  # noqa: E402
 from api import scheduler as scheduler_api  # noqa: E402
 
 app.include_router(items.router, prefix=settings.api_prefix, tags=["items"])
@@ -452,3 +452,4 @@ app.include_router(scheduler_api.router, prefix=settings.api_prefix, tags=["sche
 app.include_router(analytics.router, prefix=settings.api_prefix, tags=["analytics"])
 app.include_router(motd.router, prefix=settings.api_prefix, tags=["motd"])
 app.include_router(prompts.router, prefix=settings.api_prefix, tags=["prompts"])
+app.include_router(digest.router, prefix=settings.api_prefix, tags=["digest"])
