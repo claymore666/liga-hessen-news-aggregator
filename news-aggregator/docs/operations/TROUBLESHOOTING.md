@@ -73,24 +73,37 @@ docker compose logs backend | tail -50
 
 ### Classifier Not Available
 
-**Symptoms**: Items not being classified, `/api/admin/health` shows `classifier_available: false`
+**Symptoms**: Items not being classified, `/api/admin/stats` shows `classifier_worker.service_available: false`
 
 **Check**:
 ```bash
-curl http://localhost:8082/health
-docker compose logs classifier
+# Worker status (shows service_available flag)
+curl -s http://localhost:8000/api/admin/stats | jq '.classifier_worker'
+
+# Classifier container health
+docker compose logs classifier | tail -20
 ```
 
 **Common causes**:
 
-1. **GPU not detected**
+1. **Embedding service down (gpu1 off)**
    ```
-   "gpu": false
+   Classifier service unavailable: Classifier returned 500
    ```
-   Fix: Check NVIDIA runtime
+   The classifier needs embeddings from Ollama on gpu1. When gpu1 is sleeping,
+   the classifier API returns 500 because the embedding endpoint is unreachable.
+
+   The worker automatically backs off to **5-minute retries** without inflating
+   the error counter. It recovers automatically when gpu1 comes back online.
+
+   **Diagnosis**:
    ```bash
-   nvidia-smi
-   docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+   docker compose logs backend | grep "service unavailable\|still unavailable" | tail -5
+   ```
+
+   **No action needed** — the worker will recover on its own. To force gpu1 awake:
+   ```bash
+   curl -X POST http://localhost:8000/api/admin/gpu1/force-process
    ```
 
 2. **Model files missing**
@@ -121,42 +134,80 @@ docker compose logs classifier
 
 **Check**:
 ```bash
-curl http://localhost:8000/api/llm/status | jq
-curl http://localhost:11434/api/tags | jq
+curl http://localhost:8000/api/admin/stats | jq '.llm_worker'
 ```
 
 **Common causes**:
 
-1. **LLM disabled**
+1. **Worker paused or stopped**
    ```json
-   {"enabled": false}
+   {"paused": true}
    ```
-   Fix: Enable via API
+   Fix: Resume via API
    ```bash
-   curl -X PUT http://localhost:8000/api/llm/toggle \
-     -H "Content-Type: application/json" \
-     -d '{"enabled": true}'
+   curl -X POST http://localhost:8000/api/admin/llm-worker/resume
    ```
 
-2. **Ollama not running**
+2. **Ollama proxy not reachable**
    ```
    Connection refused
    ```
-   Fix: Start Ollama
+   The backend connects to the Ollama proxy at `http://172.17.0.1:11434` (Docker
+   host network). Check the proxy is running on docker-ai.
+
+3. **Rate limiting (429)**
+   ```
+   All LLM providers rate-limited
+   ```
+   The Ollama proxy routes to Cerebras and Groq. When both are exhausted, the
+   worker gets 429s. The worker now detects this and backs off (60s → 120s →
+   240s → 300s). Check proxy logs to see upstream rate limit status.
+
+   **Diagnosis**:
    ```bash
-   systemctl start ollama
-   # or
-   ollama serve &
+   docker compose logs backend | grep -i "rate-limit\|429" | tail -20
    ```
 
-3. **Model not pulled**
+4. **Worker in degraded state**
+   ```json
+   {"stopped_due_to_errors": true}
    ```
-   model 'qwen3:14b-q8_0' not found
-   ```
-   Fix: Pull the model
+   After 10+ consecutive errors, the worker marks itself degraded (still retries
+   with backoff). It auto-recovers when processing succeeds. To force-resume:
    ```bash
-   ollama pull qwen3:14b-q8_0
+   curl -X POST http://localhost:8000/api/admin/llm-worker/resume
    ```
+
+### LLM Rate Limiting (429 Errors)
+
+**Symptoms**: `llm_worker.stats.errors` increasing, log shows "Rate-limited" or "429 Too Many Requests"
+
+**How it works**: The Ollama proxy on docker-ai routes to Cerebras (primary) and
+Groq (fallback). Most upstream rate limits are handled silently by fallback
+(~3,200 upstream events → only ~780 pass through to clients in a typical 24h period).
+
+When **both** providers are exhausted simultaneously, the backend receives 429.
+
+**Worker behavior** (since 2026-03-11):
+- Detects `RateLimitError` and immediately stops the current batch
+- Backs off: 60s → 120s → 240s → 300s (uses `Retry-After` header if present)
+- Backoff is interruptible — new items arriving can trigger a retry sooner
+- Failed items keep `needs_llm_processing=True` and are retried as backlog
+
+**No items are lost**: All items eventually get processed once rate limits clear.
+
+**Monitor**:
+```bash
+# Check error rate
+curl -s http://localhost:8000/api/admin/stats | jq '.llm_worker.stats.errors'
+
+# Check for pending items
+docker exec liga-news-db psql -U liga -d liga_news -c \
+  "SELECT COUNT(*) FROM items WHERE needs_llm_processing = true;"
+
+# Watch rate-limit events in logs
+docker compose logs -f backend 2>&1 | grep -i "rate-limit"
+```
 
 ### Scheduler Not Running
 

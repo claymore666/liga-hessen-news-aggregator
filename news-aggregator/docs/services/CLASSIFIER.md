@@ -273,6 +273,23 @@ The classifier worker:
 
 **Performance**: ~3 items/second (300ms per HTTP call). 700 items ≈ 4 minutes.
 
+### Service Unavailability Handling
+
+The classifier depends on embeddings from Ollama on gpu1. When gpu1 is off, the
+embedding endpoint returns 5xx or is unreachable. The classifier worker handles this
+gracefully:
+
+- **Detection**: 5xx HTTP status or connection errors on the first item in a batch
+  trigger `ServiceUnavailableError`, aborting the batch immediately
+- **Backoff**: 300s (5 min) fixed interval — no exponential ramp, no per-item error counting
+- **Logging**: Logs once on transition to unavailable, then `DEBUG` level on retries
+- **Recovery**: Auto-clears `service_available=false` and `stopped_due_to_errors` when
+  the next batch succeeds
+- **Status**: `service_available` field in `/api/admin/stats` → `classifier_worker`
+
+This prevents error counter inflation (previously thousands of errors when gpu1 was
+asleep) while still retrying often enough to catch gpu1 uptime windows.
+
 ## Training
 
 See [relevance-tuner/CLAUDE.md](../../relevance-tuner/CLAUDE.md) for training details.
