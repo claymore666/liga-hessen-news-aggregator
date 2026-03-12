@@ -130,6 +130,13 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - BROWSER_POOL_MAX=${BROWSER_POOL_MAX:-2}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Daily digest
+      - DIGEST_ENABLED=${DIGEST_ENABLED:-false}
+      - DIGEST_RECIPIENTS=${DIGEST_RECIPIENTS:-}
+      - DIGEST_CUTOFF_HOUR=${DIGEST_CUTOFF_HOUR:-17}
+      - DIGEST_SEND_DELAY_MINUTES=${DIGEST_SEND_DELAY_MINUTES:-10}
+      # SMTP relay (Docker host Postfix)
+      - SMTP_HOST=${SMTP_HOST:-172.21.0.1}
     volumes:
       - backend-data:/app/data
       - ./ssh:/app/ssh:ro  # SSH key for gpu1 shutdown
