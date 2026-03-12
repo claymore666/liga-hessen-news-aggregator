@@ -64,13 +64,16 @@ async def get_poll_interval() -> int:
 
 
 async def write_state(name: str, *, running: bool, paused: bool = False,
-                      stopped_due_to_errors: bool = False) -> None:
+                      stopped_due_to_errors: bool = False,
+                      service_available: bool | None = None) -> None:
     value = {
         "running": running,
         "paused": paused,
         "stopped_due_to_errors": stopped_due_to_errors,
         "updated_at": datetime.utcnow().isoformat(),
     }
+    if service_available is not None:
+        value["service_available"] = service_available
     await _write(_key(name, "state"), value, f"Worker state for {name}")
 
 

@@ -16,6 +16,7 @@ import asyncio
 import logging
 from datetime import datetime
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +24,11 @@ from database import async_session_maker
 from models import Channel, Item, Priority
 
 logger = logging.getLogger(__name__)
+
+
+class ServiceUnavailableError(Exception):
+    """Raised when the classifier/embedding service is down (5xx)."""
+    pass
 
 
 # Priority thresholds based on classifier confidence
@@ -72,6 +78,7 @@ class ClassifierWorker:
         }
         self._stats_lock = asyncio.Lock()
         self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
+        self._service_unavailable = False  # Track if embedding service is down
 
     async def start(self):
         """Start the worker background task."""
@@ -137,16 +144,27 @@ class ClassifierWorker:
             "running": self._running,
             "paused": self._paused,
             "stopped_due_to_errors": self._stopped_due_to_errors,
+            "service_available": not self._service_unavailable,
             "stats": stats_copy,
         }
 
     async def _on_success(self):
         """Clear degraded state on successful processing."""
+        recovered = False
         if self._stopped_due_to_errors:
             self._stopped_due_to_errors = False
-            logger.info("Classifier worker recovered from degraded state")
+            recovered = True
+        if self._service_unavailable:
+            self._service_unavailable = False
+            recovered = True
+        if recovered:
+            logger.info("Classifier worker recovered — service available again")
             from services.worker_status import write_state
-            await write_state("classifier", running=True, stopped_due_to_errors=False)
+            await write_state(
+                "classifier", running=True,
+                service_available=True,
+                stopped_due_to_errors=False,
+            )
 
     async def _get_classifier(self):
         """Get or create the classifier instance."""
@@ -161,6 +179,7 @@ class ClassifierWorker:
 
         consecutive_errors = 0
         max_consecutive_errors = 10
+        service_unavailable_backoff = 300.0  # 5 minutes
 
         while self._running:
             try:
@@ -185,6 +204,24 @@ class ClassifierWorker:
             except asyncio.CancelledError:
                 logger.info("Classifier worker cancelled")
                 break
+            except ServiceUnavailableError as e:
+                # Embedding service / classifier backend is down.
+                # Back off to 5 min immediately — don't inflate error counter.
+                if not self._service_unavailable:
+                    self._service_unavailable = True
+                    logger.warning(
+                        f"Classifier service unavailable: {e}. "
+                        f"Retrying every {service_unavailable_backoff:.0f}s."
+                    )
+                    from services.worker_status import write_state
+                    await write_state(
+                        "classifier", running=True,
+                        service_available=False,
+                        stopped_due_to_errors=True,
+                    )
+                else:
+                    logger.debug(f"Classifier still unavailable: {e}")
+                await asyncio.sleep(service_unavailable_backoff)
             except Exception as e:
                 consecutive_errors += 1
                 logger.error(f"Classifier worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
@@ -363,6 +400,21 @@ class ClassifierWorker:
                         f"conf={confidence:.2f} {old_priority}->{new_priority.value}"
                     )
 
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    # Service-level failure (e.g. embedding backend down)
+                    # Abort batch early — no point retrying remaining items
+                    raise ServiceUnavailableError(
+                        f"Classifier returned {e.response.status_code}"
+                    ) from e
+                logger.warning(f"Failed to classify item {item_data['id']}: {e}")
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
+            except httpx.RequestError as e:
+                # Connection refused, timeout, DNS failure, etc.
+                raise ServiceUnavailableError(
+                    f"Classifier unreachable: {e}"
+                ) from e
             except Exception as e:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
                 async with self._stats_lock:
