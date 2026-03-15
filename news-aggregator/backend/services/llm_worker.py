@@ -279,7 +279,7 @@ class LLMWorker:
                 elif action == "resume":
                     await self.resume()
                 elif action == "stop":
-                    await self.stop()
+                    self._running = False
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -359,6 +359,12 @@ class LLMWorker:
             processed = await self._process_items(item_ids, processor, is_fresh=True)
 
         except RateLimitError:
+            # Re-enqueue unprocessed items so they aren't lost
+            for remaining_id in item_ids[processed:]:
+                try:
+                    self._fresh_queue.put_nowait(remaining_id)
+                except asyncio.QueueFull:
+                    pass  # Will be picked up via backlog
             raise  # Let outer loop handle backoff
 
         except Exception as e:

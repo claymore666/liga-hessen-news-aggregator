@@ -258,7 +258,7 @@ class ClassifierWorker:
                 elif action == "resume":
                     await self.resume()
                 elif action == "stop":
-                    await self.stop()
+                    self._running = False
             except asyncio.CancelledError:
                 break
             except Exception as e:

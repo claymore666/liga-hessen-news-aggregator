@@ -56,13 +56,13 @@ services:
     command:
       - postgres
       - -c
-      - shared_buffers=512MB
+      - shared_buffers=128MB
       - -c
-      - work_mem=32MB
+      - work_mem=16MB
       - -c
-      - effective_cache_size=3GB
+      - effective_cache_size=384MB
       - -c
-      - maintenance_work_mem=128MB
+      - maintenance_work_mem=64MB
       - -c
       - max_connections=200
       - -c
