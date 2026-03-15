@@ -35,9 +35,18 @@ class MastodonConfig(BaseModel):
     @classmethod
     def parse_handle(cls, v: str) -> str:
         """Normalize handle: remove leading @, validate format."""
+        import re
         v = v.lstrip("@")
         if "@" not in v:
             raise ValueError("Handle must be in format user@instance")
+        instance = v.split("@")[1]
+        # Block IP addresses and private/reserved hostnames
+        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", instance):
+            raise ValueError("IP addresses not allowed as instance")
+        if instance.lower() in ("localhost", "127.0.0.1", "0.0.0.0"):
+            raise ValueError("Local addresses not allowed as instance")
+        if not re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*\.)+[a-zA-Z]{2,}$", instance):
+            raise ValueError("Instance must be a valid domain name")
         return v
 
     @property

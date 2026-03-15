@@ -150,7 +150,8 @@ async def list_items(
         until_naive = until.replace(tzinfo=None) if until.tzinfo else until
         query = query.where(Item.published_at <= until_naive)
     if search:
-        search_pattern = f"%{search}%"
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        search_pattern = f"%{escaped}%"
         query = query.where(
             (Item.title.ilike(search_pattern)) | (Item.content.ilike(search_pattern))
         )

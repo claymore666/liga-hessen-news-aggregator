@@ -617,7 +617,7 @@ class Pipeline:
                                 item.metadata_ = item.metadata_ or {}
                                 item.metadata_["vectordb_indexed"] = True
                                 item.metadata_["vectordb_indexed_at"] = datetime.utcnow().isoformat()
-                        await self.db.commit()
+                        await self.db.flush()
                     except Exception as e:
                         logger.warning(f"Failed to update vectordb_indexed flags: {e}")
 

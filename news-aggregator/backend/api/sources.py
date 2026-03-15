@@ -524,7 +524,8 @@ async def trigger_channel_fetch(
             "training_mode": training_mode,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Channel {channel_id} fetch failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fetch failed. See server logs.")
 
 
 @router.post("/channels/{channel_id}/enable", response_model=ChannelResponse, dependencies=[Depends(require_admin_key)])

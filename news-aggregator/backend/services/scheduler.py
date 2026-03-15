@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from config import settings
-from database import async_session_maker
+from database import async_session_maker, json_merge
 from models import Channel, Source
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,7 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
             except Exception as e:
                 logger.warning(f"Relevance pre-filter not available: {e}")
 
+
     # Try to create LLM processor (optional, skip in training mode for speed)
     processor: ItemProcessor | None = None
     if not training_mode:
@@ -332,6 +333,9 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                 # Don't let error storage failure mask original error
                 logger.debug(f"Could not store error for channel {channel_id}: {store_err}")
             raise
+        finally:
+            if relevance_filter:
+                await relevance_filter.close()
 
 
 async def _fetch_source_type_group(
@@ -589,18 +593,25 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                     item.priority = Priority.NONE
                     item.priority_score = min(item.priority_score, 20)
 
-                # Store analysis metadata
-                item.metadata_["llm_analysis"] = {
-                    "relevance_score": analysis.get("relevance_score", 0.5),
-                    "priority_suggestion": llm_priority,
-                    "assigned_ak": analysis.get("assigned_ak"),
-                    "tags": analysis.get("tags", []),
-                    "reasoning": analysis.get("reasoning"),
-                    "retried_at": datetime.utcnow().isoformat(),
-                }
-
-                # Clear retry flag
-                item.needs_llm_processing = False
+                # Store analysis metadata atomically
+                from sqlalchemy import update
+                await db.execute(
+                    update(Item).where(Item.id == item.id).values(
+                        summary=item.summary,
+                        detailed_analysis=item.detailed_analysis,
+                        priority=item.priority,
+                        priority_score=item.priority_score,
+                        needs_llm_processing=False,
+                        metadata_=json_merge(Item.metadata_, {"llm_analysis": {
+                            "relevance_score": analysis.get("relevance_score", 0.5),
+                            "priority_suggestion": llm_priority,
+                            "assigned_ak": analysis.get("assigned_ak"),
+                            "tags": analysis.get("tags", []),
+                            "reasoning": analysis.get("reasoning"),
+                            "retried_at": datetime.utcnow().isoformat(),
+                        }}),
+                    )
+                )
                 processed += 1
 
                 logger.info(f"LLM retry success: {item.title[:40]} -> {llm_priority}")
