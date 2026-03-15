@@ -4,7 +4,6 @@ Direct scraping of instagram.com with stealth mode.
 Works for public profiles without authentication.
 """
 
-import asyncio
 import logging
 import random
 import re

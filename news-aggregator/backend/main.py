@@ -272,6 +272,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from api.admin.logs import setup_memory_logging, start_log_writer, stop_log_writer
     setup_memory_logging()
 
+    # Warn if admin API key is not set
+    if not settings.admin_api_key:
+        logging.warning(
+            "ADMIN_API_KEY is not set — all admin endpoints are unauthenticated! "
+            "Set ADMIN_API_KEY in .env for production use."
+        )
+
     # Initialize Redis (shared cross-worker state)
     from services.redis_client import init_redis, close_redis
     await init_redis()

@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from html import escape
 from typing import Sequence
 
 from pydantic import BaseModel, EmailStr
@@ -77,11 +78,11 @@ class BriefingEmail:
     def _format_item_html(self, item: Item) -> str:
         """Format a single item for HTML email."""
         html = f'<li style="margin-bottom: 12px;">'
-        html += f'<strong><a href="{item.url}" style="color: #0369a1;">{item.title}</a></strong>'
+        html += f'<strong><a href="{escape(item.url or "")}" style="color: #0369a1;">{escape(item.title or "")}</a></strong>'
         if item.source:
-            html += f'<br><span style="color: #6b7280; font-size: 12px;">{item.source.name}</span>'
+            html += f'<br><span style="color: #6b7280; font-size: 12px;">{escape(item.source.name or "")}</span>'
         if self.config.include_summary and item.summary:
-            html += f'<br><span style="color: #374151;">{item.summary}</span>'
+            html += f'<br><span style="color: #374151;">{escape(item.summary)}</span>'
         html += '</li>'
         return html
 

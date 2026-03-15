@@ -1,6 +1,8 @@
 """API endpoints for filtering rules."""
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from api.auth import require_admin_key
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +46,7 @@ async def get_rule(
     return RuleResponse.model_validate(rule)
 
 
-@router.post("/rules", response_model=RuleResponse, status_code=201)
+@router.post("/rules", response_model=RuleResponse, status_code=201, dependencies=[Depends(require_admin_key)])
 async def create_rule(
     rule_data: RuleCreate,
     db: AsyncSession = Depends(get_db),
@@ -67,7 +69,7 @@ async def create_rule(
     return RuleResponse.model_validate(rule)
 
 
-@router.patch("/rules/{rule_id}", response_model=RuleResponse)
+@router.patch("/rules/{rule_id}", response_model=RuleResponse, dependencies=[Depends(require_admin_key)])
 async def update_rule(
     rule_id: int,
     update: RuleUpdate,
@@ -91,7 +93,7 @@ async def update_rule(
     return RuleResponse.model_validate(rule)
 
 
-@router.delete("/rules/{rule_id}", status_code=204)
+@router.delete("/rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin_key)])
 async def delete_rule(
     rule_id: int,
     db: AsyncSession = Depends(get_db),
@@ -107,7 +109,7 @@ async def delete_rule(
     await db.delete(rule)
 
 
-@router.post("/rules/{rule_id}/test")
+@router.post("/rules/{rule_id}/test", dependencies=[Depends(require_admin_key)])
 async def test_rule(
     rule_id: int,
     content: str,
@@ -132,7 +134,7 @@ async def test_rule(
     }
 
 
-@router.post("/rules/reorder")
+@router.post("/rules/reorder", dependencies=[Depends(require_admin_key)])
 async def reorder_rules(
     rule_orders: list[dict[str, int]],  # [{"id": 1, "order": 0}, ...]
     db: AsyncSession = Depends(get_db),

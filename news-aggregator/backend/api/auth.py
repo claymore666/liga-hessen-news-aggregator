@@ -1,5 +1,7 @@
 """Admin authentication dependency."""
 
+import hmac
+
 from fastapi import Header, HTTPException
 
 from config import settings
@@ -13,5 +15,5 @@ async def require_admin_key(x_admin_key: str = Header(default="")) -> None:
     """
     if not settings.admin_api_key:
         return  # No key configured — allow all (dev/legacy mode)
-    if x_admin_key != settings.admin_api_key:
+    if not hmac.compare_digest(x_admin_key, settings.admin_api_key):
         raise HTTPException(status_code=403, detail="Invalid admin key")

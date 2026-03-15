@@ -1,6 +1,5 @@
 """X.com (Twitter) scraper connector using Playwright."""
 
-import asyncio
 import json
 import logging
 import random
@@ -168,6 +167,7 @@ class XScraperConnector(BaseConnector):
 
         # Use shared browser pool instead of creating new Playwright instance
         async with browser_pool.get_browser() as browser:
+            context = None
             try:
                 # Create context with random fingerprint
                 context_args = {
@@ -230,10 +230,11 @@ class XScraperConnector(BaseConnector):
                 raise
             finally:
                 # Close context (browser is closed by pool)
-                try:
-                    await context.close()
-                except Exception:
-                    pass
+                if context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
 
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items

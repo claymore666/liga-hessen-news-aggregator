@@ -11,13 +11,13 @@ from sqlalchemy.orm import selectinload
 from api.auth import require_admin_key
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
 from models import Channel, Item, ItemEvent, Priority, Source
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief, TopicGroupsResponse, TopicGroup, TopicItemBrief
 
 
 class BulkUpdateRequest(BaseModel):
     """Request body for bulk item updates."""
-    ids: list[int]
+    ids: list[int] = Field(..., max_length=500)
     is_read: bool | None = None
 
 
@@ -1078,7 +1078,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
     return links
 
 
-@router.post("/items/{item_id}/refetch")
+@router.post("/items/{item_id}/refetch", dependencies=[Depends(require_admin_key)])
 async def refetch_item(
     item_id: int,
     background_tasks: BackgroundTasks,
@@ -1130,7 +1130,7 @@ async def refetch_item(
     }
 
 
-@router.post("/items/bulk-update")
+@router.post("/items/bulk-update", dependencies=[Depends(require_admin_key)])
 async def bulk_update_items(
     request_body: BulkUpdateRequest,
     request: Request,
@@ -1176,7 +1176,7 @@ async def bulk_update_items(
     return {"updated": updated}
 
 
-@router.post("/items/mark-all-read")
+@router.post("/items/mark-all-read", dependencies=[Depends(require_admin_key)])
 async def mark_all_as_read(
     request_body: BulkUpdateRequest | None = None,
     source_id: int | None = None,

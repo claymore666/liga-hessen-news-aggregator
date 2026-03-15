@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import datetime
-from time import mktime
+from calendar import timegm
 
 import feedparser
 import httpx
@@ -116,7 +116,7 @@ class MastodonConnector(BaseConnector):
             published = None
             if hasattr(entry, "published_parsed") and entry.published_parsed:
                 try:
-                    published = datetime.fromtimestamp(mktime(entry.published_parsed))
+                    published = datetime.fromtimestamp(timegm(entry.published_parsed))
                 except (ValueError, OverflowError):
                     pass
 

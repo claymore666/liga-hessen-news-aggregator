@@ -4,7 +4,7 @@ import logging
 import re
 import ssl
 from datetime import datetime
-from time import mktime
+from calendar import timegm
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import feedparser
@@ -98,12 +98,12 @@ class RSSConnector(BaseConnector):
             published = None
             if hasattr(entry, "published_parsed") and entry.published_parsed:
                 try:
-                    published = datetime.fromtimestamp(mktime(entry.published_parsed))
+                    published = datetime.fromtimestamp(timegm(entry.published_parsed))
                 except (ValueError, OverflowError):
                     pass
             elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
                 try:
-                    published = datetime.fromtimestamp(mktime(entry.updated_parsed))
+                    published = datetime.fromtimestamp(timegm(entry.updated_parsed))
                 except (ValueError, OverflowError):
                     pass
 

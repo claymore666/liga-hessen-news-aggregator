@@ -107,8 +107,13 @@ class OpenRouterProvider(BaseLLMProvider):
 
         usage = data.get("usage", {})
 
+        choices = data.get("choices", [])
+        if not choices:
+            error_info = data.get("error", {})
+            raise RuntimeError(f"OpenRouter returned no choices: {error_info}")
+
         return LLMResponse(
-            text=data["choices"][0]["message"]["content"],
+            text=choices[0].get("message", {}).get("content", ""),
             model=data.get("model", self.model),
             tokens_used=usage.get("total_tokens"),
             prompt_tokens=usage.get("prompt_tokens"),
@@ -116,7 +121,7 @@ class OpenRouterProvider(BaseLLMProvider):
             metadata={
                 "provider": self.provider_name,
                 "id": data.get("id"),
-                "finish_reason": data["choices"][0].get("finish_reason"),
+                "finish_reason": choices[0].get("finish_reason"),
             },
         )
 
@@ -154,8 +159,13 @@ class OpenRouterProvider(BaseLLMProvider):
             data = response.json()
 
         usage = data.get("usage", {})
+        choices = data.get("choices", [])
+        if not choices:
+            error_info = data.get("error", {})
+            raise RuntimeError(f"OpenRouter returned no choices: {error_info}")
+
         return LLMResponse(
-            text=data["choices"][0]["message"]["content"],
+            text=choices[0].get("message", {}).get("content", ""),
             model=data.get("model", self.model),
             tokens_used=usage.get("total_tokens"),
             prompt_tokens=usage.get("prompt_tokens"),
@@ -163,7 +173,7 @@ class OpenRouterProvider(BaseLLMProvider):
             metadata={
                 "provider": self.provider_name,
                 "id": data.get("id"),
-                "finish_reason": data["choices"][0].get("finish_reason"),
+                "finish_reason": choices[0].get("finish_reason"),
             },
         )
 

@@ -295,8 +295,8 @@ class ProxyManager:
         except ValueError:
             return False
 
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             sock.connect((proxy_host, proxy_port))
 
@@ -304,7 +304,6 @@ class ProxyManager:
             sock.send(connect_request.encode())
 
             response = sock.recv(1024).decode()
-            sock.close()
 
             if "200" in response.split("\r\n")[0]:
                 logger.debug(f"HTTPS tunnel OK for {proxy}")
@@ -316,6 +315,8 @@ class ProxyManager:
         except Exception as e:
             logger.debug(f"HTTPS tunnel test failed for {proxy}: {e}")
             return False
+        finally:
+            sock.close()
 
     async def _search_batch(self) -> tuple[int, int]:
         """Test a batch of proxies. Returns (http_found, https_found)."""

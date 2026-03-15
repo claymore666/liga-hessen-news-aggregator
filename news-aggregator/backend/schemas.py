@@ -198,7 +198,7 @@ class ItemListResponse(BaseModel):
 class BulkArchiveRequest(BaseModel):
     """Request body for bulk archive operations."""
 
-    ids: list[int]
+    ids: list[int] = Field(..., max_length=500)
     is_archived: bool = True  # True to archive, False to restore
 
 

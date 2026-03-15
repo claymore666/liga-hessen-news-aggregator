@@ -4,6 +4,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from api.auth import require_admin_key
+
 logger = logging.getLogger(__name__)
 from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,7 +119,7 @@ async def get_source(
     return _build_source_response(source)
 
 
-@router.post("/sources", response_model=SourceResponse, status_code=201)
+@router.post("/sources", response_model=SourceResponse, status_code=201, dependencies=[Depends(require_admin_key)])
 async def create_source(
     source_data: SourceCreate,
     db: AsyncSession = Depends(get_db),
@@ -171,7 +173,7 @@ async def create_source(
     return _build_source_response(source)
 
 
-@router.patch("/sources/{source_id}", response_model=SourceResponse)
+@router.patch("/sources/{source_id}", response_model=SourceResponse, dependencies=[Depends(require_admin_key)])
 async def update_source(
     source_id: int,
     update: SourceUpdate,
@@ -221,7 +223,7 @@ async def update_source(
     return _build_source_response(source)
 
 
-@router.delete("/sources/{source_id}", status_code=204)
+@router.delete("/sources/{source_id}", status_code=204, dependencies=[Depends(require_admin_key)])
 async def delete_source(
     source_id: int,
     db: AsyncSession = Depends(get_db),
@@ -237,7 +239,7 @@ async def delete_source(
     await db.delete(source)
 
 
-@router.post("/sources/{source_id}/enable", response_model=SourceResponse)
+@router.post("/sources/{source_id}/enable", response_model=SourceResponse, dependencies=[Depends(require_admin_key)])
 async def enable_source(
     source_id: int,
     db: AsyncSession = Depends(get_db),
@@ -269,7 +271,7 @@ async def enable_source(
     return _build_source_response(source)
 
 
-@router.post("/sources/{source_id}/disable", response_model=SourceResponse)
+@router.post("/sources/{source_id}/disable", response_model=SourceResponse, dependencies=[Depends(require_admin_key)])
 async def disable_source(
     source_id: int,
     db: AsyncSession = Depends(get_db),
@@ -301,7 +303,7 @@ async def disable_source(
     return _build_source_response(source)
 
 
-@router.post("/sources/{source_id}/fetch-all")
+@router.post("/sources/{source_id}/fetch-all", dependencies=[Depends(require_admin_key)])
 async def trigger_fetch_all_channels(
     source_id: int,
     training_mode: bool = False,
@@ -355,7 +357,7 @@ async def trigger_fetch_all_channels(
 # === Channel Endpoints ===
 
 
-@router.post("/sources/{source_id}/channels", response_model=ChannelResponse, status_code=201)
+@router.post("/sources/{source_id}/channels", response_model=ChannelResponse, status_code=201, dependencies=[Depends(require_admin_key)])
 async def add_channel(
     source_id: int,
     channel_data: ChannelCreate,
@@ -421,7 +423,7 @@ async def get_channel(
     return ChannelResponse.model_validate(channel)
 
 
-@router.patch("/channels/{channel_id}", response_model=ChannelResponse)
+@router.patch("/channels/{channel_id}", response_model=ChannelResponse, dependencies=[Depends(require_admin_key)])
 async def update_channel(
     channel_id: int,
     update: ChannelUpdate,
@@ -470,7 +472,7 @@ async def update_channel(
     return ChannelResponse.model_validate(channel)
 
 
-@router.delete("/channels/{channel_id}", status_code=204)
+@router.delete("/channels/{channel_id}", status_code=204, dependencies=[Depends(require_admin_key)])
 async def delete_channel(
     channel_id: int,
     db: AsyncSession = Depends(get_db),
@@ -486,7 +488,7 @@ async def delete_channel(
     await db.delete(channel)
 
 
-@router.post("/channels/{channel_id}/fetch")
+@router.post("/channels/{channel_id}/fetch", dependencies=[Depends(require_admin_key)])
 async def trigger_channel_fetch(
     channel_id: int,
     training_mode: bool = False,
@@ -525,7 +527,7 @@ async def trigger_channel_fetch(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/channels/{channel_id}/enable", response_model=ChannelResponse)
+@router.post("/channels/{channel_id}/enable", response_model=ChannelResponse, dependencies=[Depends(require_admin_key)])
 async def enable_channel(
     channel_id: int,
     db: AsyncSession = Depends(get_db),
@@ -545,7 +547,7 @@ async def enable_channel(
     return ChannelResponse.model_validate(channel)
 
 
-@router.post("/channels/{channel_id}/disable", response_model=ChannelResponse)
+@router.post("/channels/{channel_id}/disable", response_model=ChannelResponse, dependencies=[Depends(require_admin_key)])
 async def disable_channel(
     channel_id: int,
     db: AsyncSession = Depends(get_db),
@@ -568,7 +570,7 @@ async def disable_channel(
 # === Legacy Endpoints (for backward compatibility during transition) ===
 
 
-@router.post("/sources/fetch-all")
+@router.post("/sources/fetch-all", dependencies=[Depends(require_admin_key)])
 async def trigger_fetch_all_sources(training_mode: bool = False) -> dict:
     """Manually trigger a fetch for all enabled channels across all sources.
 

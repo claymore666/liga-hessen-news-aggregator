@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -125,9 +125,9 @@ async def clear_motd(db: AsyncSession = Depends(get_db)) -> MOTDUpdateResponse:
     )
 
 
-@router.get("/history", response_model=list[MOTDResponse])
+@router.get("/history", response_model=list[MOTDResponse], dependencies=[Depends(require_admin_key)])
 async def get_motd_history(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[MOTDResponse]:
     """Get MOTD history (admin only)."""
