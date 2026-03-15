@@ -14,11 +14,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
-COPY . .
+# Create non-root user and data directory
+RUN useradd -m -s /bin/bash appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 
-# Create data directory
-RUN mkdir -p /app/data
+# Copy application code
+COPY --chown=appuser:appuser . .
+
+USER appuser
 
 # Expose port
 EXPOSE 8082

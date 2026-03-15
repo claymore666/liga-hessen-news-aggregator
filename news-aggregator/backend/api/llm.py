@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin_key
 from config import settings
-from database import get_db
+from database import get_db, utcnow
 from models import Item, Priority, Setting
 from services.llm.ollama import OllamaProvider
 
@@ -498,7 +498,7 @@ async def enable_llm(
     timestamp_setting = await db.scalar(
         select(Setting).where(Setting.key == LLM_ENABLED_AT_KEY)
     )
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     if timestamp_setting:
         timestamp_setting.value = now

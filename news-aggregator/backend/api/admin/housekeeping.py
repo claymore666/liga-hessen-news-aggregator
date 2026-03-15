@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db
+from database import get_db, utcnow
 from models import Item, Priority, Setting
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ async def get_items_to_delete(
         Tuple of (total_count, by_priority_counts, oldest_date, deleted_ids)
         deleted_ids is only populated when execute=True
     """
-    now = datetime.utcnow()
+    now = utcnow()
     by_priority: dict[str, int] = {}
     total = 0
     oldest_date: datetime | None = None

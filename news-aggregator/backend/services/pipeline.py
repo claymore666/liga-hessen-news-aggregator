@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, Item, Priority, Rule, RuleType
 from config import settings
+from database import utcnow
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
@@ -170,7 +171,7 @@ class Pipeline:
         self.pre_filter_results = pre_filter_results or {}
         self.processing_logger = processing_logger
         # Use naive UTC datetime (consistent with DB storage)
-        self.cutoff_date = datetime.utcnow() - timedelta(days=self.MAX_AGE_DAYS)
+        self.cutoff_date = utcnow() - timedelta(days=self.MAX_AGE_DAYS)
 
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
         """Process raw items through the pipeline.
@@ -616,7 +617,7 @@ class Pipeline:
                             if item.id in indexed_ids:
                                 item.metadata_ = item.metadata_ or {}
                                 item.metadata_["vectordb_indexed"] = True
-                                item.metadata_["vectordb_indexed_at"] = datetime.utcnow().isoformat()
+                                item.metadata_["vectordb_indexed_at"] = utcnow().isoformat()
                         await self.db.flush()
                     except Exception as e:
                         logger.warning(f"Failed to update vectordb_indexed flags: {e}")

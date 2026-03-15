@@ -8,6 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Item, Priority, Source
+from database import utcnow
 
 
 class TestListItems:
@@ -76,7 +77,7 @@ class TestListItems:
                 title=f"Page Test {i}",
                 content="Content",
                 url=f"https://test.com/page/{i}",
-                published_at=datetime.utcnow() - timedelta(hours=i),
+                published_at=utcnow() - timedelta(hours=i),
                 content_hash=f"pagehash{i}",
                 priority=Priority.MEDIUM,
             )
@@ -161,7 +162,7 @@ class TestListItems:
         self, client: AsyncClient, multiple_items_in_db: list[Item]
     ):
         """Filter by date range."""
-        since = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+        since = (utcnow() - timedelta(hours=1)).isoformat()
         response = await client.get(
             "/api/items", params={"since": since, "relevant_only": False}
         )
@@ -180,7 +181,7 @@ class TestListItems:
             title="Unique Search Term Xyz123",
             content="Some content with keyword Pflege",
             url="https://test.com/search",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="searchhash",
             priority=Priority.MEDIUM,
         )
@@ -554,7 +555,7 @@ class TestRefetchItem:
             title="Test Tweet",
             content="Tweet content with link",
             url="https://x.com/test/status/123",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="tweethash",
         )
         db_session.add(item)

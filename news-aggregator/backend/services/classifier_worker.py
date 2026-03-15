@@ -20,7 +20,7 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker
+from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class ClassifierWorker:
             return
 
         self._running = True
-        self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stats["started_at"] = utcnow().isoformat()
         self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
@@ -366,7 +366,7 @@ class ClassifierWorker:
                     "ak_confidence": result.get("ak_confidence"),
                     "priority_suggestion": result.get("priority"),
                     "priority_confidence": result.get("priority_confidence"),
-                    "classified_at": datetime.utcnow().isoformat(),
+                    "classified_at": utcnow().isoformat(),
                 }
 
                 # Set retry priority for LLM worker
@@ -476,7 +476,7 @@ class ClassifierWorker:
         async with self._stats_lock:
             self._stats["processed"] += processed
             self._stats["priority_changed"] += priority_changed
-            self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+            self._stats["last_processed_at"] = utcnow().isoformat()
 
         if processed > 0:
             logger.info(f"Classified {processed} items ({priority_changed} priority changes)")

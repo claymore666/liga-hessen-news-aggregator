@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from connectors import ConnectorRegistry, LinkedInConnector
 from connectors.linkedin import LinkedInConfig
+from database import utcnow
 
 
 # === Config Tests ===
@@ -181,28 +182,28 @@ class TestLinkedInTimeParsing:
     def test_parse_minutes(self):
         """Should parse minute-based times."""
         result = LinkedInConnector._parse_relative_time("30m")
-        assert (datetime.utcnow() - result).total_seconds() < 35 * 60
+        assert (utcnow() - result).total_seconds() < 35 * 60
 
     def test_parse_hours(self):
         """Should parse hour-based times."""
         result = LinkedInConnector._parse_relative_time("2h")
-        assert (datetime.utcnow() - result).total_seconds() < 3 * 60 * 60
+        assert (utcnow() - result).total_seconds() < 3 * 60 * 60
 
     def test_parse_days(self):
         """Should parse day-based times."""
         result = LinkedInConnector._parse_relative_time("3d")
-        assert (datetime.utcnow() - result).total_seconds() < 4 * 24 * 60 * 60
+        assert (utcnow() - result).total_seconds() < 4 * 24 * 60 * 60
 
     def test_parse_weeks(self):
         """Should parse week-based times."""
         result = LinkedInConnector._parse_relative_time("2w")
-        assert (datetime.utcnow() - result).total_seconds() < 15 * 24 * 60 * 60
+        assert (utcnow() - result).total_seconds() < 15 * 24 * 60 * 60
 
     def test_parse_unknown_format(self):
         """Should return now for unknown formats."""
         result = LinkedInConnector._parse_relative_time("just now")
         # Should be very close to now
-        assert (datetime.utcnow() - result).total_seconds() < 5
+        assert (utcnow() - result).total_seconds() < 5
 
 
 # === Fetch Tests (without cookies) ===

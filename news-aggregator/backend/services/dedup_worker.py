@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker, json_extract_path, json_merge
+from database import async_session_maker, json_extract_path, json_merge, utcnow
 from models import Channel, Item, Priority
 from services.pipeline import _strip_boilerplate, _titles_similar, _normalize_url
 
@@ -71,7 +71,7 @@ class DedupWorker:
             return
 
         self._running = True
-        self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stats["started_at"] = utcnow().isoformat()
         self._stopped_due_to_errors = False
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
@@ -185,8 +185,8 @@ class DedupWorker:
                     continue
 
                 # Daily sync check: verify DB and ChromaDB are in sync
-                today = datetime.utcnow().date()
-                if last_sync_check_date != today and datetime.utcnow().hour >= 0:
+                today = utcnow().date()
+                if last_sync_check_date != today and utcnow().hour >= 0:
                     last_sync_check_date = today
                     await self._check_vectordb_sync()
 
@@ -281,7 +281,7 @@ class DedupWorker:
             ]
 
             if check_days > 0:
-                cutoff = datetime.utcnow() - timedelta(days=check_days)
+                cutoff = utcnow() - timedelta(days=check_days)
                 conditions.append(Item.fetched_at >= cutoff)
 
             query = (
@@ -377,7 +377,7 @@ class DedupWorker:
                     clean_title = _strip_boilerplate(item_data["title"]).lower()
                     async with async_session_maker() as title_db:
                         # Check against items from last N days with lower ID
-                        title_cutoff = datetime.utcnow() - timedelta(days=check_days)
+                        title_cutoff = utcnow() - timedelta(days=check_days)
                         recent_items = await title_db.execute(
                             select(Item.id, Item.title).where(
                                 Item.id < item_data["id"],
@@ -398,7 +398,7 @@ class DedupWorker:
                                 break
 
                 # Mark Phase 1 complete
-                now = datetime.utcnow().isoformat()
+                now = utcnow().isoformat()
                 metadata_patch["dedup_phase1"] = True
                 metadata_patch["dedup_phase1_at"] = now
                 # Backward compatibility
@@ -455,7 +455,7 @@ class DedupWorker:
         async with self._stats_lock:
             self._stats["phase1_checked"] += checked
             self._stats["duplicates_found"] += duplicates_found
-            self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+            self._stats["last_processed_at"] = utcnow().isoformat()
 
         if checked > 0:
             logger.info(f"Phase 1 dedup: checked {checked} items ({duplicates_found} duplicates found)")
@@ -499,7 +499,7 @@ class DedupWorker:
             ]
 
             if check_days > 0:
-                cutoff = datetime.utcnow() - timedelta(days=check_days)
+                cutoff = utcnow() - timedelta(days=check_days)
                 conditions.append(Item.fetched_at >= cutoff)
 
             query = (
@@ -544,7 +544,7 @@ class DedupWorker:
                 # Only match against items from recent days
                 fetched_after = None
                 if check_days > 0:
-                    fetched_after = (datetime.utcnow() - timedelta(days=check_days)).isoformat()
+                    fetched_after = (utcnow() - timedelta(days=check_days)).isoformat()
 
                 duplicates = await classifier.find_duplicates(
                     title=clean_title,
@@ -568,7 +568,7 @@ class DedupWorker:
                             break
 
                 # Mark Phase 2 complete
-                now = datetime.utcnow().isoformat()
+                now = utcnow().isoformat()
                 metadata_patch["dedup_phase2"] = True
                 metadata_patch["dedup_phase2_at"] = now
 
@@ -623,7 +623,7 @@ class DedupWorker:
         async with self._stats_lock:
             self._stats["phase2_checked"] += checked
             self._stats["duplicates_found"] += duplicates_found
-            self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+            self._stats["last_processed_at"] = utcnow().isoformat()
 
         if checked > 0:
             logger.info(f"Phase 2 dedup: checked {checked} items ({duplicates_found} duplicates found)")
@@ -711,7 +711,7 @@ class DedupWorker:
                             .where(Item.id == item_id)
                             .values(metadata_=json_merge(Item.metadata_, {
                                 "vectordb_indexed": True,
-                                "vectordb_indexed_at": datetime.utcnow().isoformat(),
+                                "vectordb_indexed_at": utcnow().isoformat(),
                             }))
                         )
                     await db.commit()

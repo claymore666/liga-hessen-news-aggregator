@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from api.auth import require_admin_key
 from config import settings as app_settings
-from database import get_db
+from database import get_db, utcnow
 from models import Channel, Rule, Setting, Source
 from schemas_config import (
     CONFIG_FORMAT_VERSION,
@@ -143,7 +143,7 @@ async def export_config(
     return ConfigExport(
         version=CONFIG_FORMAT_VERSION,
         instance_identifier=identifier,
-        exported_at=datetime.utcnow(),
+        exported_at=utcnow(),
         sources=exported_sources,
         rules=exported_rules,
         settings=exported_settings,

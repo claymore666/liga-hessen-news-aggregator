@@ -8,6 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Rule, RuleType, Setting, Source
+from database import utcnow
 
 
 class TestConfigExport:
@@ -158,7 +159,7 @@ class TestConfigValidate:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [
                 {"name": "Duplicate Name", "channels": []},
                 {"name": "Duplicate Name", "channels": []},
@@ -181,7 +182,7 @@ class TestConfigValidate:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [],
             "rules": [
                 {"name": "Same Rule", "rule_type": "keyword", "pattern": "a", "priority_boost": 0, "enabled": True, "order": 0},
@@ -203,7 +204,7 @@ class TestConfigValidate:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [],
             "rules": [
                 {"name": "Bad Regex", "rule_type": "regex", "pattern": "[invalid(", "priority_boost": 0, "enabled": True, "order": 0},
@@ -224,7 +225,7 @@ class TestConfigValidate:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [
                 {
                     "name": "Source with redacted",
@@ -255,7 +256,7 @@ class TestConfigValidate:
         config = {
             "version": "0.1",  # Old version
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [],
             "rules": [],
             "settings": [],
@@ -298,7 +299,7 @@ class TestConfigImport:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [
                 {"name": source_in_db.name, "channels": []},  # Same name as existing
             ],
@@ -342,7 +343,7 @@ class TestConfigImport:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [
                 {"name": "Duplicate", "channels": []},
                 {"name": "Duplicate", "channels": []},  # Duplicate
@@ -368,7 +369,7 @@ class TestConfigImport:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [
                 {
                     "name": "Import Channel Test",
@@ -404,7 +405,7 @@ class TestConfigImport:
         config = {
             "version": "1.0",
             "instance_identifier": "test",
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utcnow().isoformat(),
             "sources": [{"name": "Default Mode Test", "channels": []}],
             "rules": [],
             "settings": [],

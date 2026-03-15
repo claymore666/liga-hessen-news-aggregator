@@ -16,7 +16,7 @@ from datetime import datetime
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker
+from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
 from services.llm.base import RateLimitError
 
@@ -85,7 +85,7 @@ class LLMWorker:
             return
 
         self._running = True
-        self._stats["started_at"] = datetime.utcnow().isoformat()
+        self._stats["started_at"] = utcnow().isoformat()
         self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
@@ -658,7 +658,7 @@ class LLMWorker:
                         "topic": topic,
                         "topic_suggestion": topic_suggestion,
                         "reasoning": analysis.get("reasoning"),
-                        "processed_at": datetime.utcnow().isoformat(),
+                        "processed_at": utcnow().isoformat(),
                         "source": "llm_worker",
                     },
                 }
@@ -673,7 +673,7 @@ class LLMWorker:
                         "reasoning": duplicate_reasoning,
                         "candidate_id": dup_candidate.get("candidate_id"),
                         "similarity_score": dup_candidate.get("similarity_score"),
-                        "confirmed_at": datetime.utcnow().isoformat(),
+                        "confirmed_at": utcnow().isoformat(),
                     }
                     # Clear the candidate since we've processed it
                     remove_keys.append("duplicate_candidate")
@@ -776,7 +776,7 @@ class LLMWorker:
 
                 processed += 1
                 async with self._stats_lock:
-                    self._stats["last_processed_at"] = datetime.utcnow().isoformat()
+                    self._stats["last_processed_at"] = utcnow().isoformat()
                     # Increment per-item so stats sync picks up progress mid-batch
                     stats_key = "fresh_processed" if is_fresh else "backlog_processed"
                     self._stats[stats_key] += 1

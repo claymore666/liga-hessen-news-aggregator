@@ -8,6 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Source
+from database import utcnow
 
 
 class TestHealthEndpoints:
@@ -92,7 +93,7 @@ class TestDatabaseStatsEndpoint:
                 title=f"Article {i}",
                 content="Content",
                 url=f"https://test.com/{i}",
-                published_at=datetime.utcnow(),
+                published_at=utcnow(),
                 content_hash=f"hash{i}",
                 summary="Summary" if i < 2 else None,
             )
@@ -154,8 +155,8 @@ class TestDeleteItemsEndpoints:
             title="Old Article",
             content="Old content",
             url="https://test.com/old",
-            published_at=datetime.utcnow() - timedelta(days=60),
-            fetched_at=datetime.utcnow() - timedelta(days=60),
+            published_at=utcnow() - timedelta(days=60),
+            fetched_at=utcnow() - timedelta(days=60),
             content_hash="oldhash",
         )
         new_item = Item(
@@ -164,7 +165,7 @@ class TestDeleteItemsEndpoints:
             title="New Article",
             content="New content",
             url="https://test.com/new",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="newhash",
         )
         db_session.add_all([old_item, new_item])
@@ -188,8 +189,8 @@ class TestDeleteItemsEndpoints:
             title="Old Starred",
             content="Content",
             url="https://test.com/starred",
-            published_at=datetime.utcnow() - timedelta(days=60),
-            fetched_at=datetime.utcnow() - timedelta(days=60),
+            published_at=utcnow() - timedelta(days=60),
+            fetched_at=utcnow() - timedelta(days=60),
             content_hash="starredhash",
             is_starred=True,
         )

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Source
 from services.pipeline import Pipeline, RawItem
+from database import utcnow
 
 
 class TestRawItem:
@@ -135,7 +136,7 @@ class TestPipeline:
             title="Existing",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="somehash",
         )
         db_session.add(existing)
@@ -173,7 +174,7 @@ class TestPipeline:
             title="Original",
             content="Same content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash=content_hash,
         )
         db_session.add(existing)
@@ -202,7 +203,7 @@ class TestPipeline:
             title="Haushaltskürzung angekündigt",
             content="Die Regierung plant Kürzungen",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
 
@@ -212,7 +213,7 @@ class TestPipeline:
             title="Wetter morgen",
             content="Es wird sonnig",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash2",
         )
 
@@ -236,7 +237,7 @@ class TestPipeline:
             title="Budget News",
             content="Das Projekt kostet 50 Millionen Euro",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
 
@@ -246,7 +247,7 @@ class TestPipeline:
             title="Other News",
             content="Keine Zahlen hier",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash2",
         )
 
@@ -340,7 +341,7 @@ class TestPipeline:
             title="Existing",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
         db_session.add(existing)

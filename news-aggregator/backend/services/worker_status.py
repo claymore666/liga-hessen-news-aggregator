@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
-from database import async_session_maker
+from database import async_session_maker, utcnow
 from models import Setting
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ async def write_state(name: str, *, running: bool, paused: bool = False,
         "running": running,
         "paused": paused,
         "stopped_due_to_errors": stopped_due_to_errors,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": utcnow().isoformat(),
     }
     if service_available is not None:
         value["service_available"] = service_available
@@ -85,7 +85,7 @@ async def read_state(name: str) -> dict:
 
 
 async def write_stats(name: str, stats: dict) -> None:
-    value = {**stats, "synced_at": datetime.utcnow().isoformat()}
+    value = {**stats, "synced_at": utcnow().isoformat()}
     await _write(_key(name, "stats"), value, f"Worker stats for {name}")
 
 
@@ -97,7 +97,7 @@ async def read_stats(name: str) -> dict:
 async def write_command(name: str, action: str) -> None:
     value = {
         "action": action,
-        "issued_at": datetime.utcnow().isoformat(),
+        "issued_at": utcnow().isoformat(),
     }
     # Use Redis SETEX with TTL so stale commands auto-expire
     r = await _get_redis()
@@ -143,7 +143,7 @@ async def read_and_clear_command(name: str) -> str | None:
     if issued_at:
         try:
             issued = datetime.fromisoformat(issued_at)
-            if datetime.utcnow() - issued > timedelta(seconds=COMMAND_TIMEOUT_SECONDS):
+            if utcnow() - issued > timedelta(seconds=COMMAND_TIMEOUT_SECONDS):
                 logger.warning("Discarding stale command for %s: %s", key, value.get("action"))
                 return None
         except (ValueError, TypeError):

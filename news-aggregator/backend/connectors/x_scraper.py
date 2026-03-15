@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 from services.browser_pool import browser_pool
+from database import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ class XScraperConnector(BaseConnector):
 
                 # Extract timestamp
                 time_el = await tweet_el.query_selector("time")
-                published_at = datetime.utcnow()
+                published_at = utcnow()
                 tweet_url = ""
                 if time_el:
                     datetime_attr = await time_el.get_attribute("datetime")

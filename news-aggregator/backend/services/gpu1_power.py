@@ -26,6 +26,7 @@ import time
 from datetime import datetime
 
 import httpx
+from database import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ class GPU1PowerManager:
             )
 
             self._was_sleeping = True
-            self._wake_time = datetime.utcnow()
+            self._wake_time = utcnow()
             await self._set_last_wol_time(time.time())
 
             logger.info(

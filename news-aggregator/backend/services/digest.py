@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from zoneinfo import ZoneInfo
 
 from config import settings
-from database import async_session_maker
+from database import async_session_maker, utcnow
 from models import Channel, Digest, DigestStatus, Item, LLMPrompt, Priority, Source
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ async def collect_digest_items(
 
 async def get_recently_covered_item_ids(db, lookback_days: int) -> set[int]:
     """Load item IDs from recent digests for dedup marking."""
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    cutoff = utcnow() - timedelta(days=lookback_days)
     query = select(Digest.item_ids).where(
         Digest.date >= cutoff,
         Digest.status.in_([DigestStatus.GENERATED, DigestStatus.SENT]),
@@ -339,7 +339,7 @@ async def send_digest(db, digest_id: int) -> bool:
     if settings.digest_skip_empty and not digest.item_ids:
         logger.info(f"Skipping send for empty digest {digest_id}")
         digest.status = DigestStatus.SENT
-        digest.sent_at = datetime.utcnow()
+        digest.sent_at = utcnow()
         digest.recipients = recipients
         await db.commit()
         return True
@@ -355,7 +355,7 @@ async def send_digest(db, digest_id: int) -> bool:
 
     if success:
         digest.status = DigestStatus.SENT
-        digest.sent_at = datetime.utcnow()
+        digest.sent_at = utcnow()
         digest.recipients = recipients
         logger.info(f"Digest {digest_id} sent to {len(recipients)} recipients")
     else:

@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.auth import require_admin_key
-from database import Base, get_db
+from database import Base, get_db, utcnow
 from main import app
 from models import Channel, ConnectorType, Item, Priority, Rule, RuleType, Setting, Source
 
@@ -214,7 +214,7 @@ async def item_in_db(db_session: AsyncSession, channel_in_db: Channel) -> Item:
         content="This is test content for the article.",
         url="https://test.com/article/1",
         author="Test Author",
-        published_at=datetime.utcnow(),
+        published_at=utcnow(),
         content_hash="hash123",
         priority=Priority.MEDIUM,
         priority_score=50,
@@ -239,7 +239,7 @@ async def multiple_items_in_db(
             title=f"Test Article {i} - {priority.value}",
             content=f"Content for article {i}",
             url=f"https://test.com/article/{i}",
-            published_at=datetime.utcnow() - timedelta(hours=i),
+            published_at=utcnow() - timedelta(hours=i),
             content_hash=f"hash{i}",
             priority=priority,
             priority_score=100 - (i * 25),
@@ -292,7 +292,7 @@ def sample_config_export() -> dict[str, Any]:
     return {
         "version": "1.0",
         "instance_identifier": "test-instance",
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": utcnow().isoformat(),
         "sources": [
             {
                 "name": "Import Test Source",

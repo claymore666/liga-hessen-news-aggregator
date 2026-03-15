@@ -16,6 +16,7 @@ from services.browser_pool import browser_pool
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
+from database import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +332,7 @@ class LinkedInConnector(BaseConnector):
                     ".feed-shared-actor__sub-description, "
                     "time"
                 )
-                published_at = datetime.utcnow()
+                published_at = utcnow()
                 if time_el:
                     time_text = await time_el.inner_text()
                     # Parse relative time (e.g., "2h", "3d", "1w")
@@ -422,7 +423,7 @@ Verlinkter Artikel von {article.source_domain}:
     @staticmethod
     def _parse_relative_time(time_text: str) -> datetime:
         """Parse LinkedIn's relative time strings."""
-        now = datetime.utcnow()
+        now = utcnow()
         time_text = time_text.lower().strip()
 
         # Common patterns

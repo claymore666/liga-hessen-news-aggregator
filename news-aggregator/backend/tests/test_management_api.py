@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Item, Priority, Source, Setting
+from database import utcnow
 
 
 class TestSchedulerAPI:
@@ -78,8 +79,8 @@ class TestAdminItemCleanupAPI:
             title="Old Article",
             content="Content",
             url="https://example.com/old",
-            published_at=datetime.utcnow() - timedelta(days=40),
-            fetched_at=datetime.utcnow() - timedelta(days=40),
+            published_at=utcnow() - timedelta(days=40),
+            fetched_at=utcnow() - timedelta(days=40),
             content_hash="hash_old",
         )
         new_item = Item(
@@ -88,8 +89,8 @@ class TestAdminItemCleanupAPI:
             title="New Article",
             content="Content",
             url="https://example.com/new",
-            published_at=datetime.utcnow(),
-            fetched_at=datetime.utcnow(),
+            published_at=utcnow(),
+            fetched_at=utcnow(),
             content_hash="hash_new",
         )
         db_session.add(old_item)
@@ -128,8 +129,8 @@ class TestAdminItemCleanupAPI:
             title="Starred Old Article",
             content="Content",
             url="https://example.com/starred",
-            published_at=datetime.utcnow() - timedelta(days=40),
-            fetched_at=datetime.utcnow() - timedelta(days=40),
+            published_at=utcnow() - timedelta(days=40),
+            fetched_at=utcnow() - timedelta(days=40),
             content_hash="hash_starred",
             is_starred=True,
         )
@@ -180,7 +181,7 @@ class TestAdminItemCleanupAPI:
                 title=f"Article {i}",
                 content="Content",
                 url=f"https://example.com/s1/{i}",
-                published_at=datetime.utcnow(),
+                published_at=utcnow(),
                 content_hash=f"hash_s1_{i}",
             ))
         for i in range(2):
@@ -190,7 +191,7 @@ class TestAdminItemCleanupAPI:
                 title=f"Article {i}",
                 content="Content",
                 url=f"https://example.com/s2/{i}",
-                published_at=datetime.utcnow(),
+                published_at=utcnow(),
                 content_hash=f"hash_s2_{i}",
             ))
         await db_session.flush()
@@ -236,7 +237,7 @@ class TestAdminItemCleanupAPI:
                 title=f"Article {priority.value}",
                 content="Content",
                 url=f"https://example.com/{i}/{priority.value}",
-                published_at=datetime.utcnow(),
+                published_at=utcnow(),
                 content_hash=f"hash_{i}_{priority.value}",
                 priority=priority,
             ))

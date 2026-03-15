@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 
 from config import settings
+from database import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ class ProxyManager:
             with open(KNOWN_PROXIES_FILE, 'w') as f:
                 json.dump({
                     "proxies": self._known_proxies,
-                    "last_updated": datetime.utcnow().isoformat(),
+                    "last_updated": utcnow().isoformat(),
                 }, f, indent=2)
             logger.debug(f"Saved {len(self._known_proxies)} known proxies to storage")
         except Exception as e:
@@ -131,7 +132,7 @@ class ProxyManager:
         self._known_proxies[proxy] = {
             "latency": round(latency, 2),
             "failures": 0,
-            "last_success": datetime.utcnow().isoformat(),
+            "last_success": utcnow().isoformat(),
             "https_capable": https_capable,
         }
         # Trim to max size, keeping lowest latency proxies
@@ -157,7 +158,7 @@ class ProxyManager:
         if proxy in self._known_proxies:
             self._known_proxies[proxy]["failures"] = 0
             self._known_proxies[proxy]["latency"] = round(latency, 2)
-            self._known_proxies[proxy]["last_success"] = datetime.utcnow().isoformat()
+            self._known_proxies[proxy]["last_success"] = utcnow().isoformat()
             self._known_proxies[proxy]["https_capable"] = https_capable
         else:
             self._add_known_proxy(proxy, latency, https_capable)
@@ -167,7 +168,7 @@ class ProxyManager:
         proxy_info = {
             "proxy": proxy,
             "latency": round(latency, 2),
-            "last_checked": datetime.utcnow().isoformat(),
+            "last_checked": utcnow().isoformat(),
             "failures": 0,
         }
 
@@ -287,13 +288,13 @@ class ProxyManager:
 
     async def validate_https_tunnel(self, proxy: str) -> bool:
         """Test if proxy supports HTTPS CONNECT tunnel to x.com."""
-        import socket
-
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._validate_https_tunnel_sync, proxy)
 
     def _validate_https_tunnel_sync(self, proxy: str) -> bool:
         """Synchronous HTTPS tunnel validation (run in executor to avoid blocking event loop)."""
+        import socket
+
         try:
             proxy_host, proxy_port = proxy.split(":")
             proxy_port = int(proxy_port)
@@ -373,7 +374,7 @@ class ProxyManager:
                 self._add_to_pool(proxy, latency, https_capable=False)
                 http_found += 1
 
-        self.last_refresh = datetime.utcnow()
+        self.last_refresh = utcnow()
         return http_found, https_found
 
     def _pools_filled(self) -> bool:
@@ -422,7 +423,7 @@ class ProxyManager:
             success, latency = await self.validate_proxy(proxy)
             if success:
                 proxy_info["latency"] = round(latency, 2)
-                proxy_info["last_checked"] = datetime.utcnow().isoformat()
+                proxy_info["last_checked"] = utcnow().isoformat()
                 proxy_info["failures"] = 0
                 still_working.append(proxy_info)
             else:

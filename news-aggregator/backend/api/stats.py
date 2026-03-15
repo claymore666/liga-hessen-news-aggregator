@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db
+from database import get_db, utcnow
 from models import Channel, Item, Priority, Rule, Source
 from schemas import ChannelStats, SourceStats, StatsResponse
 
@@ -19,7 +19,7 @@ async def get_stats(
     days: int | None = Query(None, description="Filter item counts to last N days (by fetched_at)"),
 ) -> StatsResponse:
     """Get dashboard statistics."""
-    now = datetime.utcnow()
+    now = utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
@@ -102,7 +102,7 @@ async def get_topic_counts(
         limit: Max topics to return (0 = all).
         priority: Comma-separated priority filter (e.g. 'high,medium').
     """
-    now = datetime.utcnow()
+    now = utcnow()
     if days is None:
         # Monday = 0, so use 3 days on Monday to cover the weekend
         days = 3 if now.weekday() == 0 else 1
@@ -178,7 +178,7 @@ async def get_stats_by_source(
     # Build item filter conditions
     item_conditions = [Channel.id == Item.channel_id]
     if days is not None:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
         item_conditions.append(Item.fetched_at >= cutoff)
     if priority:
         priorities = [p.strip() for p in priority.split(",")]
@@ -254,7 +254,7 @@ async def get_source_donut(
     """
     base_conditions = [Item.priority != Priority.NONE]
     if days is not None:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
         base_conditions.append(Item.fetched_at >= cutoff)
     if priority:
         priorities = [p.strip() for p in priority.split(",")]

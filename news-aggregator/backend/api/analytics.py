@@ -16,7 +16,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db
+from database import get_db, utcnow
 from models import Channel, Item, ItemProcessingLog, ProcessingStepType
 
 router = APIRouter(prefix="/analytics")
@@ -127,7 +127,7 @@ async def get_analytics_summary(
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsSummary:
     """Get summary analytics for the processing logs."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utcnow() - timedelta(days=days)
 
     # Total logs
     total_result = await db.execute(
@@ -446,7 +446,7 @@ async def get_model_performance(
     Shows processing time, error rates, and confidence distribution
     for each model used in the processing pipeline.
     """
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utcnow() - timedelta(days=days)
 
     # Use case expressions for counting boolean conditions (works on PostgreSQL)
     from sqlalchemy import case

@@ -9,7 +9,7 @@ from sqlalchemy import delete, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db
+from database import get_db, utcnow
 from models import Channel, Item, Source, Priority
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ async def delete_old_items(
 
     Starred items are preserved. Also cleans up vector indexes.
     """
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utcnow() - timedelta(days=days)
 
     # Collect IDs first
     result = await db.execute(
@@ -365,7 +365,7 @@ async def classify_items_for_confidence(
                 "ak_confidence": classification.get("ak_confidence"),
                 "priority_suggestion": classification.get("priority"),
                 "priority_confidence": classification.get("priority_confidence"),
-                "classified_at": datetime.utcnow().isoformat(),
+                "classified_at": utcnow().isoformat(),
             }
 
             # Update retry_priority based on confidence

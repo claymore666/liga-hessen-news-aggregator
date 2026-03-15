@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models import ItemProcessingLog, ProcessingStepType
+from database import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ class ProcessingLogger:
             processing_run_id=self.run_id,
             step_type=step_type_str,
             step_order=self._step_order,
-            started_at=started_at or datetime.utcnow(),
+            started_at=started_at or utcnow(),
             completed_at=completed_at,
             duration_ms=duration_ms,
             model_name=model_name,
@@ -452,7 +453,7 @@ class ProcessingLogger:
         from models import ItemProcessingLog
 
         logs = []
-        now = datetime.utcnow()
+        now = utcnow()
 
         for upd in updates:
             # Support both new patch format and legacy full-metadata format
@@ -530,7 +531,7 @@ class StepContext:
 
     def _start(self):
         """Record start time."""
-        self._started_at = datetime.utcnow()
+        self._started_at = utcnow()
         self._start_time = time.time()
 
     def _finish(self):
@@ -540,7 +541,7 @@ class StepContext:
         self._finished = True
 
         elapsed_ms = int((time.time() - self._start_time) * 1000) if self._start_time else None
-        completed_at = datetime.utcnow()
+        completed_at = utcnow()
 
         # Schedule the async log call (will be awaited on session flush)
         import asyncio

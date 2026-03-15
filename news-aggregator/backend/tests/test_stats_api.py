@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, ConnectorType, Item, Priority, Source
+from database import utcnow
 
 
 class TestGetStats:
@@ -124,7 +125,7 @@ class TestGetStats:
             title="Today's Article",
             content="Content",
             url="https://test.com/today",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="todayhash",
         )
         db_session.add(today_item)
@@ -149,7 +150,7 @@ class TestGetStats:
             title="This Week's Article",
             content="Content",
             url="https://test.com/week",
-            published_at=datetime.utcnow() - timedelta(days=3),
+            published_at=utcnow() - timedelta(days=3),
             content_hash="weekhash",
         )
         db_session.add(week_item)

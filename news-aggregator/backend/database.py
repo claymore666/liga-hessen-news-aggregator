@@ -6,6 +6,7 @@ PostgreSQL-only database configuration.
 import json
 import os
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import cast, func, or_, text
@@ -57,6 +58,15 @@ def json_array_contains(column: Any, value: str) -> ColumnElement:
     """
     json_value = json.dumps([value])
     return cast(column, JSONB).op("@>")(text(f"'{json_value}'::jsonb"))
+
+
+def utcnow() -> datetime:
+    """Return current UTC time as a naive datetime.
+
+    Replaces deprecated datetime.utcnow() while keeping naive datetimes
+    for compatibility with PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def json_merge(column: Any, patch: dict) -> ColumnElement:

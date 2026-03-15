@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import require_admin_key
-from database import get_db
+from database import get_db, utcnow
 from models import MOTD
 
 router = APIRouter(prefix="/motd", tags=["motd"])
@@ -47,7 +47,7 @@ async def get_motd(db: AsyncSession = Depends(get_db)) -> MOTDResponse:
     Returns the most recent active MOTD that hasn't expired.
     Used by frontend to display message of the day.
     """
-    now = datetime.utcnow()
+    now = utcnow()
 
     # Get most recent active MOTD that hasn't expired
     result = await db.execute(

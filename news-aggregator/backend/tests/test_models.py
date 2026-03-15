@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
+from database import utcnow
     Channel,
     ConnectorType,
     Item,
@@ -88,7 +89,7 @@ class TestSourceModel:
             title="Test",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
         db_session.add(item)
@@ -235,7 +236,7 @@ class TestChannelModel:
             title="Test",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
         db_session.add(item)
@@ -304,7 +305,7 @@ class TestItemModel:
             content="This is the content of the test article.",
             url="https://example.com/article",
             author="Test Author",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="abc123hash",
             priority=Priority.HIGH,
             priority_score=75,
@@ -339,7 +340,7 @@ class TestItemModel:
             title="Test",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash456",
         )
         db_session.add(item)
@@ -369,7 +370,7 @@ class TestItemModel:
             title="Test",
             content="Content",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash789",
         )
         db_session.add(item)
@@ -402,7 +403,7 @@ class TestItemModel:
                 title=f"Priority {priority.value}",
                 content="Content",
                 url=f"https://example.com/{i}",
-                published_at=datetime.utcnow(),
+                published_at=utcnow(),
                 content_hash=f"hash{i}",
                 priority=priority,
             )
@@ -498,7 +499,7 @@ class TestItemRuleMatchModel:
             title="Test Article",
             content="Content with kürzung keyword",
             url="https://example.com",
-            published_at=datetime.utcnow(),
+            published_at=utcnow(),
             content_hash="hash1",
         )
         db_session.add(item)

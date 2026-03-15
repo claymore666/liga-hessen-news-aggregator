@@ -33,21 +33,26 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Install Playwright browser (Chromium only)
 RUN playwright install chromium
 
+# Create non-root user
+RUN useradd -m -s /bin/bash appuser
+
 # Stage 3: Application (changes when code changes)
 FROM deps AS app
 
 WORKDIR /app
 
 # Copy application code (uses .dockerignore to exclude unnecessary files)
-COPY . .
+COPY --chown=appuser:appuser . .
+
+# Ensure data directory exists and is writable
+RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 # DATABASE_URL must be provided at runtime (PostgreSQL required)
 
-# Note: Running as root inside container for compatibility with
-# volume mounts and Playwright browser. Network-isolated via Docker.
+USER appuser
 
 # Expose port
 EXPOSE 8000

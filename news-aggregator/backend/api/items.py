@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api.auth import require_admin_key
-from database import get_db, async_session_maker, json_extract_path, json_array_overlaps
+from database import get_db, async_session_maker, json_extract_path, json_array_overlaps, utcnow
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel, Field
 from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief, TopicGroupsResponse, TopicGroup, TopicItemBrief
@@ -139,7 +139,7 @@ async def list_items(
         # By default, exclude archived items
         query = query.where(Item.is_archived == False)  # noqa: E712
     if days is not None:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
         query = query.where(Item.fetched_at >= cutoff)
     if since is not None:
         # Strip timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE compatibility
@@ -283,7 +283,7 @@ async def get_items_by_topic(
         # Strip timezone for naive timestamp columns
         since_dt = parsed.replace(tzinfo=None)
     else:
-        since_dt = datetime.utcnow() - timedelta(days=days)
+        since_dt = utcnow() - timedelta(days=days)
 
     # Base filter for all relevant items in the period
     base_where = """
@@ -584,7 +584,7 @@ async def update_item(
     # Mark as manually reviewed if priority or AK was changed
     if manually_reviewed:
         item.is_manually_reviewed = True
-        item.reviewed_at = datetime.utcnow()
+        item.reviewed_at = utcnow()
 
     await db.flush()
 
@@ -805,7 +805,7 @@ async def _refetch_rss_item_task(item_id: int):
                 rss_summary = item.content
                 item.content = f"RSS-Zusammenfassung: {rss_summary}\n\n--- Vollständiger Artikel von {article.source_domain} ---\n\n{article.content}"
                 item.metadata_["article_extracted"] = True
-                item.metadata_["refetched_at"] = datetime.utcnow().isoformat()
+                item.metadata_["refetched_at"] = utcnow().isoformat()
                 item.metadata_["linked_articles"] = [{
                     "url": article.url,
                     "title": article.title,
@@ -888,7 +888,7 @@ Verlinkter Artikel von {article.source_domain}:
                             "domain": article.source_domain,
                             "content_length": len(article.content),
                         }]
-                        item.metadata_["refetched_at"] = datetime.utcnow().isoformat()
+                        item.metadata_["refetched_at"] = utcnow().isoformat()
                         flag_modified(item, "metadata_")
 
                         await db.commit()
@@ -984,7 +984,7 @@ Verlinkter Artikel von {article.source_domain}:
                                 "domain": article.source_domain,
                                 "content_length": len(article.content),
                             }],
-                            "refetched_at": datetime.utcnow().isoformat(),
+                            "refetched_at": utcnow().isoformat(),
                         }
 
                         await db.flush()
@@ -1315,7 +1315,7 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                     "model": analysis.get("_model"),
                     "prompt_version": analysis.get("_prompt_version"),
                     "prompt_model": analysis.get("_prompt_model"),
-                    "reprocessed_at": datetime.utcnow().isoformat(),
+                    "reprocessed_at": utcnow().isoformat(),
                 }
 
                 update_values = {
@@ -1495,7 +1495,7 @@ async def prefilter_item(
         "relevant": relevant,
         "model": settings.title_prefilter_model,
         "duration_ms": duration_ms,
-        "checked_at": datetime.utcnow().isoformat(),
+        "checked_at": utcnow().isoformat(),
     }
     item.metadata_ = new_metadata
 
@@ -1569,7 +1569,7 @@ async def _prefilter_batch_task(item_ids: list[int]):
                     "relevant": relevant,
                     "model": settings.title_prefilter_model,
                     "duration_ms": duration_ms,
-                    "checked_at": datetime.utcnow().isoformat(),
+                    "checked_at": utcnow().isoformat(),
                 }
 
                 update_values = {"metadata_": new_metadata}
@@ -1614,7 +1614,7 @@ async def prefilter_items_batch(
         item_ids = request_body.item_ids
     elif request_body.days:
         # Find recent items that have classifier results but no LLM analysis
-        cutoff = datetime.utcnow() - timedelta(days=request_body.days)
+        cutoff = utcnow() - timedelta(days=request_body.days)
         query = (
             select(Item.id)
             .where(

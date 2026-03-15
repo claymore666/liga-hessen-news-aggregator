@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from database import get_db
+from database import get_db, utcnow
 from models import Channel, Item, Priority
 from services.email import BriefingEmail, EmailConfig
 
@@ -55,7 +55,7 @@ async def send_briefing(
 ):
     """Send a briefing email with recent items."""
     # Calculate time range
-    since = datetime.utcnow() - timedelta(hours=request.hours_back)
+    since = utcnow() - timedelta(hours=request.hours_back)
 
     # Query items
     query = (
@@ -113,7 +113,7 @@ async def preview_briefing(
 ):
     """Preview a briefing without sending."""
     # Calculate time range
-    since = datetime.utcnow() - timedelta(hours=request.hours_back)
+    since = utcnow() - timedelta(hours=request.hours_back)
 
     # Query items
     query = (

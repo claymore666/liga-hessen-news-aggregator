@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db, json_extract_path
+from database import get_db, json_extract_path, utcnow
 from models import Item, Source, Rule
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ async def get_system_stats(
     by_retry_priority = {row[0] or "unknown": row[1] for row in retry_result.fetchall()}
 
     # Awaiting counts — only scan recent items (older items are fully processed)
-    recent_cutoff = datetime.utcnow() - timedelta(days=2)
+    recent_cutoff = utcnow() - timedelta(days=2)
     queue_row = (await db.execute(
         select(
             func.count(Item.id).filter(
@@ -229,5 +229,5 @@ async def get_system_stats(
         classifier_bypassed=classifier_bypassed,
         processing_queue=processing_queue,
         items=item_stats,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=utcnow().isoformat(),
     )

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from config import settings
-from database import async_session_maker, json_merge
+from database import async_session_maker, json_merge, utcnow
 from models import Channel, Source
 
 logger = logging.getLogger(__name__)
@@ -313,7 +313,7 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
             )
             new_items = await pipeline.process(raw_items, channel)
 
-            channel.last_fetch_at = datetime.utcnow()
+            channel.last_fetch_at = utcnow()
             channel.last_error = None
             await db.commit()
 
@@ -419,7 +419,7 @@ async def fetch_due_channels() -> dict:
         return {"skipped": True, "reason": "fetch_in_progress"}
 
     async with _fetch_lock:
-        now = datetime.utcnow()
+        now = utcnow()
 
         async with async_session_maker() as db:
             # Find enabled channels where parent source is also enabled
@@ -608,7 +608,7 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                             "assigned_ak": analysis.get("assigned_ak"),
                             "tags": analysis.get("tags", []),
                             "reasoning": analysis.get("reasoning"),
-                            "retried_at": datetime.utcnow().isoformat(),
+                            "retried_at": utcnow().isoformat(),
                         }}),
                     )
                 )
@@ -669,7 +669,7 @@ async def cleanup_old_items() -> dict:
             return {"deleted": 0, "skipped": True, "reason": "autopurge_disabled"}
 
         exclude_starred = config.get("exclude_starred", True)
-        now = datetime.utcnow()
+        now = utcnow()
         total_deleted = 0
         by_priority: dict[str, int] = {}
 
@@ -748,7 +748,7 @@ async def cleanup_old_events() -> int:
     logger.info("Starting cleanup of old item events")
 
     # 180 days retention for audit trail
-    cutoff = datetime.utcnow() - timedelta(days=180)
+    cutoff = utcnow() - timedelta(days=180)
 
     async with async_session_maker() as db:
         stmt = delete(ItemEvent).where(ItemEvent.timestamp < cutoff)

@@ -8,12 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Channel, Source, ConnectorType
+from database import utcnow
 
 
 @pytest.fixture
 async def channels_with_intervals(db_session: AsyncSession):
     """Create test channels with different fetch intervals and last_fetch_at."""
-    now = datetime.utcnow()
+    now = utcnow()
 
     # Create sources first
     source_active = Source(name="Active Source", enabled=True)
@@ -214,7 +215,7 @@ class TestFetchDueChannels:
     @pytest.mark.asyncio
     async def test_fetches_oldest_first(self, db_session: AsyncSession):
         """Test that channels are fetched oldest first."""
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Create source
         source = Source(name="Test Source", enabled=True)
