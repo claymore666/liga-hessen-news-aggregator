@@ -536,7 +536,7 @@ class GPU1PowerManager:
 
         if await self.shutdown():
             self.reset_state()
-            self.clear_force_active()
+            await self.clear_force_active()
             return True
 
         return False

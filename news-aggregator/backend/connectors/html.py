@@ -79,9 +79,6 @@ class HTMLConnector(BaseConnector):
             if not title:
                 continue
 
-            # Generate external ID from title hash
-            external_id = hashlib.md5(title.encode()).hexdigest()[:16]
-
             # Extract link
             link = base_url
             if config.link_selector:
@@ -94,6 +91,9 @@ class HTMLConnector(BaseConnector):
                 link = urljoin(base_url, title_el["href"])
             elif title_el.name == "a":
                 link = urljoin(base_url, title_el.get("href", ""))
+
+            # Generate external ID from title + link hash
+            external_id = hashlib.md5(f"{title}:{link}".encode()).hexdigest()[:16]
 
             # Extract content
             content = ""

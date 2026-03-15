@@ -8,9 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field, field_validator
+
+from services.browser_pool import browser_pool
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
@@ -183,7 +185,7 @@ class LinkedInConnector(BaseConnector):
     async def _fetch_with_browser(
         self, config: LinkedInConfig, cookies: list[dict], proxy_server: str | None
     ) -> list[RawItem]:
-        """Fetch posts using Playwright browser."""
+        """Fetch posts using Playwright browser from shared pool."""
         # Random fingerprint
         user_agent = random.choice(self.USER_AGENTS)
         viewport = random.choice(self.VIEWPORTS)
@@ -191,17 +193,9 @@ class LinkedInConnector(BaseConnector):
 
         items = []
 
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
-                )
-
+        async with browser_pool.get_browser() as browser:
+            context = None
+            try:
                 context_args = {
                     "user_agent": user_agent,
                     "viewport": viewport,
@@ -251,7 +245,6 @@ class LinkedInConnector(BaseConnector):
                     )
                     if not posts_exist:
                         logger.warning(f"No posts found for {config.profile_url}")
-                        await browser.close()
                         return []
 
                 # Scroll to load more posts
@@ -262,14 +255,18 @@ class LinkedInConnector(BaseConnector):
                 # Extract posts
                 items = await self._extract_posts(page, config)
 
-                await browser.close()
-
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout scraping {config.profile_url}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error scraping {config.profile_url}: {e}")
-            raise
+            except PlaywrightTimeout as e:
+                logger.error(f"Timeout scraping {config.profile_url}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error scraping {config.profile_url}: {e}")
+                raise
+            finally:
+                if context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
 
         logger.info(f"Extracted {len(items)} posts from {config.profile_url}")
         return items
@@ -478,30 +475,34 @@ Verlinkter Artikel von {article.source_domain}:
 
         # Try to load the page
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent=random.choice(self.USER_AGENTS),
-                )
-                await context.add_cookies(cookies)
-                page = await context.new_page()
-                await stealth_async(page)
+            async with browser_pool.get_browser() as browser:
+                context = None
+                try:
+                    context = await browser.new_context(
+                        user_agent=random.choice(self.USER_AGENTS),
+                    )
+                    await context.add_cookies(cookies)
+                    page = await context.new_page()
+                    await stealth_async(page)
 
-                response = await page.goto(config.profile_url, timeout=15000)
+                    response = await page.goto(config.profile_url, timeout=15000)
 
-                # Check for login redirect
-                current_url = page.url
-                if "login" in current_url or "authwall" in current_url:
-                    await browser.close()
-                    return False, "Cookies expired or invalid. Re-run cookie extraction."
+                    # Check for login redirect
+                    current_url = page.url
+                    if "login" in current_url or "authwall" in current_url:
+                        return False, "Cookies expired or invalid. Re-run cookie extraction."
 
-                await browser.close()
-
-                if response and response.status == 200:
-                    return True, f"LinkedIn {config.profile_type} profile accessible: {config.profile_id}"
-                else:
-                    status = response.status if response else "error"
-                    return False, f"Profile not accessible (HTTP {status})"
+                    if response and response.status == 200:
+                        return True, f"LinkedIn {config.profile_type} profile accessible: {config.profile_id}"
+                    else:
+                        status = response.status if response else "error"
+                        return False, f"Profile not accessible (HTTP {status})"
+                finally:
+                    if context:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
 
         except Exception as e:
             return False, f"Validation error: {str(e)}"

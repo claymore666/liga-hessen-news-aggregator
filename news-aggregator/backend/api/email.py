@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from api.auth import require_admin_key
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +14,7 @@ from database import get_db
 from models import Channel, Item, Priority
 from services.email import BriefingEmail, EmailConfig
 
-router = APIRouter(prefix="/email", tags=["email"])
+router = APIRouter(prefix="/email", tags=["email"], dependencies=[Depends(require_admin_key)])
 
 
 class SendBriefingRequest(BaseModel):

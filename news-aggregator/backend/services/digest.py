@@ -275,7 +275,11 @@ async def generate_digest(db) -> int:
     ref_to_item = {i + 1: item for i, item in enumerate(items)}
     for section in ("urgent", "top_stories", "further_news"):
         for entry in content.get(section, []):
-            ref = entry.get("item_ref")
+            raw_ref = entry.get("item_ref")
+            try:
+                ref = int(raw_ref) if raw_ref is not None else None
+            except (ValueError, TypeError):
+                ref = None
             if ref and ref in ref_to_item:
                 entry["item_id"] = ref_to_item[ref].id
                 entry["url"] = ref_to_item[ref].url
@@ -342,7 +346,7 @@ async def send_digest(db, digest_id: int) -> bool:
 
     from services.digest_email import send_digest_email
 
-    success, message = send_digest_email(
+    success, message = await send_digest_email(
         html_body=digest.html_body,
         text_body=digest.text_body,
         recipients=recipients,

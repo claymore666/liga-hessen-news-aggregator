@@ -1,11 +1,13 @@
 """Proxy management API endpoints."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from api.auth import require_admin_key
 from pydantic import BaseModel
 
 from services.proxy_manager import proxy_manager
 
-router = APIRouter(prefix="/proxies", tags=["proxies"])
+router = APIRouter(prefix="/proxies", tags=["proxies"], dependencies=[Depends(require_admin_key)])
 
 
 class ProxyResponse(BaseModel):

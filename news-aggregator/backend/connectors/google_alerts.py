@@ -31,8 +31,15 @@ class GoogleAlertsConfig(BaseModel):
     @classmethod
     def validate_google_alerts_url(cls, v: HttpUrl) -> HttpUrl:
         """Ensure URL is a valid Google Alerts feed."""
-        url_str = str(v)
-        if "google.com/alerts" not in url_str and "google.de/alerts" not in url_str:
+        from urllib.parse import urlparse
+
+        netloc = urlparse(str(v)).netloc.lower()
+        if netloc not in ("www.google.com", "google.com", "www.google.de", "google.de"):
+            raise ValueError(
+                "Bitte eine gültige Google Alerts Feed-URL eingeben "
+                "(beginnt mit https://www.google.com/alerts/feeds/...)"
+            )
+        if "/alerts" not in str(v):
             raise ValueError(
                 "Bitte eine gültige Google Alerts Feed-URL eingeben "
                 "(beginnt mit https://www.google.com/alerts/feeds/...)"

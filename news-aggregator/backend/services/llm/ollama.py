@@ -38,6 +38,19 @@ class OllamaProvider(BaseLLMProvider):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get or create persistent HTTP client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def close(self):
+        """Close the persistent HTTP client."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def complete(
         self,
@@ -76,13 +89,13 @@ class OllamaProvider(BaseLLMProvider):
         if max_tokens:
             payload["options"]["num_predict"] = max_tokens
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/chat",
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         content = data["message"]["content"]
         # qwen3 models may use thinking mode where response is in 'thinking' field
@@ -134,13 +147,13 @@ class OllamaProvider(BaseLLMProvider):
         if max_tokens:
             payload["options"]["num_predict"] = max_tokens
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/chat",
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         content = data["message"]["content"]
         if not content and data["message"].get("thinking"):
@@ -167,9 +180,9 @@ class OllamaProvider(BaseLLMProvider):
             True if Ollama API responds, False otherwise
         """
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(f"{self.base_url}/api/tags")
-                return response.status_code == 200
+            client = self._get_client()
+            response = await client.get(f"{self.base_url}/api/tags")
+            return response.status_code == 200
         except Exception as e:
             logger.debug(f"Ollama not available: {e}")
             return False
@@ -180,8 +193,8 @@ class OllamaProvider(BaseLLMProvider):
         Returns:
             List of model names
         """
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(f"{self.base_url}/api/tags")
-            response.raise_for_status()
-            data = response.json()
-            return [model["name"] for model in data.get("models", [])]
+        client = self._get_client()
+        response = await client.get(f"{self.base_url}/api/tags")
+        response.raise_for_status()
+        data = response.json()
+        return [model["name"] for model in data.get("models", [])]

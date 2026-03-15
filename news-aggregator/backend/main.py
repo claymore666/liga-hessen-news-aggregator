@@ -66,6 +66,7 @@ def _try_become_leader() -> bool:
     import fcntl
 
     global _leader_lock_fd
+    fd = -1
     try:
         fd = os.open(LEADER_LOCK_FILE, os.O_CREAT | os.O_WRONLY)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -74,10 +75,11 @@ def _try_become_leader() -> bool:
         _leader_lock_fd = fd  # Keep fd open — lock held until process exits
         return True
     except (OSError, BlockingIOError):
-        try:
-            os.close(fd)
-        except Exception:
-            pass
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
         return False
 
 

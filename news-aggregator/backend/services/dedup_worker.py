@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from database import async_session_maker, json_extract_path
+from database import async_session_maker, json_extract_path, json_merge
 from models import Channel, Item, Priority
 from services.pipeline import _strip_boilerplate, _titles_similar, _normalize_url
 
@@ -305,7 +305,6 @@ class DedupWorker:
                     "url": item.url,
                     "channel_id": item.channel_id,
                     "content_hash": item.content_hash,
-                    "old_metadata": dict(item.metadata_) if item.metadata_ else {},
                 })
 
         logger.info(f"Phase 1 dedup: checking {len(items_data)} items")
@@ -319,7 +318,7 @@ class DedupWorker:
                 break
 
             try:
-                new_metadata = dict(item_data["old_metadata"])
+                metadata_patch = {}
                 similar_to_id = None
 
                 # 1. URL-based duplicate check
@@ -348,7 +347,7 @@ class DedupWorker:
 
                         if url_match:
                             similar_to_id = url_match
-                            new_metadata["duplicate_method"] = "url_match"
+                            metadata_patch["duplicate_method"] = "url_match"
                             duplicates_found += 1
                             logger.info(
                                 f"Phase 1 URL duplicate: '{item_data['title'][:40]}...' "
@@ -366,7 +365,7 @@ class DedupWorker:
                         )
                         if hash_match:
                             similar_to_id = hash_match
-                            new_metadata["duplicate_method"] = "content_hash"
+                            metadata_patch["duplicate_method"] = "content_hash"
                             duplicates_found += 1
                             logger.info(
                                 f"Phase 1 hash duplicate: '{item_data['title'][:40]}...' "
@@ -390,7 +389,7 @@ class DedupWorker:
                             other_title = _strip_boilerplate(row[1]).lower()
                             if _titles_similar(clean_title, other_title):
                                 similar_to_id = row[0]
-                                new_metadata["duplicate_method"] = "title_similarity"
+                                metadata_patch["duplicate_method"] = "title_similarity"
                                 duplicates_found += 1
                                 logger.info(
                                     f"Phase 1 title duplicate: '{item_data['title'][:40]}...' "
@@ -400,16 +399,16 @@ class DedupWorker:
 
                 # Mark Phase 1 complete
                 now = datetime.utcnow().isoformat()
-                new_metadata["dedup_phase1"] = True
-                new_metadata["dedup_phase1_at"] = now
+                metadata_patch["dedup_phase1"] = True
+                metadata_patch["dedup_phase1_at"] = now
                 # Backward compatibility
-                new_metadata["duplicate_checked"] = True
-                new_metadata["duplicate_checked_at"] = now
+                metadata_patch["duplicate_checked"] = True
+                metadata_patch["duplicate_checked_at"] = now
 
                 updates.append({
                     "id": item_data["id"],
                     "similar_to_id": similar_to_id,
-                    "metadata_": new_metadata,
+                    "metadata_patch": metadata_patch,
                 })
                 checked += 1
 
@@ -437,7 +436,7 @@ class DedupWorker:
                                     f"referenced item no longer exists"
                                 )
                                 upd["similar_to_id"] = None
-                                upd["metadata_"].pop("duplicate_method", None)
+                                upd["metadata_patch"].pop("duplicate_method", None)
 
                     for upd in updates:
                         await db.execute(
@@ -445,7 +444,7 @@ class DedupWorker:
                             .where(Item.id == upd["id"])
                             .values(
                                 similar_to_id=upd["similar_to_id"],
-                                metadata_=upd["metadata_"],
+                                metadata_=json_merge(Item.metadata_, upd["metadata_patch"]),
                             )
                         )
                     await db.commit()
@@ -522,7 +521,6 @@ class DedupWorker:
                     "id": item.id,
                     "title": item.title,
                     "content": item.content or "",
-                    "old_metadata": dict(item.metadata_) if item.metadata_ else {},
                 })
 
         logger.info(f"Phase 2 dedup: checking {len(items_data)} items")
@@ -536,7 +534,7 @@ class DedupWorker:
                 break
 
             try:
-                new_metadata = dict(item_data["old_metadata"])
+                metadata_patch = {}
                 similar_to_id = None
 
                 # Semantic duplicate check
@@ -560,8 +558,8 @@ class DedupWorker:
                         dup_id = int(dup["id"])
                         if dup_id != item_data["id"] and dup_id < item_data["id"]:
                             similar_to_id = dup_id
-                            new_metadata["duplicate_score"] = dup.get("score")
-                            new_metadata["duplicate_method"] = "semantic"
+                            metadata_patch["duplicate_score"] = dup.get("score")
+                            metadata_patch["duplicate_method"] = "semantic"
                             duplicates_found += 1
                             logger.info(
                                 f"Phase 2 semantic duplicate: '{item_data['title'][:40]}...' "
@@ -571,13 +569,13 @@ class DedupWorker:
 
                 # Mark Phase 2 complete
                 now = datetime.utcnow().isoformat()
-                new_metadata["dedup_phase2"] = True
-                new_metadata["dedup_phase2_at"] = now
+                metadata_patch["dedup_phase2"] = True
+                metadata_patch["dedup_phase2_at"] = now
 
                 updates.append({
                     "id": item_data["id"],
                     "similar_to_id": similar_to_id,
-                    "metadata_": new_metadata,
+                    "metadata_patch": metadata_patch,
                 })
                 checked += 1
 
@@ -605,11 +603,11 @@ class DedupWorker:
                                     f"referenced item no longer exists (stale ChromaDB entry)"
                                 )
                                 upd["similar_to_id"] = None
-                                upd["metadata_"].pop("duplicate_score", None)
-                                upd["metadata_"].pop("duplicate_method", None)
+                                upd["metadata_patch"].pop("duplicate_score", None)
+                                upd["metadata_patch"].pop("duplicate_method", None)
 
                     for upd in updates:
-                        values = {"metadata_": upd["metadata_"]}
+                        values = {"metadata_": json_merge(Item.metadata_, upd["metadata_patch"])}
                         if upd["similar_to_id"] is not None:
                             values["similar_to_id"] = upd["similar_to_id"]
                         await db.execute(
@@ -704,18 +702,13 @@ class DedupWorker:
             try:
                 async with async_session_maker() as db:
                     for item_id in item_ids:
-                        result = await db.execute(
-                            select(Item.metadata_).where(Item.id == item_id)
-                        )
-                        current_meta = result.scalar() or {}
-                        new_meta = dict(current_meta)
-                        new_meta["vectordb_indexed"] = True
-                        new_meta["vectordb_indexed_at"] = datetime.utcnow().isoformat()
-
                         await db.execute(
                             update(Item)
                             .where(Item.id == item_id)
-                            .values(metadata_=new_meta)
+                            .values(metadata_=json_merge(Item.metadata_, {
+                                "vectordb_indexed": True,
+                                "vectordb_indexed_at": datetime.utcnow().isoformat(),
+                            }))
                         )
                     await db.commit()
             except Exception as e:

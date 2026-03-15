@@ -396,4 +396,5 @@ async def create_relevance_filter() -> RelevanceFilter | None:
         return filter_instance
     else:
         logger.warning("Classifier service unavailable, pre-filtering disabled")
+        await filter_instance.close()
         return None

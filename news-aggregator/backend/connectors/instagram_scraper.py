@@ -113,6 +113,7 @@ class InstagramScraperConnector(BaseConnector):
 
         # Use shared browser pool instead of creating new Playwright instance
         async with browser_pool.get_browser() as browser:
+            context = None
             try:
                 context_args = {
                     "user_agent": user_agent,
@@ -168,10 +169,11 @@ class InstagramScraperConnector(BaseConnector):
                 raise
             finally:
                 # Close context (browser is closed by pool)
-                try:
-                    await context.close()
-                except Exception:
-                    pass
+                if context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
 
         logger.info(f"Extracted {len(items)} posts from @{config.username}")
         return items

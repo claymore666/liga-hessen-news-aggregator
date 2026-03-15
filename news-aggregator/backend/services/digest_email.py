@@ -3,8 +3,8 @@
 Produces Liga-branded HTML + plain text from the structured LLM content JSON.
 """
 
+import asyncio
 import logging
-import subprocess
 from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -218,7 +218,7 @@ def render_digest_text(content: dict[str, Any], digest_date: date, total_items: 
     return "\n".join(lines)
 
 
-def send_digest_email(
+async def send_digest_email(
     html_body: str,
     text_body: str,
     recipients: list[str],
@@ -243,21 +243,25 @@ def send_digest_email(
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
-        process = subprocess.run(
-            ["/usr/sbin/sendmail", "-t"],
-            input=msg.as_string(),
-            capture_output=True,
-            text=True,
+        process = await asyncio.create_subprocess_exec(
+            "/usr/sbin/sendmail", "-t",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(input=msg.as_string().encode()),
             timeout=30,
         )
         if process.returncode != 0:
-            logger.error(f"sendmail failed: {process.stderr}")
-            return False, f"Sendmail Fehler: {process.stderr}"
+            err = stderr.decode()
+            logger.error(f"sendmail failed: {err}")
+            return False, f"Sendmail Fehler: {err}"
 
         logger.info(f"Digest sent to {len(recipients)} recipients")
         return True, f"E-Mail an {len(recipients)} Empfänger gesendet"
 
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         return False, "Sendmail Timeout"
     except FileNotFoundError:
         return False, "Sendmail nicht gefunden"
