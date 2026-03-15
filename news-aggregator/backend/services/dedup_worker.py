@@ -738,10 +738,10 @@ class DedupWorker:
             if not classifier:
                 return
 
-            import httpx
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{classifier.base_url}/health")
-                health = resp.json()
+            health = await classifier.get_health()
+            if not health:
+                logger.warning("VectorDB sync check: classifier health unavailable")
+                return
 
             chromadb_count = health.get("duplicate_index_items", 0)
 

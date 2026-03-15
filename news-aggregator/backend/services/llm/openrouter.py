@@ -52,6 +52,19 @@ class OpenRouterProvider(BaseLLMProvider):
         self.timeout = timeout
         self.site_url = site_url
         self.site_name = site_name
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get or create persistent HTTP client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def close(self):
+        """Close the persistent HTTP client."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def complete(
         self,
@@ -96,14 +109,14 @@ class OpenRouterProvider(BaseLLMProvider):
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        client = self._get_client()
+        response = await client.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         usage = data.get("usage", {})
 
@@ -149,14 +162,14 @@ class OpenRouterProvider(BaseLLMProvider):
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        client = self._get_client()
+        response = await client.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         usage = data.get("usage", {})
         choices = data.get("choices", [])
@@ -187,12 +200,12 @@ class OpenRouterProvider(BaseLLMProvider):
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(
-                    "https://openrouter.ai/api/v1/models",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                )
-                return response.status_code == 200
+            client = self._get_client()
+            response = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            return response.status_code == 200
         except Exception as e:
             logger.debug(f"OpenRouter not available: {e}")
             return False
@@ -203,11 +216,11 @@ class OpenRouterProvider(BaseLLMProvider):
         Returns:
             List of model info dicts
         """
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("data", [])
+        client = self._get_client()
+        response = await client.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("data", [])

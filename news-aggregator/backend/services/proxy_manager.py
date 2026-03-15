@@ -289,6 +289,11 @@ class ProxyManager:
         """Test if proxy supports HTTPS CONNECT tunnel to x.com."""
         import socket
 
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._validate_https_tunnel_sync, proxy)
+
+    def _validate_https_tunnel_sync(self, proxy: str) -> bool:
+        """Synchronous HTTPS tunnel validation (run in executor to avoid blocking event loop)."""
         try:
             proxy_host, proxy_port = proxy.split(":")
             proxy_port = int(proxy_port)

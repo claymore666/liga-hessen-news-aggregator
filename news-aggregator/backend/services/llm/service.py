@@ -192,3 +192,12 @@ class LLMService:
             if await provider.is_available():
                 return provider
         return None
+
+    async def close(self):
+        """Close all providers that have a close method."""
+        for provider in self.providers:
+            if hasattr(provider, "close"):
+                try:
+                    await provider.close()
+                except Exception:
+                    pass

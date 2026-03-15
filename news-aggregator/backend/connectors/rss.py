@@ -21,11 +21,13 @@ EUROSTAT_DATASET_PATTERN = re.compile(r"^([A-Z0-9_]+)\s*-")
 
 
 def create_legacy_ssl_context():
-    """Create an SSL context that works with servers using older TLS configurations."""
+    """Create an SSL context that works with servers using older TLS configurations.
+
+    Lowers cipher security level for compatibility but keeps certificate verification
+    enabled to prevent MITM attacks.
+    """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    # Set low security level to allow more cipher suites
+    # Keep certificate verification enabled — only lower cipher requirements
     ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
     # Enable legacy renegotiation for older servers
     try:
