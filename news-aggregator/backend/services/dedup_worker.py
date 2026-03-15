@@ -697,6 +697,10 @@ class DedupWorker:
                 self._stats["errors"] += 1
             return 0
 
+        if indexed == 0:
+            logger.warning(f"Batch index returned 0 for {len(items_to_index)} items, skipping flag update")
+            return 0
+
         # Mark items as indexed
         if item_ids:
             try:
