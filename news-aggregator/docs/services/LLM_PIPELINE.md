@@ -5,45 +5,42 @@
 The LLM pipeline provides detailed news analysis using a local Ollama model. It runs as an async background worker processing items queued for analysis.
 
 **Files**:
-- `backend/services/llm_worker.py` - Background worker
-- `backend/services/processor.py` - LLM interaction
-- `backend/services/llm.py` - Ollama client
+- `backend/services/llm_worker.py` - Background worker with priority queue
+- `backend/services/processor.py` - LLM interaction and response parsing
+- `backend/services/llm/service.py` - Multi-provider LLM service with fallback
+- `backend/services/llm/ollama.py` - Ollama provider (routes to proxy on docker-ai)
+- `backend/services/llm/base.py` - Base provider interface and `RateLimitError`
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     LLM Worker                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │              Main Loop                            │  │
-│  │  1. Check for fresh items (needs_llm=true)       │  │
-│  │  2. Process batch                                 │  │
-│  │  3. Sleep if idle                                 │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                   ItemProcessor                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  analyze(item)                                    │  │
-│  │  - Build prompt with title, content, source      │  │
-│  │  - Call LLM                                       │  │
-│  │  - Parse JSON response                            │  │
-│  │  - Return analysis dict                           │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                   Ollama Provider                        │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  generate(prompt, system_prompt)                  │  │
-│  │  - HTTP POST to Ollama API                        │  │
-│  │  - Stream response                                │  │
-│  │  - Return generated text                          │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      LLM Worker                           │
+│  Priority queue: fresh items first, then backlog          │
+│  Rate-limit aware: breaks batch + backs off on 429        │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│                    ItemProcessor                           │
+│  1. analyze_from_data_with_messages() — main analysis     │
+│  2. extract_topics() — follow-up chat turn                │
+│  3. confirm_duplicate() — edge-case dedup (if needed)     │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│              LLMService (multi-provider fallback)          │
+│  Tries providers in order. Raises RateLimitError if all   │
+│  return 429.                                              │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│                  Ollama Proxy (docker-ai)                  │
+│  Routes gpt-oss-120b to Cerebras (primary) + Groq         │
+│  (fallback). Handles most upstream rate limits silently.   │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Processing Flow
@@ -131,146 +128,111 @@ item.needs_llm_processing = False
 ### Environment Variables
 
 ```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3:14b-q8_0
-LLM_ENABLED=true
+OLLAMA_BASE_URL=http://172.17.0.1:11434  # Ollama proxy on docker-ai
+OLLAMA_MODEL=gpt-oss-120b                # Routed to Cerebras/Groq via proxy
 ```
 
-### Runtime Settings
+### System Prompt
 
-Toggle via API or database:
-```http
-PUT /api/llm/toggle
-{"enabled": false}
-```
+Prompts are stored in the database with model-specific versioning (table `llm_prompts`).
+Runtime prompt changes without redeployment. Each processed item tracks which prompt
+version was used in its metadata.
 
-## System Prompt
-
-The system prompt defines the analysis criteria:
-
-```
-Du bist ein Sozialpolitik-Experte und klassifizierst
-Nachrichtenartikel für die Liga der Freien Wohlfahrtspflege Hessen.
-
-DIE LIGA: Dachverband der 6 Wohlfahrtsverbände in Hessen
-(AWO, Caritas, Diakonie, DRK, Paritätischer, Jüdische Gemeinden)
-mit 7.300 Einrichtungen, 113.000 Beschäftigten.
-
-ARBEITSKREISE:
-- AK1: Grundsatz/Sozialpolitik
-- AK2: Eingliederungshilfe
-- AK3: Jugendhilfe
-...
-```
+- **API**: `GET/POST /api/prompts/` — list, create, activate prompts
+- **Fallback**: If no DB prompt exists, uses hardcoded `ANALYSIS_SYSTEM_PROMPT` from `processor.py`
+- **Current**: v9 prompt for `gpt-oss-120b` (see `docs/services/PROMPT_TUNING.md`)
 
 ## API Endpoints
 
-### LLM Status
-```http
-GET /api/llm/status
-```
-Returns:
-```json
-{
-  "enabled": true,
-  "model": "qwen3:14b-q8_0",
-  "available": true,
-  "queue_size": 15,
-  "processed_today": 142
-}
+### Worker Status (via admin stats)
+```bash
+curl http://localhost:8000/api/admin/stats | jq '.llm_worker'
 ```
 
-### Toggle LLM
-```http
-PUT /api/llm/toggle
-{"enabled": true}
-```
-
-### Change Model
-```http
-PUT /api/llm/model
-{"model": "qwen3:32b"}
+### Worker Controls
+```bash
+# Pause/resume
+curl -X POST http://localhost:8000/api/admin/llm-worker/pause
+curl -X POST http://localhost:8000/api/admin/llm-worker/resume
 ```
 
 ### Manual Reprocess
-```http
-POST /api/items/{item_id}/reprocess
+```bash
+curl -X POST http://localhost:8000/api/items/{item_id}/reprocess
 ```
 
-### Batch Reprocess
-```http
-POST /api/llm/reprocess
-{"item_ids": [1, 2, 3]}
+### Retry Queue
+```bash
+# Check pending retries
+curl http://localhost:8000/api/items/retry-queue | jq .
+
+# Trigger retry processing
+curl -X POST "http://localhost:8000/api/items/retry-queue/process?batch_size=10"
 ```
 
-## Worker Statistics
+### Prompt Management
+```bash
+# List available prompts
+curl http://localhost:8000/api/prompts/ | jq .
 
-```http
-GET /api/llm/worker/stats
-```
-Returns:
-```json
-{
-  "running": true,
-  "fresh_processed": 50,
-  "backlog_processed": 100,
-  "errors": 2,
-  "last_processed_at": "2024-01-15T10:30:00Z"
-}
+# Get active prompt for model
+curl http://localhost:8000/api/prompts/gpt-oss-120b/active | jq .
 ```
 
 ## Priority Mapping
 
 LLM priorities are mapped to system priorities:
 
-| LLM Priority | System Priority | Description |
-|--------------|-----------------|-------------|
-| critical | HIGH | Immediate attention |
-| high | MEDIUM | Important |
-| medium | LOW | Informational |
-| low | NONE | Not relevant |
+| LLM Priority | System Priority | Min Score |
+|--------------|-----------------|-----------|
+| critical | HIGH | 95 |
+| high | HIGH | 90 |
+| medium | MEDIUM | 70 |
+| low | LOW | 40 |
+| (irrelevant) | NONE | ≤20 |
 
 ## Error Handling
 
-### Retry Logic
+### Rate Limit Handling (429)
 
-```python
-for attempt in range(3):
-    try:
-        analysis = await processor.analyze(item)
-        break
-    except Exception as e:
-        logger.warning(f"Attempt {attempt + 1} failed: {e}")
-        await asyncio.sleep(1.0 * (attempt + 1))
-```
+The LLM runs via an Ollama proxy on docker-ai that routes to cloud providers
+(Cerebras, Groq). When both upstream providers are rate-limited simultaneously,
+the proxy returns 429 to the backend.
 
-### Fallback
+**Detection**: `LLMService.complete()`/`chat()` catches `httpx.HTTPStatusError`
+and tracks whether all provider failures are 429s. If so, it raises
+`RateLimitError` (from `services.llm.base`) instead of a generic `RuntimeError`.
 
-If LLM fails completely:
-```python
-return {
-    "summary": "",
-    "relevant": False,
-    "priority": "low",
-    "reasoning": "LLM analysis unavailable"
-}
-```
+**Worker behavior on `RateLimitError`**:
+1. **Per-item**: Immediately breaks out of the current batch (no point trying
+   more items when all providers are exhausted)
+2. **Outer loop**: Dedicated handler applies exponential backoff starting at
+   60s (60s → 120s → 240s → 300s cap). Uses `Retry-After` header if present.
+3. **Interruptible**: Backoff sleep is interrupted by the wake event if new
+   items arrive (providers may have recovered by then).
+4. **Topic extraction**: If rate-limited during the follow-up topic extraction
+   call, the item is saved with topic="Sonstiges" rather than losing the
+   already-completed analysis.
+
+### General Error Handling
+
+Per-item failures are caught individually — one item failing doesn't prevent
+the rest of the batch from processing. Failed items keep
+`needs_llm_processing=True` and are retried as backlog.
+
+The outer worker loop tracks consecutive errors. After 10 consecutive errors,
+the worker enters a degraded state (still retries with exponential backoff:
+10s → 20s → 40s → ... → 300s cap). Consecutive error counter resets on any
+successful processing.
 
 ## Performance
 
-### Batch Processing
+### Processing
 
-Items processed in batches for efficiency:
-```python
-BATCH_SIZE = 10
-IDLE_SLEEP = 5.0  # seconds
-```
-
-### Resource Usage
-
-- Model: ~8GB VRAM (qwen3:14b-q8_0)
-- Processing: ~2-5 seconds per item
-- Memory: Minimal (streaming responses)
+- Cloud LLM via Ollama proxy — no local GPU needed for inference
+- Processing: ~2s per item (cloud), avg ~2s observed in prod
+- Three-phase DB connection pattern: quick read → LLM (no DB held) → quick write
+- Fresh items processed immediately, backlog opportunistically
 
 ## Monitoring
 
@@ -291,17 +253,7 @@ Returns `llm_available` and `llm_provider` fields.
 
 ## Troubleshooting
 
-### LLM Not Available
-1. Check Ollama is running: `curl http://localhost:11434/api/tags`
-2. Verify model exists: `ollama list`
-3. Check OLLAMA_BASE_URL env var
-
-### Slow Processing
-1. Check GPU usage: `nvidia-smi`
-2. Consider smaller model
-3. Reduce batch size
-
-### JSON Parse Errors
-- LLM sometimes returns malformed JSON
-- Fallback extraction with regex
-- Consider prompt tuning
+See [TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md) for:
+- LLM not processing (worker paused, proxy unreachable, rate limiting)
+- Rate limiting details and monitoring
+- Worker degraded state recovery
