@@ -698,8 +698,7 @@ class DedupWorker:
             return 0
 
         if indexed == 0:
-            logger.warning(f"Batch index returned 0 for {len(items_to_index)} items, skipping flag update")
-            return 0
+            logger.info(f"Batch index returned 0 new for {len(items_to_index)} items (already indexed), marking as indexed")
 
         # Mark items as indexed
         if item_ids:
