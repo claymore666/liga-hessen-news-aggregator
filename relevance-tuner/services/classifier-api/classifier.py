@@ -139,7 +139,7 @@ class ParaphraseEmbedder(OllamaEmbedder):
     Better at identifying same-story articles with different wording.
     """
 
-    def __init__(self, max_length: int = 2000):
+    def __init__(self, max_length: int = 400):
         super().__init__(
             model_name="paraphrase-multilingual:278m-mpnet-base-v2-fp16",
             max_length=max_length,
