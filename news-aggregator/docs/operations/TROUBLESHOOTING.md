@@ -325,7 +325,9 @@ docker compose logs backend | grep -i "browser pool"
    ```
    playwright._impl._errors.Error: Executable doesn't exist
    ```
-   Fix: Rebuild backend container (Dockerfile installs Playwright)
+   Fix: Rebuild backend container (Dockerfile installs Playwright to `/opt/playwright`).
+   The `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright` env var ensures the browser is
+   accessible regardless of user (root or appuser).
    ```bash
    docker compose build backend
    docker compose up -d backend
@@ -701,6 +703,53 @@ docker compose logs backend | grep -i error | cut -d: -f4 | sort | uniq -c | sor
 ```bash
 docker compose logs -f classifier | grep -i classify
 ```
+
+### Vectordb Items Stuck (awaiting_vectordb)
+
+**Symptoms**: `/api/admin/stats` shows `awaiting_vectordb > 0` that doesn't decrease.
+
+**Check**:
+```bash
+docker compose logs backend | grep -i "batch index\|vectordb\|unindex"
+docker compose logs classifier | grep -i "error\|500"
+```
+
+**Common causes**:
+
+1. **Classifier not reachable from backend** (network issue after rebuild)
+   ```
+   Classifier unavailable for indexing
+   ```
+   Fix: Restart classifier to rejoin Docker network:
+   ```bash
+   docker compose restart classifier
+   ```
+
+2. **Ollama embed returns 500** (model context exceeded or model swapped out)
+   ```
+   Duplicate store batch indexing failed: 500 Internal Server Error
+   ```
+   Check the Ollama proxy logs for the underlying error:
+   ```bash
+   docker logs ollamaproxy-ollamaproxy-1 --since 5m | grep embed
+   ```
+   If `"the input length exceeds the context length"`: check the model's `num_ctx`:
+   ```bash
+   curl -s http://gpu1:11434/api/show -d '{"model": "paraphrase-multilingual:278m-mpnet-base-v2-fp16"}' | \
+     python3 -c "import json,sys; print(json.load(sys.stdin).get('parameters',''))"
+   ```
+   The `paraphrase-multilingual` model needs `num_ctx: 512` (default is 128, actual limit is 512).
+   Fix:
+   ```bash
+   curl http://gpu1:11434/api/create -d '{"model": "paraphrase-multilingual:278m-mpnet-base-v2-fp16", "from": "paraphrase-multilingual:278m-mpnet-base-v2-fp16", "parameters": {"num_ctx": 512}}'
+   ```
+
+3. **Items already in ChromaDB but not flagged in DB**
+   ```
+   Batch index returned 0 for N items
+   ```
+   This was a bug (fixed 2026-03-16): the dedup worker now marks items as indexed
+   even when they already exist in ChromaDB.
 
 ### Monitor LLM Processing
 
