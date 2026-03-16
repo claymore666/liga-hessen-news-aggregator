@@ -30,7 +30,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir 'setuptools<76'
 
-# Install Playwright browser (Chromium only)
+# Install Playwright browser to a shared location
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN playwright install chromium
 
 # Create non-root user
