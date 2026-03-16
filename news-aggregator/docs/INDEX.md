@@ -14,6 +14,7 @@ This documentation is organized in layers from high-level architecture to specif
 - [LLM_PIPELINE.md](services/LLM_PIPELINE.md) - LLM analysis pipeline
 - [CLASSIFIER.md](services/CLASSIFIER.md) - ML classifier integration
 - [PROMPT_TUNING.md](services/PROMPT_TUNING.md) - LLM prompt evolution, quality metrics, and model benchmarks
+- [TOPIC_TAXONOMY.md](services/TOPIC_TAXONOMY.md) - Topic classification system and how to add new topics
 - [BROWSER_POOL.md](services/BROWSER_POOL.md) - Shared Playwright instance management
 - [ARTICLE_EXTRACTOR.md](services/ARTICLE_EXTRACTOR.md) - Content extraction with SPA fallback
 

@@ -21,7 +21,6 @@ TOPIC_TAXONOMY: list[str] = [
 
     # AK2: Migration/Flucht
     "Migration und Flucht",
-    "Integration",
 
     # AK3: Gesundheit/Pflege/Senioren
     "Pflege",
@@ -29,13 +28,10 @@ TOPIC_TAXONOMY: list[str] = [
     "Psychische Gesundheit",
     "Sucht und Prävention",
     "Senioren und Alter",
-    "Demenz",
     "Hospiz und Palliativ",
 
     # AK4: Eingliederungshilfe
     "Behinderung und Inklusion",
-    "Barrierefreiheit",
-    "Eingliederungshilfe",
 
     # AK5: Kinder/Jugend/Familie
     "Kita und Kinderbetreuung",
@@ -49,7 +45,6 @@ TOPIC_TAXONOMY: list[str] = [
     "Wohnen und Wohnungsnot",
     "Armut und Existenzsicherung",
     "Obdachlosigkeit",
-    "Schuldnerberatung",
 
     # Übergreifend
     "Fachkräftemangel",
