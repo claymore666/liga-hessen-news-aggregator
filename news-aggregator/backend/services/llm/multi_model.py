@@ -79,18 +79,23 @@ class MultiModelLLMService:
                 return response
 
             except httpx.HTTPStatusError as e:
+                status = e.response.status_code
                 error_msg = f"{provider.model}: {str(e)}"
-                logger.warning(f"Model failed: {error_msg}")
+                logger.warning(f"Model failed ({status}): {error_msg}")
                 errors.append(error_msg)
-                if e.response.status_code == 429:
+                if status == 429:
                     ra = e.response.headers.get("retry-after")
                     if ra:
                         try:
                             retry_after = max(retry_after or 0, float(ra))
                         except ValueError:
                             pass
-                elif e.response.status_code in (502, 503):
-                    pass  # expected fallback triggers
+                elif status in (403, 404, 500, 502, 503):
+                    # 403: key banned/restricted
+                    # 404: model not found on provider
+                    # 500: upstream internal error
+                    # 502/503: provider unavailable
+                    all_rate_limited = False
                 else:
                     all_rate_limited = False
                 continue
@@ -141,16 +146,19 @@ class MultiModelLLMService:
                 return response
 
             except httpx.HTTPStatusError as e:
+                status = e.response.status_code
                 error_msg = f"{provider.model}: {str(e)}"
-                logger.warning(f"Model chat failed: {error_msg}")
+                logger.warning(f"Model chat failed ({status}): {error_msg}")
                 errors.append(error_msg)
-                if e.response.status_code == 429:
+                if status == 429:
                     ra = e.response.headers.get("retry-after")
                     if ra:
                         try:
                             retry_after = max(retry_after or 0, float(ra))
                         except ValueError:
                             pass
+                elif status in (403, 404, 500, 502, 503):
+                    all_rate_limited = False
                 else:
                     all_rate_limited = False
                 continue
