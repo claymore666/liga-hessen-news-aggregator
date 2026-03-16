@@ -7,14 +7,20 @@ import {
   PaperAirplaneIcon,
   ExclamationCircleIcon,
   TrashIcon,
-  CircleStackIcon
+  CircleStackIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  PlusIcon,
+  CpuChipIcon
 } from '@heroicons/vue/24/outline'
 import {
   emailApi,
   llmApi,
   adminApi,
+  llmModelConfigsApi,
   type PreviewBriefingResponse,
   type OllamaModel,
+  type LLMModelConfig,
   type HousekeepingConfig,
   type CleanupPreview,
   type StorageStats
@@ -88,6 +94,87 @@ const cleanupExecuting = ref(false)
 const cleanupResult = ref<{ deleted: number; by_priority: Record<string, number> } | null>(null)
 const storage = ref<StorageStats | null>(null)
 const storageLoading = ref(false)
+
+// LLM Model Configs
+const modelConfigs = ref<LLMModelConfig[]>([])
+const modelConfigsLoading = ref(false)
+const showAddModel = ref(false)
+const newModel = ref({ model_name: '', display_name: '', priority: 1, timeout: 120 })
+const addModelError = ref<string | null>(null)
+
+const loadModelConfigs = async () => {
+  modelConfigsLoading.value = true
+  try {
+    const response = await llmModelConfigsApi.list()
+    modelConfigs.value = response.data
+  } catch (e) {
+    console.error('Failed to load model configs:', e)
+  } finally {
+    modelConfigsLoading.value = false
+  }
+}
+
+const toggleModel = async (config: LLMModelConfig) => {
+  try {
+    const response = await llmModelConfigsApi.update(config.id, { enabled: !config.enabled })
+    const idx = modelConfigs.value.findIndex(c => c.id === config.id)
+    if (idx >= 0) modelConfigs.value[idx] = response.data
+  } catch (e) {
+    console.error('Failed to toggle model:', e)
+  }
+}
+
+const moveModel = async (config: LLMModelConfig, direction: 'up' | 'down') => {
+  const sorted = [...modelConfigs.value].sort((a, b) => a.priority - b.priority)
+  const idx = sorted.findIndex(c => c.id === config.id)
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+  if (swapIdx < 0 || swapIdx >= sorted.length) return
+
+  // Swap priorities
+  const items = sorted.map((c, i) => ({
+    id: c.id,
+    priority: i === idx ? sorted[swapIdx].priority : i === swapIdx ? sorted[idx].priority : c.priority
+  }))
+
+  try {
+    await llmModelConfigsApi.reorder(items)
+    await loadModelConfigs()
+  } catch (e) {
+    console.error('Failed to reorder models:', e)
+  }
+}
+
+const addModel = async () => {
+  addModelError.value = null
+  if (!newModel.value.model_name) {
+    addModelError.value = 'Modellname erforderlich'
+    return
+  }
+  try {
+    // Set priority to max + 1
+    const maxPriority = modelConfigs.value.reduce((max, c) => Math.max(max, c.priority), 0)
+    await llmModelConfigsApi.create({
+      ...newModel.value,
+      priority: maxPriority + 1
+    })
+    showAddModel.value = false
+    newModel.value = { model_name: '', display_name: '', priority: 1, timeout: 120 }
+    await loadModelConfigs()
+  } catch (e: unknown) {
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    addModelError.value = detail || 'Fehler beim Hinzufügen'
+  }
+}
+
+const deleteModel = async (config: LLMModelConfig) => {
+  if (!confirm(`Modell "${config.display_name || config.model_name}" wirklich entfernen?`)) return
+  try {
+    await llmModelConfigsApi.delete(config.id)
+    await loadModelConfigs()
+  } catch (e) {
+    console.error('Failed to delete model:', e)
+  }
+}
 
 const previewBriefing = async () => {
   previewing.value = true
@@ -277,6 +364,7 @@ const priorityLabel = (priority: string): string => {
 
 onMounted(() => {
   loadOllamaModels()
+  loadModelConfigs()
   loadHousekeeping()
   loadStorage()
 })
@@ -452,91 +540,167 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- LLM Settings -->
+    <!-- LLM Models -->
     <div class="card">
-      <h2 class="text-lg font-medium text-gray-900">LLM-Konfiguration</h2>
+      <h2 class="text-lg font-medium text-gray-900">
+        <CpuChipIcon class="mr-2 inline h-5 w-5" />
+        LLM-Modelle
+      </h2>
       <p class="mt-1 text-sm text-gray-500">
-        Einstellungen für die Textanalyse und Zusammenfassung
+        Modelle nach Priorität. Bei Rate-Limiting (429) wird automatisch das nächste Modell verwendet.
+        Jedes Modell nutzt seinen eigenen Prompt.
       </p>
 
-      <div class="mt-4 space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700">
-            Primärer Provider
-          </label>
-          <select v-model="settings.llm.provider" class="input mt-1">
-            <option value="ollama">Ollama (Lokal)</option>
-            <option value="openrouter">OpenRouter (Cloud)</option>
-          </select>
+      <div class="mt-4">
+        <!-- Ollama connection status -->
+        <p class="mb-3 text-xs text-gray-500">
+          Ollama: {{ ollamaAvailable ? '✓ Verbunden' : '✗ Nicht erreichbar' }}
+          <span v-if="ollamaModels.length > 0">({{ ollamaModels.length }} Modelle verfügbar)</span>
+        </p>
+
+        <!-- Model list -->
+        <div v-if="modelConfigsLoading && modelConfigs.length === 0" class="text-sm text-gray-500">
+          Lade Modelle...
         </div>
 
-        <div v-if="settings.llm.provider === 'ollama'" class="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">
-              Ollama URL
-            </label>
-            <input
-              v-model="settings.llm.ollama_url"
-              type="url"
-              class="input mt-1"
-              placeholder="http://localhost:11434"
-              disabled
-            />
-            <p class="mt-1 text-xs text-gray-500">
-              {{ ollamaAvailable ? '✓ Verbunden' : '✗ Nicht erreichbar' }}
-            </p>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">
-              Modell
-            </label>
-            <div v-if="loadingModels" class="mt-1 text-sm text-gray-500">
-              Lade Modelle...
+        <div v-else-if="modelConfigs.length === 0" class="rounded-lg border border-dashed border-gray-300 p-4 text-center text-sm text-gray-500">
+          Keine Modelle konfiguriert. Modelle werden aus der Datenbank geladen.
+        </div>
+
+        <div v-else class="space-y-2">
+          <div
+            v-for="(config, index) in modelConfigs"
+            :key="config.id"
+            class="flex items-center gap-3 rounded-lg border p-3"
+            :class="config.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'"
+          >
+            <!-- Priority arrows -->
+            <div class="flex flex-col gap-0.5">
+              <button
+                type="button"
+                class="rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                :disabled="index === 0"
+                @click="moveModel(config, 'up')"
+              >
+                <ChevronUpIcon class="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                class="rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                :disabled="index === modelConfigs.length - 1"
+                @click="moveModel(config, 'down')"
+              >
+                <ChevronDownIcon class="h-4 w-4" />
+              </button>
             </div>
-            <select
-              v-else-if="ollamaModels.length > 0"
-              v-model="settings.llm.ollama_model"
-              class="input mt-1"
+
+            <!-- Priority number -->
+            <span class="w-6 text-center text-xs font-medium text-gray-400">{{ config.priority }}</span>
+
+            <!-- Model info -->
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-sm font-medium text-gray-900">
+                  {{ config.model_name }}
+                </span>
+                <span v-if="config.display_name" class="text-xs text-gray-500">
+                  ({{ config.display_name }})
+                </span>
+              </div>
+              <div class="flex items-center gap-3 text-xs text-gray-500">
+                <span v-if="config.has_prompt" class="text-green-600">
+                  Prompt v{{ config.prompt_version }}
+                </span>
+                <span v-else class="text-amber-600">
+                  Kein Prompt
+                </span>
+                <span>Timeout: {{ config.timeout }}s</span>
+              </div>
+            </div>
+
+            <!-- Enable/disable toggle -->
+            <button
+              type="button"
+              class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="config.enabled ? 'bg-blue-600' : 'bg-gray-200'"
+              @click="toggleModel(config)"
             >
-              <option v-for="model in ollamaModels" :key="model.name" :value="model.name">
-                {{ model.name }}{{ model.is_current ? ' (aktuell)' : '' }}
-              </option>
-            </select>
-            <input
-              v-else
-              v-model="settings.llm.ollama_model"
-              type="text"
-              class="input mt-1"
-              placeholder="llama3.2"
-            />
-            <p v-if="ollamaModels.length > 0" class="mt-1 text-xs text-gray-500">
-              {{ ollamaModels.length }} Modelle verfügbar
-            </p>
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="config.enabled ? 'translate-x-5' : 'translate-x-0'"
+              />
+            </button>
+
+            <!-- Delete -->
+            <button
+              type="button"
+              class="rounded p-1 text-gray-400 hover:text-red-600"
+              @click="deleteModel(config)"
+            >
+              <TrashIcon class="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <div v-else class="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">
-              API-Key
-            </label>
-            <input
-              v-model="settings.llm.openrouter_key"
-              type="password"
-              class="input mt-1"
-              placeholder="sk-or-..."
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">
-              Modell
-            </label>
-            <input
-              v-model="settings.llm.openrouter_model"
-              type="text"
-              class="input mt-1"
-              placeholder="mistralai/mistral-7b-instruct:free"
-            />
+        <!-- Add model -->
+        <div class="mt-3">
+          <button
+            v-if="!showAddModel"
+            type="button"
+            class="btn btn-secondary text-sm"
+            @click="showAddModel = true"
+          >
+            <PlusIcon class="mr-1 h-4 w-4" />
+            Modell hinzufügen
+          </button>
+
+          <div v-else class="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label class="block text-xs font-medium text-gray-700">Modellname (Ollama)</label>
+                <input
+                  v-model="newModel.model_name"
+                  type="text"
+                  class="input mt-1 text-sm"
+                  placeholder="gpt-oss-120b"
+                />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-700">Anzeigename (optional)</label>
+                <input
+                  v-model="newModel.display_name"
+                  type="text"
+                  class="input mt-1 text-sm"
+                  placeholder="GPT-OSS 120B"
+                />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700">Timeout (Sekunden)</label>
+              <input
+                v-model.number="newModel.timeout"
+                type="number"
+                min="10"
+                max="600"
+                class="input mt-1 w-24 text-sm"
+              />
+            </div>
+
+            <div
+              v-if="addModelError"
+              class="rounded-lg bg-red-50 p-2 text-xs text-red-700"
+            >
+              {{ addModelError }}
+            </div>
+
+            <div class="flex gap-2">
+              <button type="button" class="btn btn-primary text-sm" @click="addModel">
+                Hinzufügen
+              </button>
+              <button type="button" class="btn btn-secondary text-sm" @click="showAddModel = false">
+                Abbrechen
+              </button>
+            </div>
           </div>
         </div>
       </div>

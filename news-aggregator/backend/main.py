@@ -265,6 +265,42 @@ async def run_migrations() -> None:
                 logging.warning(f"Index {name}: {e}")
 
 
+async def _seed_llm_model_configs() -> None:
+    """Seed initial LLM model configs if table is empty."""
+    from database import async_session_maker
+    from models import LLMModelConfig
+    from sqlalchemy import select, func
+
+    try:
+        async with async_session_maker() as db:
+            count = await db.scalar(select(func.count()).select_from(LLMModelConfig))
+            if count and count > 0:
+                return  # Already seeded
+
+            # Seed default models
+            defaults = [
+                LLMModelConfig(
+                    model_name="gpt-oss-120b",
+                    display_name="GPT-OSS 120B",
+                    priority=1,
+                    enabled=True,
+                    timeout=120,
+                ),
+                LLMModelConfig(
+                    model_name="qwen3:30b",
+                    display_name="Qwen3 30B",
+                    priority=2,
+                    enabled=True,
+                    timeout=120,
+                ),
+            ]
+            db.add_all(defaults)
+            await db.commit()
+            logging.info(f"Seeded {len(defaults)} LLM model configs")
+    except Exception as e:
+        logging.warning(f"Could not seed LLM model configs: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler for startup/shutdown."""
@@ -301,10 +337,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Configure msmtp (sendmail) relay from settings
     _write_msmtp_config()
 
-    # Startup - all workers init DB, only leader runs migrations
+    # Startup - all workers init DB, only leader runs migrations + seed
     await init_db()
     if is_leader:
         await run_migrations()
+        await _seed_llm_model_configs()
 
     # Only the leader runs background workers
     if is_leader:
@@ -483,4 +520,7 @@ app.include_router(scheduler_api.router, prefix=settings.api_prefix, tags=["sche
 app.include_router(analytics.router, prefix=settings.api_prefix, tags=["analytics"])
 app.include_router(motd.router, prefix=settings.api_prefix, tags=["motd"])
 app.include_router(prompts.router, prefix=settings.api_prefix, tags=["prompts"])
+
+from api import llm_models  # noqa: E402
+app.include_router(llm_models.router, prefix=settings.api_prefix, tags=["llm"])
 app.include_router(digest.router, prefix=settings.api_prefix, tags=["digest"])

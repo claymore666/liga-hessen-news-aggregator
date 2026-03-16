@@ -178,6 +178,28 @@ export const llmApi = {
   getSettings: () => api.get<LLMSettingsResponse>('/llm/settings')
 }
 
+// LLM Model Config Types
+export interface LLMModelConfig {
+  id: number
+  model_name: string
+  display_name: string | null
+  priority: number
+  enabled: boolean
+  ollama_base_url: string | null
+  timeout: number
+  has_prompt: boolean
+  prompt_version: number | null
+  created_at: string
+}
+
+export const llmModelConfigsApi = {
+  list: () => api.get<LLMModelConfig[]>('/llm/model-configs'),
+  create: (data: Partial<LLMModelConfig>) => api.post<LLMModelConfig>('/llm/model-configs', data),
+  update: (id: number, data: Partial<LLMModelConfig>) => api.patch<LLMModelConfig>(`/llm/model-configs/${id}`, data),
+  delete: (id: number) => api.delete(`/llm/model-configs/${id}`),
+  reorder: (items: { id: number; priority: number }[]) => api.post('/llm/model-configs/reorder', items)
+}
+
 // System Stats Types
 export interface WorkerStatus {
   running: boolean

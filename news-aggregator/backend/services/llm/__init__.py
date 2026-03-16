@@ -28,6 +28,7 @@ from .base import BaseLLMProvider, LLMResponse, RateLimitError
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
 from .service import LLMService
+from .multi_model import MultiModelLLMService
 
 __all__ = [
     "BaseLLMProvider",
@@ -35,5 +36,6 @@ __all__ = [
     "OllamaProvider",
     "OpenRouterProvider",
     "LLMService",
+    "MultiModelLLMService",
     "RateLimitError",
 ]

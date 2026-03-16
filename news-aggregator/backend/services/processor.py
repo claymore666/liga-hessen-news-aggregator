@@ -708,9 +708,12 @@ Antworte NUR mit JA oder NEIN."""
         # Attach provider/model info from LLM response
         result["_provider"] = response.provider
         result["_model"] = response.model
-        if self.prompt_version is not None:
-            result["_prompt_version"] = self.prompt_version
-            result["_prompt_model"] = self.prompt_model
+        # Multi-model service puts actual prompt info in response metadata
+        actual_prompt_model = response.metadata.get("prompt_model", self.prompt_model)
+        actual_prompt_version = response.metadata.get("prompt_version", self.prompt_version)
+        if actual_prompt_version is not None:
+            result["_prompt_version"] = actual_prompt_version
+            result["_prompt_model"] = actual_prompt_model
 
         return result
 
@@ -778,14 +781,16 @@ async def get_active_prompt(model: str) -> tuple[str | None, str | None, int | N
 async def create_processor_from_settings() -> ItemProcessor | None:
     """Create processor instance from application settings.
 
-    Loads the active prompt from DB for the configured model.
-    Falls back to the hardcoded ANALYSIS_SYSTEM_PROMPT if no DB prompt exists.
+    Loads enabled model configs from DB (ordered by priority), builds a
+    multi-model LLM service where each model has its own prompt.
+
+    Falls back to env-based single-model config if no DB configs exist.
 
     Returns:
         Configured ItemProcessor instance, or None if LLM is disabled
     """
     from config import settings
-    from .llm import OllamaProvider, OpenRouterProvider, LLMService
+    from .llm import OllamaProvider, OpenRouterProvider, LLMService, MultiModelLLMService
 
     # Check if LLM processing is enabled (runtime setting overrides env)
     if not await is_llm_enabled():
@@ -793,9 +798,26 @@ async def create_processor_from_settings() -> ItemProcessor | None:
         logging.getLogger(__name__).info("LLM processing disabled (env or runtime setting)")
         return None
 
-    providers = []
+    # Try loading model configs from DB
+    model_entries = await _load_model_configs(settings)
 
-    # Ollama proxy handles routing: cloud first, then local fallback
+    if model_entries:
+        # Multi-model mode: each entry has (provider, system_prompt, prompt_model, prompt_version)
+        model_names = [e[2] or e[0].model for e in model_entries]
+        logger.info(f"LLM processor: {len(model_entries)} models [{', '.join(model_names)}]")
+        llm_service = MultiModelLLMService(model_entries)
+        # Primary model's prompt info for ItemProcessor metadata
+        _, primary_prompt, primary_model, primary_version = model_entries[0]
+        return ItemProcessor(
+            llm_service,
+            system_prompt=primary_prompt,
+            prompt_model=primary_model,
+            prompt_version=primary_version,
+        )
+
+    # Fallback: env-based single-model config (backward compat)
+    logger.info("No DB model configs, falling back to env-based config")
+    providers = []
     providers.append(
         OllamaProvider(
             base_url=settings.ollama_base_url,
@@ -803,8 +825,6 @@ async def create_processor_from_settings() -> ItemProcessor | None:
             timeout=settings.ollama_timeout,
         )
     )
-
-    # Add OpenRouter as last fallback if configured
     if settings.openrouter_api_key:
         providers.append(
             OpenRouterProvider(
@@ -814,7 +834,6 @@ async def create_processor_from_settings() -> ItemProcessor | None:
             )
         )
 
-    # Load model-specific prompt from DB
     system_prompt, prompt_model, prompt_version = await get_active_prompt(settings.ollama_model)
     if system_prompt:
         logger.info(f"Loaded prompt v{prompt_version} for {prompt_model} from DB")
@@ -828,3 +847,50 @@ async def create_processor_from_settings() -> ItemProcessor | None:
         prompt_model=prompt_model,
         prompt_version=prompt_version,
     )
+
+
+async def _load_model_configs(settings) -> list[tuple] | None:
+    """Load enabled model configs from DB with their prompts.
+
+    Returns:
+        List of (OllamaProvider, system_prompt, prompt_model, prompt_version) tuples
+        ordered by priority, or None if no configs exist.
+    """
+    from .llm import OllamaProvider
+    from database import async_session_maker
+    from models import LLMModelConfig
+    from sqlalchemy import select
+
+    try:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(LLMModelConfig)
+                .where(LLMModelConfig.enabled.is_(True))
+                .order_by(LLMModelConfig.priority, LLMModelConfig.id)
+            )
+            configs = result.scalars().all()
+
+        if not configs:
+            return None
+
+        entries = []
+        for config in configs:
+            provider = OllamaProvider(
+                base_url=config.ollama_base_url or settings.ollama_base_url,
+                model=config.model_name,
+                timeout=config.timeout,
+            )
+            system_prompt, prompt_model, prompt_version = await get_active_prompt(config.model_name)
+            if not system_prompt:
+                logger.info(f"No DB prompt for {config.model_name}, using hardcoded default")
+                system_prompt = ANALYSIS_SYSTEM_PROMPT
+                prompt_model = config.model_name
+                prompt_version = None
+
+            entries.append((provider, system_prompt, prompt_model, prompt_version))
+
+        return entries
+
+    except Exception as e:
+        logger.warning(f"Could not load model configs from DB: {e}")
+        return None
