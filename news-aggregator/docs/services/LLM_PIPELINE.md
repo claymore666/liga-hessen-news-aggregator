@@ -9,6 +9,7 @@ The LLM pipeline provides detailed news analysis using a local Ollama model. It 
 - `backend/services/processor.py` - LLM interaction and response parsing
 - `backend/services/llm/service.py` - Multi-provider LLM service with fallback
 - `backend/services/llm/ollama.py` - Ollama provider (routes to proxy on docker-ai)
+- `backend/services/llm/openrouter.py` - OpenRouter provider (fallback)
 - `backend/services/llm/base.py` - Base provider interface and `RateLimitError`
 
 ## Architecture
