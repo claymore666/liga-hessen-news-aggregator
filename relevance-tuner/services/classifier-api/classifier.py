@@ -96,7 +96,7 @@ class OllamaEmbedder:
                 try:
                     resp = await self._client.post(
                         "/api/embed",
-                        json={"model": self.model_name, "input": batch},
+                        json={"model": self.model_name, "input": batch, "truncate": True},
                     )
                     resp.raise_for_status()
                     data = resp.json()
