@@ -49,7 +49,7 @@ services:
       - default
 
   db:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: liga-news-db
     restart: unless-stopped
     mem_limit: 512m
@@ -190,20 +190,22 @@ services:
       retries: 3
       start_period: 5s
 
-  # Classifier API - lightweight container, embeddings via Ollama proxy
+  # Classifier API - lightweight stateless container, embeddings via Ollama proxy, vectors via pgvector
   classifier:
     build:
       context: ../relevance-tuner/services/classifier-api
       dockerfile: Dockerfile
     container_name: liga-classifier
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 512m
     environment:
       - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      - DATABASE_URL=postgresql://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
     volumes:
       - ../relevance-tuner/services/classifier-api/models:/app/models
-      - classifier-vectordb:/app/data/vectordb
-      - classifier-duplicatedb:/app/data/duplicatedb
+    depends_on:
+      db:
+        condition: service_healthy
     # No host port mapping needed — backend connects via Docker network (http://classifier:8082)
     # Port 8082 on host is used by the Ollama proxy (forwarding to gpu1:8082 for legacy access)
     stop_grace_period: 30s
@@ -220,9 +222,3 @@ volumes:
     name: liga-news-postgres
   backend-data:
     name: liga-news-data
-  classifier-vectordb:
-    name: liga-classifier-vectordb
-    external: true
-  classifier-duplicatedb:
-    name: liga-classifier-duplicatedb
-    external: true

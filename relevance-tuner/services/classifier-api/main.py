@@ -2,9 +2,9 @@
 Embedding Classifier API
 FastAPI service for news relevance classification and semantic search.
 Embeddings generated via Ollama HTTP API (no local GPU required).
+Vector storage via pgvector in PostgreSQL (no local ChromaDB).
 """
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,22 +13,28 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from classifier import EmbeddingClassifier, VectorStore, DuplicateStore
+from classifier import EmbeddingClassifier, ParaphraseEmbedder
+from pgvector_store import PgVectorStore
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://liga:liga@db:5432/liga_news",
+)
+
 # Global instances
 classifier: EmbeddingClassifier | None = None
-vector_store: VectorStore | None = None
-duplicate_store: DuplicateStore | None = None
+vector_store: PgVectorStore | None = None
+duplicate_store: PgVectorStore | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load classifier, vector store, and duplicate store on startup."""
+    """Load classifier and connect to pgvector stores on startup."""
     global classifier, vector_store, duplicate_store
     logger.info("Loading embedding classifier...")
     try:
@@ -37,33 +43,37 @@ async def lifespan(app: FastAPI):
         logger.info(f"Classifier loaded: {info}")
 
         # Initialize vector store (shares embedder with classifier)
-        logger.info("Initializing vector store...")
-        vector_store = VectorStore(
+        logger.info("Initializing vector store (pgvector)...")
+        vector_store = PgVectorStore(
+            dsn=DATABASE_URL,
+            table_name="vector_search",
             embedder=classifier.embedder,
-            persist_dir="/app/data/vectordb",
         )
-        logger.info(f"Vector store ready: {vector_store.get_stats()}")
+        await vector_store.init()
+        vs_count = await vector_store.count()
+        logger.info(f"Vector store ready: {vs_count} items")
 
         # Initialize duplicate store (separate paraphrase embedder)
-        logger.info("Initializing duplicate store (paraphrase model)...")
-        duplicate_store = DuplicateStore(
-            persist_dir="/app/data/duplicatedb",
+        logger.info("Initializing duplicate store (pgvector, paraphrase model)...")
+        duplicate_store = PgVectorStore(
+            dsn=DATABASE_URL,
+            table_name="vector_duplicates",
+            embedder=ParaphraseEmbedder(),
         )
-        logger.info(f"Duplicate store ready: {await duplicate_store.get_stats()}")
+        await duplicate_store.init()
+        ds_count = await duplicate_store.count()
+        logger.info(f"Duplicate store ready: {ds_count} items")
 
         # Auto-sync: if duplicate store has fewer items than search store,
         # sync missing items from search to duplicate index.
         # Wrapped in try/except: Ollama (gpu1) may be asleep at startup.
         try:
-            vs_count = vector_store.get_stats()["total_items"]
-            ds_count = (await duplicate_store.get_stats())["total_items"]
             if ds_count < vs_count:
                 logger.info(
                     f"Duplicate store ({ds_count}) behind search store ({vs_count}), "
                     f"syncing {vs_count - ds_count} items..."
                 )
-                items = vector_store.get_all_items()
-                # Batch to stay under ChromaDB's max batch size
+                items = await vector_store.get_all_items()
                 batch_size = 2000
                 total_synced = 0
                 for i in range(0, len(items), batch_size):
@@ -90,17 +100,20 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup: close HTTP clients
+    # Cleanup: close HTTP clients and DB pools
     if classifier:
         await classifier.embedder.close()
+    if vector_store:
+        await vector_store.close()
     if duplicate_store:
         await duplicate_store.embedder.close()
+        await duplicate_store.close()
     logger.info("Shutting down classifier service")
 
 
 app = FastAPI(
     title="Embedding Classifier API",
-    description="News relevance classification and semantic search (embeddings via Ollama)",
+    description="News relevance classification and semantic search (embeddings via Ollama, vectors via pgvector)",
     version=__version__,
     lifespan=lifespan,
 )
@@ -162,9 +175,9 @@ class DuplicateRequest(BaseModel):
     """Request model for finding semantic duplicates."""
     title: str
     content: str = Field(max_length=100000)
-    threshold: float = Field(default=0.75, ge=0.0, le=1.0)  # Cosine similarity threshold (paraphrase model)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     n_results: int = 5
-    fetched_after: str | None = None  # ISO timestamp - only match items fetched after this time
+    fetched_after: str | None = None  # ISO timestamp
 
 
 class DuplicateResponse(BaseModel):
@@ -218,13 +231,13 @@ class HealthResponse(BaseModel):
 class StorageSizeResponse(BaseModel):
     """Response model for storage sizes."""
     search_index_size_bytes: int = Field(
-        description="Disk size of semantic search index (nomic embeddings) in bytes"
+        description="Size of semantic search index (nomic embeddings) in bytes"
     )
     search_index_items: int = Field(
         description="Number of items indexed for semantic search"
     )
     duplicate_index_size_bytes: int = Field(
-        description="Disk size of duplicate detection index (paraphrase embeddings) in bytes"
+        description="Size of duplicate detection index (paraphrase embeddings) in bytes"
     )
     duplicate_index_items: int = Field(
         description="Number of items indexed for duplicate detection"
@@ -249,8 +262,8 @@ async def health():
         raise HTTPException(status_code=503, detail="Classifier not loaded")
 
     info = await classifier.get_info()
-    vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
-    ds_stats = await duplicate_store.get_stats() if duplicate_store else {}
+    vs_count = await vector_store.count() if vector_store else 0
+    ds_stats = await duplicate_store.get_stats_async() if duplicate_store else {}
 
     return HealthResponse(
         status="ok",
@@ -263,7 +276,7 @@ async def health():
         trained_at=info.get("trained_at"),
         training_items=info.get("training_items"),
         multilabel=info.get("multilabel", False),
-        search_index_items=vs_items,
+        search_index_items=vs_count,
         duplicate_index_items=ds_stats.get("total_items", 0),
         duplicate_model=ds_stats.get("model"),
     )
@@ -271,11 +284,7 @@ async def health():
 
 @app.post("/classify", response_model=ClassifyResponse)
 async def classify(request: ClassifyRequest):
-    """
-    Classify a news article for relevance.
-
-    Returns relevance, priority, and AK (Arbeitskreis) predictions.
-    """
+    """Classify a news article for relevance."""
     if classifier is None:
         raise HTTPException(status_code=503, detail="Classifier not loaded")
 
@@ -285,7 +294,6 @@ async def classify(request: ClassifyRequest):
             content=request.content,
             source=request.source,
         )
-        # Add classifier version to response
         result["classifier_version"] = classifier.VERSION
         return ClassifyResponse(**result)
     except Exception as e:
@@ -295,16 +303,11 @@ async def classify(request: ClassifyRequest):
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    """
-    Semantic search for articles matching a query.
-
-    Returns articles ranked by semantic similarity to the query.
-    """
+    """Semantic search for articles matching a query."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
 
     try:
-        # Build filter if source specified
         filter_metadata = {"source": request.source} if request.source else None
 
         results = await vector_store.search(
@@ -316,7 +319,7 @@ async def search(request: SearchRequest):
         return SearchResponse(
             query=request.query,
             results=[SearchResult(**r) for r in results],
-            total_in_store=vector_store.get_stats()["total_items"],
+            total_in_store=await vector_store.count(),
         )
     except Exception as e:
         logger.error(f"Search failed: {e}")
@@ -325,16 +328,12 @@ async def search(request: SearchRequest):
 
 @app.post("/similar", response_model=SearchResponse)
 async def similar(request: SimilarRequest):
-    """
-    Find articles similar to a given article.
-
-    Returns articles ranked by semantic similarity, optionally excluding same source.
-    """
+    """Find articles similar to a given article."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
 
     try:
-        results = vector_store.find_similar(
+        results = await vector_store.find_similar(
             item_id=request.item_id,
             n_results=request.n_results,
             exclude_same_source=request.exclude_same_source,
@@ -343,7 +342,7 @@ async def similar(request: SimilarRequest):
         return SearchResponse(
             query=f"similar to {request.item_id}",
             results=[SearchResult(**r) for r in results],
-            total_in_store=vector_store.get_stats()["total_items"],
+            total_in_store=await vector_store.count(),
         )
     except Exception as e:
         logger.error(f"Similar search failed: {e}")
@@ -352,21 +351,11 @@ async def similar(request: SimilarRequest):
 
 @app.post("/find-duplicates", response_model=DuplicateResponse)
 async def find_duplicates(request: DuplicateRequest):
-    """
-    Find semantically similar items that may be duplicates.
-
-    Uses paraphrase-multilingual-mpnet model for better same-story detection.
-    Default threshold 0.75 catches same-story articles with different wording.
-
-    Used during ingestion to detect cross-channel duplicates like:
-    - RSS: "Title of Article" from Source A
-    - RSS: "Same Story Different Words" from Source B
-    """
+    """Find semantically similar items that may be duplicates."""
     if duplicate_store is None:
         raise HTTPException(status_code=503, detail="Duplicate store not initialized")
 
     try:
-        # Use dedicated duplicate store with paraphrase embeddings
         duplicates = await duplicate_store.find_duplicates(
             title=request.title,
             content=request.content,
@@ -386,13 +375,7 @@ async def find_duplicates(request: DuplicateRequest):
 
 @app.post("/index", response_model=IndexResponse)
 async def index_item(request: IndexRequest):
-    """
-    Index a single article for semantic search and duplicate detection.
-
-    Articles are indexed in both stores:
-    - Vector store (nomic): for semantic search and similarity
-    - Duplicate store (paraphrase): for duplicate detection
-    """
+    """Index a single article for semantic search and duplicate detection."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
 
@@ -414,10 +397,9 @@ async def index_item(request: IndexRequest):
                     metadata=request.metadata,
                 )
             except Exception as dup_err:
-                # Rollback: remove from vector store to keep indexes consistent
                 logger.error(f"Duplicate store indexing failed, rolling back vector store: {dup_err}")
                 try:
-                    vector_store.collection.delete(ids=[request.id])
+                    await vector_store.delete([request.id])
                 except Exception as rollback_err:
                     logger.error(f"Rollback from vector store also failed: {rollback_err}")
                 raise HTTPException(
@@ -427,7 +409,7 @@ async def index_item(request: IndexRequest):
 
         return IndexResponse(
             indexed=1 if added else 0,
-            total_in_store=vector_store.get_stats()["total_items"],
+            total_in_store=await vector_store.count(),
         )
     except HTTPException:
         raise
@@ -438,12 +420,7 @@ async def index_item(request: IndexRequest):
 
 @app.post("/index/batch", response_model=IndexResponse)
 async def index_batch(request: IndexBatchRequest):
-    """
-    Index multiple articles in batch.
-
-    More efficient than indexing one by one for bulk operations.
-    Indexes to both vector store (semantic search) and duplicate store.
-    """
+    """Index multiple articles in batch."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
 
@@ -458,9 +435,6 @@ async def index_batch(request: IndexBatchRequest):
             for item in request.items
         ]
 
-        # Before adding to vector store, check which IDs already exist
-        existing_vs_ids = set(vector_store.collection.get(ids=[str(item["id"]) for item in items], include=[])["ids"])
-
         added = await vector_store.add_items_batch(items)
 
         # Also add to duplicate store
@@ -468,23 +442,12 @@ async def index_batch(request: IndexBatchRequest):
             try:
                 await duplicate_store.add_items_batch(items)
             except Exception as dup_err:
-                # Rollback: only remove IDs that were newly added (not pre-existing)
-                logger.error(f"Duplicate store batch indexing failed, rolling back vector store: {dup_err}")
-                batch_ids = [item["id"] for item in items]
-                newly_added = [id for id in batch_ids if id not in existing_vs_ids]
-                try:
-                    if newly_added:
-                        vector_store.collection.delete(ids=newly_added)
-                except Exception as rollback_err:
-                    logger.error(f"Rollback from vector store also failed: {rollback_err}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Duplicate store batch indexing failed (vector store rolled back): {dup_err}",
-                )
+                logger.error(f"Duplicate store batch indexing failed: {dup_err}")
+                # Don't rollback vector store for batch — partial state is acceptable
 
         return IndexResponse(
             indexed=added,
-            total_in_store=vector_store.get_stats()["total_items"],
+            total_in_store=await vector_store.count(),
         )
     except HTTPException:
         raise
@@ -511,60 +474,29 @@ async def root():
             "/index/batch": "Batch index articles to both indexes (POST)",
         },
         "indexes": {
-            "search_index": "ChromaDB with nomic embeddings for semantic search",
-            "duplicate_index": "ChromaDB with paraphrase embeddings for duplicate detection",
+            "search_index": "pgvector with nomic embeddings for semantic search",
+            "duplicate_index": "pgvector with paraphrase embeddings for duplicate detection",
         },
     }
 
 
-def _get_dir_size(path: str) -> int:
-    """Get total size of a directory in bytes."""
-    total = 0
-    if os.path.exists(path):
-        for dirpath, dirnames, filenames in os.walk(path):
-            for f in filenames:
-                fp = os.path.join(dirpath, f)
-                try:
-                    total += os.path.getsize(fp)
-                except OSError:
-                    pass
-    return total
-
-
 @app.get("/storage", response_model=StorageSizeResponse)
 async def get_storage_sizes():
-    """Get storage sizes for search and duplicate detection indexes.
-
-    Returns disk usage and item counts for both ChromaDB indexes:
-    - Search index: nomic embeddings for semantic search
-    - Duplicate index: paraphrase embeddings for duplicate detection
-    """
-    loop = asyncio.get_event_loop()
-    vs_size = await loop.run_in_executor(None, _get_dir_size, "/app/data/vectordb")
-    ds_size = await loop.run_in_executor(None, _get_dir_size, "/app/data/duplicatedb")
-
-    vs_items = vector_store.get_stats()["total_items"] if vector_store else 0
-    ds_items = (await duplicate_store.get_stats())["total_items"] if duplicate_store else 0
+    """Get storage sizes for search and duplicate detection indexes."""
+    vs_stats = await vector_store.get_stats_async() if vector_store else {}
+    ds_stats = await duplicate_store.get_stats_async() if duplicate_store else {}
 
     return StorageSizeResponse(
-        search_index_size_bytes=vs_size,
-        search_index_items=vs_items,
-        duplicate_index_size_bytes=ds_size,
-        duplicate_index_items=ds_items,
+        search_index_size_bytes=vs_stats.get("size_bytes", 0),
+        search_index_items=vs_stats.get("total_items", 0),
+        duplicate_index_size_bytes=ds_stats.get("size_bytes", 0),
+        duplicate_index_items=ds_stats.get("total_items", 0),
     )
 
 
 @app.post("/sync-duplicate-store", response_model=SyncResponse)
 async def sync_duplicate_store():
-    """Sync items from search index to duplicate detection index.
-
-    Copies all items from the search index (nomic embeddings) to the
-    duplicate index (paraphrase embeddings) for duplicate detection.
-    Items already in the duplicate index are skipped.
-
-    Use this endpoint to backfill the duplicate index after adding
-    the duplicate detection feature to an existing deployment.
-    """
+    """Sync items from search index to duplicate detection index."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Search index not initialized")
     if duplicate_store is None:
@@ -572,27 +504,23 @@ async def sync_duplicate_store():
 
     logger.info("Starting sync from search index to duplicate index...")
 
-    # Get all items from search index
-    items = vector_store.get_all_items()
+    items = await vector_store.get_all_items()
     logger.info(f"Found {len(items)} items in search index")
 
     if not items:
-        return SyncResponse(
-            synced=0,
-            skipped=0,
-            total_in_duplicate_index=(await duplicate_store.get_stats())["total_items"],
-        )
+        ds_count = await duplicate_store.count()
+        return SyncResponse(synced=0, skipped=0, total_in_duplicate_index=ds_count)
 
-    # Add to duplicate index in batches
     synced = await duplicate_store.add_items_batch(items)
     skipped = len(items) - synced
 
     logger.info(f"Sync complete: {synced} synced, {skipped} skipped")
 
+    ds_count = await duplicate_store.count()
     return SyncResponse(
         synced=synced,
         skipped=skipped,
-        total_in_duplicate_index=(await duplicate_store.get_stats())["total_items"],
+        total_in_duplicate_index=ds_count,
     )
 
 
@@ -604,18 +532,11 @@ class ListIdsResponse(BaseModel):
 
 @app.get("/ids", response_model=ListIdsResponse)
 async def list_all_ids():
-    """List all item IDs in the search index.
-
-    Use this to find orphaned items that exist in vector store
-    but not in the main database.
-    """
+    """List all item IDs in the search index."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Search index not initialized")
 
-    # Get all IDs from the collection
-    all_data = vector_store.collection.get(include=[])
-    ids = all_data["ids"]
-
+    ids = await vector_store.get_all_ids()
     return ListIdsResponse(ids=ids, count=len(ids))
 
 
@@ -632,11 +553,7 @@ class DeleteResponse(BaseModel):
 
 @app.post("/delete", response_model=DeleteResponse)
 async def delete_items(request: DeleteRequest):
-    """Delete items from both vector store and duplicate store.
-
-    Use this when items are deleted from the main database to keep
-    the vector indexes in sync.
-    """
+    """Delete items from both vector store and duplicate store."""
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Search index not initialized")
     if duplicate_store is None:
@@ -645,23 +562,15 @@ async def delete_items(request: DeleteRequest):
     deleted_search = 0
     deleted_dup = 0
 
-    # Delete from search index
     try:
-        existing = vector_store.collection.get(ids=request.ids)
-        if existing["ids"]:
-            vector_store.collection.delete(ids=existing["ids"])
-            deleted_search = len(existing["ids"])
-            logger.info(f"Deleted {deleted_search} items from search index")
+        deleted_search = await vector_store.delete(request.ids)
+        logger.info(f"Deleted {deleted_search} items from search index")
     except Exception as e:
         logger.warning(f"Error deleting from search index: {e}")
 
-    # Delete from duplicate index
     try:
-        existing = duplicate_store.collection.get(ids=request.ids)
-        if existing["ids"]:
-            duplicate_store.collection.delete(ids=existing["ids"])
-            deleted_dup = len(existing["ids"])
-            logger.info(f"Deleted {deleted_dup} items from duplicate index")
+        deleted_dup = await duplicate_store.delete(request.ids)
+        logger.info(f"Deleted {deleted_dup} items from duplicate index")
     except Exception as e:
         logger.warning(f"Error deleting from duplicate index: {e}")
 
