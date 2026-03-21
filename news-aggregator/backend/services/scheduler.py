@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from config import settings
 from database import async_session_maker, json_merge, utcnow
-from models import Channel, Source
+from models import Channel, Item, Source
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ CHANNEL_FETCH_TIMEOUTS = {
     "linkedin": 180,  # 3 min - browser-based
     "html": 120,  # 2 min - may need JS rendering
     "pdf": 120,  # 2 min - large file downloads
-    "rss": 90,  # 1.5 min - some feeds (e.g. RKI) are slow
+    "rss": 180,  # 3 min - heavy feeds (FAZ, RKI) need time for article extraction
     "bluesky": 60,
     "mastodon": 60,
     "telegram": 60,
@@ -246,6 +246,16 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         channel_config = dict(channel.config)
         source_name = channel.source.name
 
+    # Query existing URLs for this channel to skip redundant article extraction
+    known_urls: set[str] = set()
+    async with async_session_maker() as db:
+        url_rows = await db.execute(
+            select(Item.url).where(Item.channel_id == channel_id, Item.url.isnot(None))
+        )
+        known_urls = {row[0] for row in url_rows}
+    if known_urls:
+        logger.debug(f"Channel {channel_id}: {len(known_urls)} known URLs, will skip article extraction for these")
+
     # Phase 2: Network I/O - fetch items (runs in parallel with other channels)
     try:
         connector_class = ConnectorRegistry.get(connector_type)
@@ -253,6 +263,7 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
             raise ValueError(f"Unknown connector type: {connector_type}")
 
         connector = connector_class()
+        connector.known_urls = known_urls  # Skip article extraction for already-seen URLs
         config_dict = {"url": channel_config.get("url", ""), **channel_config}
         config_model = connector_class.config_schema(**config_dict)
         raw_items = await connector.fetch(config_model)

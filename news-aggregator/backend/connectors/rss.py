@@ -150,7 +150,10 @@ class RSSConnector(BaseConnector):
             content = rss_content
             article_fetched = False
             article_source_domain = None
-            if article_extractor and link:
+            known_urls = getattr(self, "known_urls", set())
+            if article_extractor and link and link in known_urls:
+                logger.debug(f"Skipping article extraction for known URL: {link}")
+            elif article_extractor and link:
                 try:
                     article = await article_extractor.fetch_article(link)
                     if article and article.content:
