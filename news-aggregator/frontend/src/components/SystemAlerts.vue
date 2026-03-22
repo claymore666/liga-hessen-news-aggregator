@@ -33,7 +33,8 @@ const alerts = computed(() => {
 
   // Check Classifier worker
   const clf = systemStats.value.classifier_worker
-  if (clf.stopped_due_to_errors && !dismissed.value.has('classifier_error')) {
+  if (clf.stopped_due_to_errors && clf.service_available !== false && !dismissed.value.has('classifier_error')) {
+    // Real errors (service reachable but failing)
     result.push({
       id: 'classifier_error',
       type: 'warning',
@@ -48,6 +49,7 @@ const alerts = computed(() => {
       message: 'Der Classifier Worker ist nicht gestartet. Neue Artikel werden nicht klassifiziert.'
     })
   }
+  // Note: service_available=false (gpu1 offline) is normal — no alert needed
 
   // Check Dedup worker
   const dedup = systemStats.value.dedup_worker

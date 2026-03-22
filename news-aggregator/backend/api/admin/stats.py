@@ -131,7 +131,7 @@ async def get_system_stats(
         running=clf_state.get("running", False),
         paused=clf_state.get("paused", False),
         stopped_due_to_errors=clf_state.get("stopped_due_to_errors", False),
-        service_available=clf_state.get("running", False),
+        service_available=clf_state.get("service_available", True),
         stats={k: v for k, v in clf_stats.items() if k != "synced_at"} or
               {"processed": 0, "errors": 0},
     )

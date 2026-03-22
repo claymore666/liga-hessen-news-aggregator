@@ -217,7 +217,6 @@ class ClassifierWorker:
                     await write_state(
                         "classifier", running=True,
                         service_available=False,
-                        stopped_due_to_errors=True,
                     )
                 else:
                     logger.debug(f"Classifier still unavailable: {e}")
