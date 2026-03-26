@@ -284,7 +284,8 @@ gracefully:
 - **Backoff**: 300s (5 min) fixed interval — no exponential ramp, no per-item error counting
 - **Logging**: Logs once on transition to unavailable, then `DEBUG` level on retries
 - **Recovery**: Auto-clears `service_available=false` and `stopped_due_to_errors` when
-  the next batch succeeds
+  the next batch succeeds. After 10+ consecutive non-service errors, enters error state
+  (retries every 5 min). User can also resume via System page or API
 - **Status**: `service_available` field in `/api/admin/stats` → `classifier_worker`
 
 This prevents error counter inflation (previously thousands of errors when gpu1 was

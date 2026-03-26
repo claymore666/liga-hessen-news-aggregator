@@ -76,7 +76,8 @@ class LLMWorker:
             "items_timed": 0,  # Number of items with timing data
         }
         self._stats_lock = asyncio.Lock()
-        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
 
     async def start(self):
         """Start the worker background task."""
@@ -85,8 +86,9 @@ class LLMWorker:
             return
 
         self._running = True
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         self._stats["started_at"] = utcnow().isoformat()
-        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
         self._sync_task = asyncio.create_task(self._sync_stats())
@@ -125,6 +127,8 @@ class LLMWorker:
     async def resume(self):
         """Resume processing."""
         self._paused = False
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         from services.worker_status import write_state
         await write_state("llm", running=True, paused=False)
         logger.info("LLM worker resumed")
@@ -161,12 +165,13 @@ class LLMWorker:
         }
 
     async def _on_success(self):
-        """Clear degraded state on successful processing."""
+        """Clear error state on successful processing."""
+        self._consecutive_errors = 0
         if self._stopped_due_to_errors:
             self._stopped_due_to_errors = False
-            logger.info("LLM worker recovered from degraded state")
+            logger.info("LLM worker recovered from error state")
             from services.worker_status import write_state
-            await write_state("llm", running=True, stopped_due_to_errors=False)
+            await write_state("llm", running=True)
 
     async def _get_processor(self):
         """Get or create the LLM processor, refreshing after TTL expires."""
@@ -184,7 +189,6 @@ class LLMWorker:
         """Main worker loop."""
         logger.info("LLM worker loop started")
 
-        consecutive_errors = 0
         max_consecutive_errors = 10
 
         while self._running:
@@ -197,7 +201,6 @@ class LLMWorker:
                 # Priority 1: Process fresh items
                 fresh_processed = await self._process_fresh_items()
                 if fresh_processed > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     self._record_gpu1_activity()
                     continue  # Check for more fresh items immediately
@@ -205,7 +208,6 @@ class LLMWorker:
                 # Priority 2: Process backlog items
                 backlog_processed = await self._process_backlog_items()
                 if backlog_processed > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     self._record_gpu1_activity()
                     # Check for fresh items before continuing backlog
@@ -222,14 +224,14 @@ class LLMWorker:
                 logger.info("LLM worker cancelled")
                 break
             except RateLimitError as e:
-                consecutive_errors += 1
+                self._consecutive_errors += 1
                 # Use Retry-After header if available, otherwise exponential backoff
                 if e.retry_after:
                     backoff = min(300.0, e.retry_after)
                 else:
-                    backoff = min(300.0, 60.0 * (2 ** min(consecutive_errors - 1, 2)))
+                    backoff = min(300.0, 60.0 * (2 ** min(self._consecutive_errors - 1, 2)))
                 logger.warning(
-                    f"Rate-limited ({consecutive_errors}x), backing off {backoff:.0f}s"
+                    f"Rate-limited ({self._consecutive_errors}x), backing off {backoff:.0f}s"
                 )
                 self._wake_event.clear()
                 try:
@@ -238,24 +240,27 @@ class LLMWorker:
                 except asyncio.TimeoutError:
                     pass
             except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"LLM worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                self._consecutive_errors += 1
+                logger.error(f"LLM worker error ({self._consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                if self._consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
                     logger.warning(
-                        f"LLM worker in degraded state after {consecutive_errors} errors. "
-                        "Will keep retrying with backoff."
+                        f"LLM worker in error state after {self._consecutive_errors} errors. "
+                        "Retrying every 300s. Use the System page to resume."
                     )
                     self._stopped_due_to_errors = True
                     from services.worker_status import write_state
                     await write_state("llm", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
-                # Interruptible via _wake_event (set when new items arrive)
-                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
+                if self._stopped_due_to_errors:
+                    backoff = 300.0
+                else:
+                    # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                    backoff = min(300.0, 10.0 * (2 ** (self._consecutive_errors - 1)))
                 logger.info(f"Backing off for {backoff:.0f}s before retry (interruptible)")
+                # Interruptible via _wake_event (set when new items arrive)
                 self._wake_event.clear()
                 try:
                     await asyncio.wait_for(self._wake_event.wait(), timeout=backoff)

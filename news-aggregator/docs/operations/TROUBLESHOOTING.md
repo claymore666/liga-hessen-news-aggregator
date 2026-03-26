@@ -168,12 +168,12 @@ curl http://localhost:8000/api/admin/stats | jq '.llm_worker'
    docker compose logs backend | grep -i "rate-limit\|429" | tail -20
    ```
 
-4. **Worker in degraded state**
+4. **Worker in error state**
    ```json
    {"stopped_due_to_errors": true}
    ```
-   After 10+ consecutive errors, the worker marks itself degraded (still retries
-   with backoff). It auto-recovers when processing succeeds. To force-resume:
+   After 10+ consecutive errors, the worker enters error state (retries every
+   5 min). It auto-recovers when processing succeeds. To force-resume:
    ```bash
    curl -X POST http://localhost:8000/api/admin/llm-worker/resume
    ```

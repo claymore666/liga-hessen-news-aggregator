@@ -1,28 +1,38 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { adminApi, type SystemStatsResponse } from '@/api'
-import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { ExclamationTriangleIcon, XMarkIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
 
 const systemStats = ref<SystemStatsResponse | null>(null)
 const dismissed = ref<Set<string>>(new Set())
 const loading = ref(false)
+const resuming = ref<Set<string>>(new Set())
 let pollInterval: number | null = null
+
+interface Alert {
+  id: string
+  type: 'error' | 'warning'
+  title: string
+  message: string
+  resumeAction?: string  // worker name for resume button
+}
 
 const alerts = computed(() => {
   if (!systemStats.value) return []
 
-  const result: Array<{ id: string; type: 'error' | 'warning'; title: string; message: string }> = []
+  const result: Alert[] = []
 
   // Check LLM worker
   const llm = systemStats.value.llm_worker
-  if (llm.stopped_due_to_errors && !dismissed.value.has('llm_error')) {
+  if (llm.stopped_due_to_errors && !dismissed.value.has('llm_errors')) {
     result.push({
-      id: 'llm_error',
-      type: 'warning',
-      title: 'LLM Worker beeinträchtigt',
-      message: 'Der LLM Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
+      id: 'llm_errors',
+      type: 'error',
+      title: 'LLM Worker fehlerhaft',
+      message: 'Zu viele Fehler. Verarbeitung pausiert, Wiederholung alle 5 Min.',
+      resumeAction: 'llm-worker',
     })
-  } else if (!llm.running && !llm.stopped_due_to_errors && !dismissed.value.has('llm_stopped')) {
+  } else if (!llm.running && !dismissed.value.has('llm_stopped')) {
     result.push({
       id: 'llm_stopped',
       type: 'warning',
@@ -32,16 +42,17 @@ const alerts = computed(() => {
   }
 
   // Check Classifier worker
+  // Note: service_available=false (gpu1 offline) is normal — no alert needed
   const clf = systemStats.value.classifier_worker
-  if (clf.stopped_due_to_errors && clf.service_available !== false && !dismissed.value.has('classifier_error')) {
-    // Real errors (service reachable but failing)
+  if (clf.stopped_due_to_errors && !dismissed.value.has('classifier_errors')) {
     result.push({
-      id: 'classifier_error',
-      type: 'warning',
-      title: 'Classifier Worker beeinträchtigt',
-      message: 'Der Classifier Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
+      id: 'classifier_errors',
+      type: 'error',
+      title: 'Classifier Worker fehlerhaft',
+      message: 'Zu viele Fehler. Klassifizierung pausiert, Wiederholung alle 5 Min.',
+      resumeAction: 'classifier-worker',
     })
-  } else if (!clf.running && !clf.stopped_due_to_errors && !dismissed.value.has('classifier_stopped')) {
+  } else if (!clf.running && clf.service_available !== false && !dismissed.value.has('classifier_stopped')) {
     result.push({
       id: 'classifier_stopped',
       type: 'warning',
@@ -49,18 +60,18 @@ const alerts = computed(() => {
       message: 'Der Classifier Worker ist nicht gestartet. Neue Artikel werden nicht klassifiziert.'
     })
   }
-  // Note: service_available=false (gpu1 offline) is normal — no alert needed
 
   // Check Dedup worker
   const dedup = systemStats.value.dedup_worker
-  if (dedup.stopped_due_to_errors && !dismissed.value.has('dedup_error')) {
+  if (dedup.stopped_due_to_errors && !dismissed.value.has('dedup_errors')) {
     result.push({
-      id: 'dedup_error',
-      type: 'warning',
-      title: 'Dedup Worker beeinträchtigt',
-      message: 'Der Dedup Worker hat wiederholt Fehler gemeldet. Verarbeitung wird automatisch erneut versucht.'
+      id: 'dedup_errors',
+      type: 'error',
+      title: 'Dedup Worker fehlerhaft',
+      message: 'Zu viele Fehler. Dublettenprüfung pausiert, Wiederholung alle 5 Min.',
+      resumeAction: 'dedup-worker',
     })
-  } else if (!dedup.running && !dedup.stopped_due_to_errors && !dismissed.value.has('dedup_stopped')) {
+  } else if (!dedup.running && !dismissed.value.has('dedup_stopped')) {
     result.push({
       id: 'dedup_stopped',
       type: 'warning',
@@ -91,10 +102,40 @@ async function fetchStatus() {
   try {
     const response = await adminApi.getStats()
     systemStats.value = response.data
+    // Auto-clear dismissed error alerts when error state resolves
+    for (const key of ['llm_errors', 'classifier_errors', 'dedup_errors']) {
+      if (dismissed.value.has(key)) {
+        const worker = key.replace('_errors', '_worker') as keyof Pick<SystemStatsResponse, 'llm_worker' | 'classifier_worker' | 'dedup_worker'>
+        if (systemStats.value[worker] && !systemStats.value[worker].stopped_due_to_errors) {
+          dismissed.value.delete(key)
+        }
+      }
+    }
   } catch (e) {
     console.error('Failed to fetch system stats:', e)
   } finally {
     loading.value = false
+  }
+}
+
+const resumeActions: Record<string, () => Promise<unknown>> = {
+  'llm-worker': () => adminApi.resumeLlmWorker(),
+  'classifier-worker': () => adminApi.resumeClassifierWorker(),
+  'dedup-worker': () => adminApi.resumeDedupWorker(),
+}
+
+async function resumeWorker(workerName: string, alertId: string) {
+  if (resuming.value.has(workerName)) return
+  resuming.value.add(workerName)
+  try {
+    const action = resumeActions[workerName]
+    if (action) await action()
+    dismissed.value.add(alertId)
+    setTimeout(fetchStatus, 2000)
+  } catch (e) {
+    console.error(`Failed to resume ${workerName}:`, e)
+  } finally {
+    resuming.value.delete(workerName)
   }
 }
 
@@ -153,6 +194,20 @@ onUnmounted(() => {
           {{ alert.message }}
         </p>
       </div>
+      <button
+        v-if="alert.resumeAction"
+        type="button"
+        class="flex-shrink-0 px-2.5 py-1 rounded text-xs font-medium bg-white border border-red-300 text-red-700 hover:bg-red-50 transition-colors disabled:opacity-50"
+        :disabled="resuming.has(alert.resumeAction)"
+        title="Worker fortsetzen"
+        @click="resumeWorker(alert.resumeAction!, alert.id)"
+      >
+        <ArrowPathIcon
+          class="h-3.5 w-3.5 inline-block mr-1"
+          :class="{ 'animate-spin': resuming.has(alert.resumeAction) }"
+        />
+        Fortsetzen
+      </button>
       <button
         type="button"
         class="flex-shrink-0 p-1 rounded hover:bg-white/50 transition-colors"

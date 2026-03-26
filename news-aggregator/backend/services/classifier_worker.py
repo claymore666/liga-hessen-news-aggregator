@@ -77,7 +77,8 @@ class ClassifierWorker:
             "last_processed_at": None,
         }
         self._stats_lock = asyncio.Lock()
-        self._stopped_due_to_errors = False  # Track if stopped due to max consecutive errors
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         self._service_unavailable = False  # Track if embedding service is down
 
     async def start(self):
@@ -87,8 +88,9 @@ class ClassifierWorker:
             return
 
         self._running = True
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         self._stats["started_at"] = utcnow().isoformat()
-        self._stopped_due_to_errors = False  # Reset on start
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
         self._sync_task = asyncio.create_task(self._sync_stats())
@@ -132,6 +134,8 @@ class ClassifierWorker:
     async def resume(self):
         """Resume processing."""
         self._paused = False
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         from services.worker_status import write_state
         await write_state("classifier", running=True, paused=False)
         logger.info("Classifier worker resumed")
@@ -150,21 +154,13 @@ class ClassifierWorker:
 
     async def _on_success(self):
         """Clear degraded state on successful processing."""
-        recovered = False
-        if self._stopped_due_to_errors:
+        self._consecutive_errors = 0
+        if self._stopped_due_to_errors or self._service_unavailable:
             self._stopped_due_to_errors = False
-            recovered = True
-        if self._service_unavailable:
             self._service_unavailable = False
-            recovered = True
-        if recovered:
             logger.info("Classifier worker recovered — service available again")
             from services.worker_status import write_state
-            await write_state(
-                "classifier", running=True,
-                service_available=True,
-                stopped_due_to_errors=False,
-            )
+            await write_state("classifier", running=True, service_available=True)
 
     async def _get_classifier(self):
         """Get or create the classifier instance."""
@@ -177,7 +173,6 @@ class ClassifierWorker:
         """Main worker loop."""
         logger.info("Classifier worker loop started")
 
-        consecutive_errors = 0
         max_consecutive_errors = 10
         service_unavailable_backoff = 300.0  # 5 minutes
 
@@ -191,7 +186,6 @@ class ClassifierWorker:
                 # Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     # More items might be available
                     await asyncio.sleep(0.5)
@@ -222,24 +216,28 @@ class ClassifierWorker:
                     logger.debug(f"Classifier still unavailable: {e}")
                 await asyncio.sleep(service_unavailable_backoff)
             except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Classifier worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                self._consecutive_errors += 1
+                logger.error(f"Classifier worker error ({self._consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                if self._consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
                     logger.warning(
-                        f"Classifier worker in degraded state after {consecutive_errors} errors. "
-                        "Will keep retrying with backoff."
+                        f"Classifier worker in error state after {self._consecutive_errors} errors. "
+                        f"Retrying every {service_unavailable_backoff:.0f}s. "
+                        "Use the System page to resume."
                     )
                     self._stopped_due_to_errors = True
                     from services.worker_status import write_state
                     await write_state("classifier", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
-                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
-                logger.info(f"Backing off for {backoff:.0f}s before retry")
-                await asyncio.sleep(backoff)
+                if self._stopped_due_to_errors:
+                    await asyncio.sleep(service_unavailable_backoff)
+                else:
+                    # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                    backoff = min(300.0, 10.0 * (2 ** (self._consecutive_errors - 1)))
+                    logger.info(f"Backing off for {backoff:.0f}s before retry")
+                    await asyncio.sleep(backoff)
 
         logger.info("Classifier worker loop ended")
 

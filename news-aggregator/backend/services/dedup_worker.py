@@ -63,6 +63,7 @@ class DedupWorker:
         }
         self._stats_lock = asyncio.Lock()
         self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
 
     async def start(self):
         """Start the worker background task."""
@@ -71,8 +72,9 @@ class DedupWorker:
             return
 
         self._running = True
-        self._stats["started_at"] = utcnow().isoformat()
         self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
+        self._stats["started_at"] = utcnow().isoformat()
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
         self._sync_task = asyncio.create_task(self._sync_stats())
@@ -116,6 +118,8 @@ class DedupWorker:
     async def resume(self):
         """Resume processing."""
         self._paused = False
+        self._stopped_due_to_errors = False
+        self._consecutive_errors = 0
         from services.worker_status import write_state
         await write_state("dedup", running=True, paused=False)
         logger.info("Dedup worker resumed")
@@ -132,12 +136,13 @@ class DedupWorker:
         }
 
     async def _on_success(self):
-        """Clear degraded state on successful processing."""
+        """Clear error state on successful processing."""
+        self._consecutive_errors = 0
         if self._stopped_due_to_errors:
             self._stopped_due_to_errors = False
-            logger.info("Dedup worker recovered from degraded state")
+            logger.info("Dedup worker recovered from error state")
             from services.worker_status import write_state
-            await write_state("dedup", running=True, stopped_due_to_errors=False)
+            await write_state("dedup", running=True)
 
     async def _get_classifier(self):
         """Get or create the classifier instance."""
@@ -150,7 +155,6 @@ class DedupWorker:
         """Main worker loop."""
         logger.info("Dedup worker loop started")
 
-        consecutive_errors = 0
         max_consecutive_errors = 10
         last_sync_check_date = None
 
@@ -163,7 +167,6 @@ class DedupWorker:
                 # Priority 1: Index items in vector store (prerequisite for Phase 2)
                 indexed = await self._process_unindexed_items()
                 if indexed > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     await asyncio.sleep(0.5)
                     continue
@@ -171,7 +174,6 @@ class DedupWorker:
                 # Priority 2: Phase 1 dedup (URL, hash, title - no GPU needed)
                 phase1 = await self._process_phase1_dedup()
                 if phase1 > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     await asyncio.sleep(0.5)
                     continue
@@ -179,7 +181,6 @@ class DedupWorker:
                 # Priority 3: Phase 2 dedup (semantic via classifier API)
                 phase2 = await self._process_phase2_dedup()
                 if phase2 > 0:
-                    consecutive_errors = 0
                     await self._on_success()
                     await asyncio.sleep(0.5)
                     continue
@@ -198,24 +199,27 @@ class DedupWorker:
                 logger.info("Dedup worker cancelled")
                 break
             except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Dedup worker error ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
+                self._consecutive_errors += 1
+                logger.error(f"Dedup worker error ({self._consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
                 async with self._stats_lock:
                     self._stats["errors"] += 1
 
-                if consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
+                if self._consecutive_errors >= max_consecutive_errors and not self._stopped_due_to_errors:
                     logger.warning(
-                        f"Dedup worker in degraded state after {consecutive_errors} errors. "
-                        "Will keep retrying with backoff."
+                        f"Dedup worker in error state after {self._consecutive_errors} errors. "
+                        "Retrying every 300s. Use the System page to resume."
                     )
                     self._stopped_due_to_errors = True
                     from services.worker_status import write_state
                     await write_state("dedup", running=True, stopped_due_to_errors=True)
 
-                # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
-                backoff = min(300.0, 10.0 * (2 ** (consecutive_errors - 1)))
-                logger.info(f"Backing off for {backoff:.0f}s before retry")
-                await asyncio.sleep(backoff)
+                if self._stopped_due_to_errors:
+                    await asyncio.sleep(300.0)
+                else:
+                    # Exponential backoff: 10s, 20s, 40s, ... capped at 300s
+                    backoff = min(300.0, 10.0 * (2 ** (self._consecutive_errors - 1)))
+                    logger.info(f"Backing off for {backoff:.0f}s before retry")
+                    await asyncio.sleep(backoff)
 
         logger.info("Dedup worker loop ended")
 

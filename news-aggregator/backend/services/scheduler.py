@@ -44,12 +44,40 @@ CHANNEL_FETCH_TIMEOUTS = {
     "html": 120,  # 2 min - may need JS rendering
     "pdf": 120,  # 2 min - large file downloads
     "rss": 180,  # 3 min - heavy feeds (FAZ, RKI) need time for article extraction
-    "bluesky": 60,
-    "mastodon": 60,
-    "telegram": 60,
-    "google_alerts": 60,
+    "bluesky": 20,  # Simple HTTP/RSS fetch
+    "mastodon": 20,  # Simple HTTP/RSS fetch
+    "telegram": 20,  # Simple HTTP scrape
+    "google_alerts": 30,
 }
 DEFAULT_FETCH_TIMEOUT = 120  # 2 min default
+
+# Circuit breaker: skip channels that fail repeatedly.
+# Tracks channel_id → consecutive failure count (in-memory, resets on restart).
+# After N failures, channel is skipped for exponentially increasing cycles.
+_channel_failures: dict[int, int] = {}
+CIRCUIT_BREAKER_THRESHOLD = 3  # failures before backing off
+CIRCUIT_BREAKER_MAX_SKIP = 30  # max cycles to skip (roughly 30 min at 1-min interval)
+
+
+def _should_skip_channel(channel_id: int) -> bool:
+    """Check if channel should be skipped due to circuit breaker."""
+    failures = _channel_failures.get(channel_id, 0)
+    if failures < CIRCUIT_BREAKER_THRESHOLD:
+        return False
+    # Skip for 2^(failures - threshold) cycles, capped at max
+    skip_cycles = min(2 ** (failures - CIRCUIT_BREAKER_THRESHOLD), CIRCUIT_BREAKER_MAX_SKIP)
+    # Use modulo to allow periodic retries
+    return (failures - CIRCUIT_BREAKER_THRESHOLD) % skip_cycles != 0
+
+
+def _record_channel_success(channel_id: int) -> None:
+    """Reset circuit breaker on successful fetch."""
+    _channel_failures.pop(channel_id, None)
+
+
+def _record_channel_failure(channel_id: int) -> None:
+    """Increment failure count for circuit breaker."""
+    _channel_failures[channel_id] = _channel_failures.get(channel_id, 0) + 1
 
 # Connector types that use proxy reservation
 PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
@@ -376,6 +404,14 @@ async def _fetch_source_type_group(
 
     async def fetch_with_limit(channel: Channel) -> None:
         nonlocal fetched, errors, timeouts
+        # Circuit breaker: skip channels that keep failing
+        if _should_skip_channel(channel.id):
+            failures = _channel_failures.get(channel.id, 0)
+            logger.debug(
+                f"Skipping channel {channel.id} ({channel.source.name}/{channel.connector_type}) "
+                f"— circuit breaker active ({failures} consecutive failures)"
+            )
+            return
         async with semaphore:
             try:
                 # Wrap in timeout to prevent indefinite hangs
@@ -383,17 +419,21 @@ async def _fetch_source_type_group(
                     fetch_channel(channel.id, training_mode=training_mode),
                     timeout=timeout,
                 )
+                _record_channel_success(channel.id)
                 async with results_lock:
                     fetched += 1
             except asyncio.TimeoutError:
+                _record_channel_failure(channel.id)
+                failures = _channel_failures.get(channel.id, 0)
                 logger.error(
                     f"Channel {channel.id} ({channel.source.name}/{channel.connector_type}) "
-                    f"timed out after {timeout}s"
+                    f"timed out after {timeout}s (failure #{failures})"
                 )
                 async with results_lock:
                     timeouts += 1
                     errors += 1
             except Exception as e:
+                _record_channel_failure(channel.id)
                 logger.error(
                     f"Error fetching channel {channel.id} "
                     f"({channel.source.name}/{channel.connector_type}): {e}"
