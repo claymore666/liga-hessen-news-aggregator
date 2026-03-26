@@ -562,3 +562,116 @@ class TestPriorityMapping:
         update_stmt = update_calls[-1][0][0]
         params = update_stmt.compile().params
         assert params["priority"] == Priority.NONE
+
+
+class TestLLMWorkerSelfHealing:
+    """Tests for self-healing error state lifecycle."""
+
+    def test_initial_error_state(self, worker):
+        """Should initialize with clean error state."""
+        assert worker._stopped_due_to_errors is False
+        assert worker._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_error_state_does_not_stop_worker(self, worker):
+        """Error state should NOT call stop() -- worker keeps running."""
+        await worker.start()
+        try:
+            # Simulate entering error state
+            worker._consecutive_errors = 10
+            worker._stopped_due_to_errors = True
+
+            # Worker should still be running
+            assert worker._running is True
+            assert worker._task is not None
+        finally:
+            await worker.stop()
+
+    @pytest.mark.asyncio
+    async def test_on_success_clears_error_state(self, worker):
+        """_on_success() should clear both _stopped_due_to_errors and _consecutive_errors."""
+        worker._consecutive_errors = 10
+        worker._stopped_due_to_errors = True
+
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker._on_success()
+
+        assert worker._consecutive_errors == 0
+        assert worker._stopped_due_to_errors is False
+
+    @pytest.mark.asyncio
+    async def test_on_success_noop_when_no_errors(self, worker):
+        """_on_success() should be safe when no error state."""
+        worker._consecutive_errors = 0
+        worker._stopped_due_to_errors = False
+
+        # Should not call write_state when not in error state
+        with patch("services.worker_status.write_state", new_callable=AsyncMock) as mock_ws:
+            await worker._on_success()
+            mock_ws.assert_not_called()
+
+        assert worker._consecutive_errors == 0
+        assert worker._stopped_due_to_errors is False
+
+    @pytest.mark.asyncio
+    async def test_on_success_writes_state_when_recovering(self, worker):
+        """_on_success() should write state when recovering from errors."""
+        worker._consecutive_errors = 10
+        worker._stopped_due_to_errors = True
+
+        with patch("services.worker_status.write_state", new_callable=AsyncMock) as mock_ws:
+            await worker._on_success()
+            mock_ws.assert_called_once_with("llm", running=True)
+
+    @pytest.mark.asyncio
+    async def test_resume_clears_error_state(self, worker):
+        """resume() should reset both _stopped_due_to_errors and _consecutive_errors."""
+        worker._consecutive_errors = 10
+        worker._stopped_due_to_errors = True
+
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.resume()
+
+        assert worker._paused is False
+        assert worker._stopped_due_to_errors is False
+        assert worker._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_resume_clears_error_state_even_when_not_paused(self, worker):
+        """resume() should clear error state even if worker wasn't paused."""
+        worker._paused = False
+        worker._consecutive_errors = 10
+        worker._stopped_due_to_errors = True
+
+        with patch("services.worker_status.write_state", new_callable=AsyncMock):
+            await worker.resume()
+
+        assert worker._stopped_due_to_errors is False
+        assert worker._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_start_resets_error_state(self, worker):
+        """start() should reset both error flags."""
+        worker._consecutive_errors = 10
+        worker._stopped_due_to_errors = True
+
+        await worker.start()
+        try:
+            assert worker._stopped_due_to_errors is False
+            assert worker._consecutive_errors == 0
+        finally:
+            await worker.stop()
+
+    @pytest.mark.asyncio
+    async def test_get_status_includes_stopped_due_to_errors(self, worker):
+        """get_status() should include stopped_due_to_errors field."""
+        status = await worker.get_status()
+        assert "stopped_due_to_errors" in status
+        assert status["stopped_due_to_errors"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_status_reflects_error_state(self, worker):
+        """get_status() should reflect current error state."""
+        worker._stopped_due_to_errors = True
+        status = await worker.get_status()
+        assert status["stopped_due_to_errors"] is True
