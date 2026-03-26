@@ -66,9 +66,9 @@ class BriefingEmail:
 
     def _format_item_text(self, item: Item) -> str:
         """Format a single item for plain text email."""
-        lines = [f"• {item.title}"]
+        lines = [f"• {item.title or ''}"]
         if item.source:
-            lines.append(f"  Quelle: {item.source.name}")
+            lines.append(f"  Quelle: {item.source.name or ''}")
         if self.config.include_summary and item.summary:
             lines.append(f"  {item.summary}")
         if item.url:

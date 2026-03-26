@@ -584,4 +584,5 @@ async def trigger_fetch_all_sources(training_mode: bool = False) -> dict:
         result = await fetch_all_channels(training_mode=training_mode)
         return {"status": "completed", **result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to fetch all channels: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fetch failed. See server logs.")

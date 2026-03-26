@@ -751,17 +751,12 @@ async def cleanup_old_items() -> dict:
 
             if ids_to_delete:
                 all_ids_to_delete.extend(ids_to_delete)
-                stmt = delete(Item).where(Item.id.in_(ids_to_delete))
-                await db.execute(stmt)
-                count = len(ids_to_delete)
-                by_priority[priority.value] = count
-                total_deleted += count
-                logger.info(
-                    f"Deleted {count} {priority.value} priority items "
-                    f"older than {retention_days} days"
-                )
+                by_priority[priority.value] = len(ids_to_delete)
 
-        # Clean up vector indexes
+        # Clean up vector indexes BEFORE deleting from DB to avoid orphaned entries.
+        # If vector store delete fails, items remain in both stores (consistent).
+        # If vector store succeeds but DB delete fails, items are just missing from
+        # vector store but still in DB (less harmful — they won't be found as duplicates).
         if all_ids_to_delete:
             try:
                 from services.relevance_filter import create_relevance_filter
@@ -774,7 +769,33 @@ async def cleanup_old_items() -> dict:
                         f"{deleted_dup} from duplicate index"
                     )
             except Exception as e:
-                logger.warning(f"Failed to clean up vector indexes: {e}")
+                logger.error(f"Failed to clean up vector indexes: {e}")
+
+        # Now delete from PostgreSQL
+        for priority, days_key in [
+            (Priority.HIGH, "retention_days_high"),
+            (Priority.MEDIUM, "retention_days_medium"),
+            (Priority.LOW, "retention_days_low"),
+            (Priority.NONE, "retention_days_none"),
+        ]:
+            count = by_priority.get(priority.value, 0)
+            if count == 0:
+                continue
+            retention_days = config.get(days_key, 30)
+            cutoff = now - timedelta(days=retention_days)
+            conditions = [
+                Item.priority == priority,
+                Item.fetched_at < cutoff,
+            ]
+            if exclude_starred:
+                conditions.append(Item.is_starred == False)  # noqa: E712
+            stmt = delete(Item).where(and_(*conditions))
+            await db.execute(stmt)
+            total_deleted += count
+            logger.info(
+                f"Deleted {count} {priority.value} priority items "
+                f"older than {retention_days} days"
+            )
 
         await db.commit()
 

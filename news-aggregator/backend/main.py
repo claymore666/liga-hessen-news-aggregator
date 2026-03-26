@@ -1,12 +1,16 @@
 """Main FastAPI application entry point."""
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+import traceback
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Configure logging
 logging.basicConfig(
@@ -338,7 +342,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _write_msmtp_config()
 
     # Startup - all workers init DB, only leader runs migrations + seed
-    await init_db()
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            await init_db()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logging.error(
+                    f"Database initialization failed after {max_retries} attempts, giving up"
+                )
+                raise
+            backoff = 2 ** attempt
+            logging.warning(
+                f"Database unavailable (attempt {attempt}/{max_retries}), "
+                f"retrying in {backoff}s: {e}"
+            )
+            await asyncio.sleep(backoff)
     if is_leader:
         await run_migrations()
         await _seed_llm_model_configs()
@@ -494,6 +514,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch unhandled exceptions and return a generic error response.
+
+    Prevents internal stack traces and exception details from leaking to clients.
+    The full error is logged server-side for debugging.
+    """
+    logging.error(
+        "Unhandled exception on %s %s: %s\n%s",
+        request.method,
+        request.url.path,
+        exc,
+        traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 @app.get("/health")

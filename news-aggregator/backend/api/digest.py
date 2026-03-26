@@ -1,8 +1,11 @@
 """Digest API endpoints for generating, previewing, and sending daily digests."""
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
@@ -64,7 +67,8 @@ async def generate_digest_endpoint(
     try:
         digest_id = await generate_digest(db)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to generate digest: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Digest generation failed")
 
     digest = await db.get(Digest, digest_id)
     if not digest:
@@ -89,7 +93,8 @@ async def send_digest_endpoint(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to send digest {digest_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Digest sending failed")
 
     digest = await db.get(Digest, digest_id)
     return {

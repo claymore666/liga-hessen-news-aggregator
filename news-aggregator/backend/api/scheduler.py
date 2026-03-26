@@ -56,8 +56,8 @@ async def start_scheduler_endpoint() -> dict[str, str]:
         start_scheduler()
         return {"status": "started", "message": "Scheduler started successfully"}
     except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {e}")
+        logger.error(f"Failed to start scheduler: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to start scheduler")
 
 
 @router.post("/scheduler/stop", dependencies=[Depends(require_admin_key)])
@@ -70,8 +70,8 @@ async def stop_scheduler_endpoint() -> dict[str, str]:
         stop_scheduler()
         return {"status": "stopped", "message": "Scheduler stopped successfully"}
     except Exception as e:
-        logger.error(f"Failed to stop scheduler: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to stop scheduler: {e}")
+        logger.error(f"Failed to stop scheduler: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to stop scheduler")
 
 
 @router.put("/scheduler/interval", response_model=IntervalUpdateResponse, dependencies=[Depends(require_admin_key)])
@@ -102,5 +102,5 @@ async def update_fetch_interval(request: IntervalUpdateRequest) -> IntervalUpdat
             message=f"Fetch interval updated to {request.minutes} minutes",
         )
     except Exception as e:
-        logger.error(f"Failed to update interval: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update interval: {e}")
+        logger.error(f"Failed to update interval: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update interval")

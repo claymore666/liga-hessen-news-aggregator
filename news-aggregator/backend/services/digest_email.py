@@ -33,10 +33,10 @@ def _format_date_de(d: date | datetime) -> str:
 def render_digest_html(content: dict[str, Any], digest_date: date, total_items: int) -> str:
     """Render digest content to HTML email."""
     date_str = _format_date_de(digest_date)
-    editorial = escape(content.get("editorial_intro", ""))
-    urgent = content.get("urgent", [])
-    top_stories = content.get("top_stories", [])
-    further = content.get("further_news", [])
+    editorial = escape(content.get("editorial_intro") or "")
+    urgent = content.get("urgent") or []
+    top_stories = content.get("top_stories") or []
+    further = content.get("further_news") or []
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
@@ -81,11 +81,11 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 <div class="section-title" style="background: {URGENT_RED}15; color: {URGENT_RED};">🔴 DRINGEND</div>
 """
         for entry in urgent:
-            headline = escape(entry.get("headline", ""))
-            context = escape(entry.get("context", ""))
-            url = entry.get("url", "")
-            source = escape(entry.get("source", ""))
-            aks = ", ".join(entry.get("assigned_aks", []))
+            headline = escape(entry.get("headline") or "")
+            context = escape(entry.get("context") or "")
+            url = entry.get("url") or ""
+            source = escape(entry.get("source") or "")
+            aks = ", ".join(entry.get("assigned_aks") or [])
             link = f'<a href="{escape(url)}">{headline}</a>' if url else headline
             html += f"""<div class="item">
   <h3>{link}</h3>
@@ -101,11 +101,11 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 <div class="section-title" style="background: {TOP_AMBER}15; color: {TOP_AMBER};">📌 WICHTIGSTE ENTWICKLUNGEN</div>
 """
         for entry in top_stories:
-            headline = escape(entry.get("headline", ""))
-            context = escape(entry.get("context", ""))
-            url = entry.get("url", "")
-            source = escape(entry.get("source", ""))
-            aks = ", ".join(entry.get("assigned_aks", []))
+            headline = escape(entry.get("headline") or "")
+            context = escape(entry.get("context") or "")
+            url = entry.get("url") or ""
+            source = escape(entry.get("source") or "")
+            aks = ", ".join(entry.get("assigned_aks") or [])
             link = f'<a href="{escape(url)}">{headline}</a>' if url else headline
             html += f"""<div class="item">
   <h3>{link}</h3>
@@ -121,8 +121,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 <div class="section-title" style="background: {FURTHER_GRAY}15; color: {FURTHER_GRAY};">📰 WEITERE MELDUNGEN</div>
 """
         for entry in further:
-            headline = escape(entry.get("headline", ""))
-            url = entry.get("url", "")
+            headline = escape(entry.get("headline") or "")
+            url = entry.get("url") or ""
             link = f'<a href="{escape(url)}">{headline}</a>' if url else headline
             html += f'<div class="bullet">• {link}</div>\n'
         html += "</div>\n"
@@ -157,17 +157,17 @@ def render_digest_text(content: dict[str, Any], digest_date: date, total_items: 
         "",
     ]
 
-    editorial = content.get("editorial_intro", "")
+    editorial = content.get("editorial_intro") or ""
     if editorial:
         lines.append(editorial)
         lines.append("")
 
-    urgent = content.get("urgent", [])
+    urgent = content.get("urgent") or []
     if urgent:
         lines.append("🔴 DRINGEND")
         lines.append("-" * 40)
         for entry in urgent:
-            lines.append(f"  • {entry.get('headline', '')}")
+            lines.append(f"  • {entry.get('headline') or ''}")
             if entry.get("context"):
                 lines.append(f"    {entry['context']}")
             meta_parts = []
@@ -179,12 +179,12 @@ def render_digest_text(content: dict[str, Any], digest_date: date, total_items: 
                 lines.append(f"    {' | '.join(meta_parts)}")
             lines.append("")
 
-    top_stories = content.get("top_stories", [])
+    top_stories = content.get("top_stories") or []
     if top_stories:
         lines.append("📌 WICHTIGSTE ENTWICKLUNGEN")
         lines.append("-" * 40)
         for entry in top_stories:
-            lines.append(f"  • {entry.get('headline', '')}")
+            lines.append(f"  • {entry.get('headline') or ''}")
             if entry.get("context"):
                 lines.append(f"    {entry['context']}")
             meta_parts = []
@@ -196,13 +196,13 @@ def render_digest_text(content: dict[str, Any], digest_date: date, total_items: 
                 lines.append(f"    {' | '.join(meta_parts)}")
             lines.append("")
 
-    further = content.get("further_news", [])
+    further = content.get("further_news") or []
     if further:
         lines.append("📰 WEITERE MELDUNGEN")
         lines.append("-" * 40)
         for entry in further:
-            headline = entry.get("headline", "")
-            url = entry.get("url", "")
+            headline = entry.get("headline") or ""
+            url = entry.get("url") or ""
             lines.append(f"  • {headline}")
             if url:
                 lines.append(f"    {url}")

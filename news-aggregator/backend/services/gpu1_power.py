@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from database import utcnow
@@ -183,7 +184,7 @@ class GPU1PowerManager:
         if await self._get_force_active():
             return True
 
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("Europe/Berlin"))
         current_hour = now.hour
 
         # Check weekday restriction (Monday=0, Sunday=6)
@@ -327,7 +328,7 @@ class GPU1PowerManager:
 
         # Check if we're allowed to wake it (active hours)
         if not await self.is_within_active_hours():
-            now = datetime.now()
+            now = datetime.now(ZoneInfo("Europe/Berlin"))
             day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
             weekday_str = f" ({day_names[now.weekday()]})" if self.active_weekdays_only else ""
             weekday_restriction = " Mon-Fri" if self.active_weekdays_only else ""

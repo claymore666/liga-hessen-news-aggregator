@@ -1,5 +1,6 @@
 """LLM-based item processor for summarization and analysis."""
 
+import asyncio
 import json
 import logging
 import re
@@ -10,6 +11,11 @@ from models import Item, Priority, Rule, RuleType
 from .llm import LLMResponse, LLMService
 
 logger = logging.getLogger(__name__)
+
+# Per-call timeout for individual LLM requests (seconds).
+# Prevents a single hung Ollama call from blocking the worker for the entire
+# channel-level timeout (120-300s).  See GitHub issue #176.
+LLM_CALL_TIMEOUT = 120
 
 # System prompt for news analysis (used with base models, not fine-tuned)
 ANALYSIS_SYSTEM_PROMPT = """Du bist ein Sozialpolitik-Experte und klassifizierst Nachrichtenartikel für die Liga der Freien Wohlfahrtspflege Hessen.
@@ -261,10 +267,13 @@ Antworte NUR mit JSON:
 {{"is_duplicate": true/false, "reasoning": "Kurze Begründung"}}"""
 
         try:
-            response = await self.llm.complete(
-                prompt,
-                temperature=0.1,
-                max_tokens=200,
+            response = await asyncio.wait_for(
+                self.llm.complete(
+                    prompt,
+                    temperature=0.1,
+                    max_tokens=200,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             text = response.text.strip()
             logger.debug(f"Duplicate confirmation raw response: {repr(text[:500])}")
@@ -287,6 +296,9 @@ Antworte NUR mit JSON:
             reasoning = result.get("reasoning", "Keine Begründung")
             return is_dup, reasoning
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Duplicate confirmation timed out after {LLM_CALL_TIMEOUT}s")
+            return False, f"LLM-Timeout nach {LLM_CALL_TIMEOUT}s"
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse duplicate confirmation response: {e}, text: {text[:100]}")
             # Default to not duplicate if parsing fails
@@ -313,8 +325,14 @@ INHALT: {item.content[:6000]}
 Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
 
         try:
-            response = await self.llm.complete(prompt, temperature=0.3, max_tokens=200)
+            response = await asyncio.wait_for(
+                self.llm.complete(prompt, temperature=0.3, max_tokens=200),
+                timeout=LLM_CALL_TIMEOUT,
+            )
             return response.text.strip()
+        except asyncio.TimeoutError:
+            logger.warning(f"Summarization timed out after {LLM_CALL_TIMEOUT}s")
+            return None
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return None
@@ -355,14 +373,20 @@ Datum: {date_str}"""
 
         try:
             # Use system prompt for base models (Option B approach)
-            response = await self.llm.complete(
-                prompt,
-                system=self._system_prompt,
-                temperature=0.1,
-                max_tokens=6000,  # Sufficient headroom for full JSON response
+            response = await asyncio.wait_for(
+                self.llm.complete(
+                    prompt,
+                    system=self._system_prompt,
+                    temperature=0.1,
+                    max_tokens=6000,  # Sufficient headroom for full JSON response
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             return self._parse_analysis_response(response)
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Analysis timed out after {LLM_CALL_TIMEOUT}s")
+            return self._default_analysis()
         except Exception as e:
             logger.error(f"Analysis failed: {e}")
             raise
@@ -391,14 +415,20 @@ Quelle: {source_name}
 Datum: {date_str}"""
 
         try:
-            response = await self.llm.complete(
-                prompt,
-                system=self._system_prompt,
-                temperature=0.1,
-                max_tokens=6000,
+            response = await asyncio.wait_for(
+                self.llm.complete(
+                    prompt,
+                    system=self._system_prompt,
+                    temperature=0.1,
+                    max_tokens=6000,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             return self._parse_analysis_response(response)
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Analysis from data timed out after {LLM_CALL_TIMEOUT}s")
+            return self._default_analysis()
         except Exception as e:
             logger.error(f"Analysis from data failed: {e}")
             raise
@@ -429,17 +459,23 @@ Datum: {date_str}"""
         ]
 
         try:
-            response = await self.llm.complete(
-                prompt,
-                system=self._system_prompt,
-                temperature=0.1,
-                max_tokens=6000,
+            response = await asyncio.wait_for(
+                self.llm.complete(
+                    prompt,
+                    system=self._system_prompt,
+                    temperature=0.1,
+                    max_tokens=6000,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             analysis = self._parse_analysis_response(response)
             # Build full conversation for follow-up
             conversation = messages + [{"role": "assistant", "content": response.text}]
             return analysis, conversation
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Analysis from data (with messages) timed out after {LLM_CALL_TIMEOUT}s")
+            return self._default_analysis(), messages
         except Exception as e:
             logger.error(f"Analysis from data (with messages) failed: {e}")
             raise
@@ -468,14 +504,20 @@ FRAGE: {rule.pattern}
 Antworte NUR mit JA oder NEIN."""
 
         try:
-            response = await self.llm.complete(
-                prompt,
-                temperature=0.1,
-                max_tokens=10,
+            response = await asyncio.wait_for(
+                self.llm.complete(
+                    prompt,
+                    temperature=0.1,
+                    max_tokens=10,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             answer = response.text.strip().upper()
             return answer.startswith("JA") or answer == "YES"
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Semantic rule check timed out after {LLM_CALL_TIMEOUT}s")
+            return False
         except Exception as e:
             logger.error(f"Semantic rule check failed: {e}")
             return False
@@ -559,10 +601,13 @@ Antworte NUR mit JA oder NEIN."""
         messages = conversation_messages + [follow_up]
 
         try:
-            response = await self.llm.chat(
-                messages=messages,
-                temperature=0.2,
-                max_tokens=1024,
+            response = await asyncio.wait_for(
+                self.llm.chat(
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=1024,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             text = response.text.strip()
 
@@ -588,6 +633,9 @@ Antworte NUR mit JA oder NEIN."""
 
             return topic, suggestion
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Topic extraction timed out after {LLM_CALL_TIMEOUT}s")
+            return SONSTIGES, None
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse topic extraction response: {e}")
             return SONSTIGES, None

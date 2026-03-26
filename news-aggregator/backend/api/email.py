@@ -1,8 +1,11 @@
 """Email API endpoints."""
 
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 
 from api.auth import require_admin_key
 from pydantic import BaseModel, EmailStr
@@ -187,13 +190,17 @@ async def test_email(recipient: EmailStr):
         )
 
         if process.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Sendmail Fehler: {process.stderr}")
+            logger.error(f"Sendmail failed with return code {process.returncode}: {process.stderr}")
+            raise HTTPException(status_code=500, detail="Sendmail Fehler")
 
         return {"success": True, "message": f"Test-E-Mail an {recipient} gesendet"}
 
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Sendmail Timeout")
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="Sendmail nicht gefunden - läuft in Docker?")
+        raise HTTPException(status_code=500, detail="Sendmail nicht gefunden")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to send test email: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="E-Mail-Versand fehlgeschlagen")

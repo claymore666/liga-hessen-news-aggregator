@@ -121,7 +121,7 @@ def build_llm_prompt(items: list[Item], covered_ids: set[int]) -> str:
         source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
         priority_val = item.priority.value if hasattr(item.priority, "value") else str(item.priority)
         summary = (item.summary or "")[:150]
-        line = f"[{i}] {item.title} | {source_name} | {priority_val}"
+        line = f"[{i}] {item.title or 'Ohne Titel'} | {source_name} | {priority_val}"
         if summary:
             line += f"\n    {summary}"
         if item.id in covered_ids:
@@ -286,7 +286,7 @@ async def generate_digest(db) -> int:
                 entry["source"] = (
                     ref_to_item[ref].channel.source.name
                     if ref_to_item[ref].channel and ref_to_item[ref].channel.source
-                    else None
+                    else ""
                 )
                 entry["assigned_aks"] = ref_to_item[ref].assigned_aks or []
 

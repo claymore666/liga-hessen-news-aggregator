@@ -5,6 +5,7 @@ Redis is unavailable, allowing callers to fall back to PostgreSQL.
 """
 
 import logging
+import time
 
 import redis.asyncio as aioredis
 
@@ -14,18 +15,23 @@ logger = logging.getLogger(__name__)
 
 _redis: aioredis.Redis | None = None
 _available: bool | None = None  # None = not yet tested
+_last_retry_at: float = 0.0  # monotonic timestamp of last failed attempt
+_RETRY_INTERVAL: float = 60.0  # seconds between retry attempts
 
 
 async def get_redis() -> aioredis.Redis | None:
     """Get the shared Redis client, or None if unavailable.
 
-    Lazy-initializes on first call. Returns None (without retrying)
-    if the initial connection fails — call init_redis() to retry.
+    Lazy-initializes on first call. If the connection failed previously,
+    retries every 60 seconds so that Redis can recover without a restart.
     """
     global _redis, _available
 
     if _available is False:
-        return None
+        # Periodically retry instead of giving up forever
+        if time.monotonic() - _last_retry_at >= _RETRY_INTERVAL:
+            await init_redis()
+        return _redis
 
     if _redis is not None:
         return _redis
@@ -37,7 +43,7 @@ async def get_redis() -> aioredis.Redis | None:
 
 async def init_redis() -> None:
     """Initialize (or re-initialize) the Redis connection."""
-    global _redis, _available
+    global _redis, _available, _last_retry_at
 
     try:
         client = aioredis.from_url(
@@ -53,6 +59,7 @@ async def init_redis() -> None:
     except Exception as e:
         _redis = None
         _available = False
+        _last_retry_at = time.monotonic()
         logger.warning("Redis unavailable, using PostgreSQL fallback: %s", e)
 
 

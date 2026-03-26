@@ -65,8 +65,30 @@ class BrowserPool:
             if self._shutting_down:
                 raise RuntimeError("Browser pool is shutting down")
 
+            # If we're in cooldown after consecutive restart failures, check
+            # whether the cooldown has expired. If it has, reset the counter
+            # so the initialization attempt can proceed. If it hasn't, raise
+            # rather than returning None or retrying too aggressively.
+            if self._consecutive_restart_failures >= self.MAX_RESTART_FAILURES:
+                elapsed = time.monotonic() - self._last_restart_attempt
+                if elapsed < self.RESTART_COOLDOWN:
+                    raise RuntimeError(
+                        f"Browser pool in cooldown after {self._consecutive_restart_failures} "
+                        f"restart failures ({self.RESTART_COOLDOWN - elapsed:.0f}s remaining)"
+                    )
+                logger.info(
+                    "Cooldown expired after %d consecutive failures, attempting reinitialization",
+                    self._consecutive_restart_failures,
+                )
+                self._consecutive_restart_failures = 0
+
             logger.info("Initializing shared Playwright instance...")
-            self._playwright = await async_playwright().start()
+            try:
+                self._playwright = await async_playwright().start()
+            except Exception:
+                self._consecutive_restart_failures += 1
+                self._last_restart_attempt = time.monotonic()
+                raise
             self._initialized = True
             self._generation += 1
             self._error_count = 0
@@ -185,14 +207,15 @@ class BrowserPool:
                 self._error_count,
             )
 
+            # Save old reference so we can clean up properly on failure
+            old_playwright = self._playwright
+
             # Stop existing driver
-            if self._playwright:
+            if old_playwright:
                 try:
-                    await self._playwright.stop()
+                    await old_playwright.stop()
                 except Exception as e:
                     logger.debug("Error stopping Playwright during restart: %s", e)
-                self._playwright = None
-                self._initialized = False
 
             # Reinitialize
             try:
@@ -206,7 +229,15 @@ class BrowserPool:
                     self._generation,
                 )
             except Exception as e:
+                self._playwright = None
+                self._initialized = False
                 self._consecutive_restart_failures += 1
+                # If the old process wasn't stopped cleanly, try once more
+                if old_playwright:
+                    try:
+                        await old_playwright.stop()
+                    except Exception:
+                        pass
                 logger.error(
                     "Failed to restart Playwright driver (attempt %d/%d): %s",
                     self._consecutive_restart_failures,
