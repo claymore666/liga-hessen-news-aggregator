@@ -86,6 +86,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: liga-news-backend
+    init: true  # tini reaps zombie healthcheck processes (gunicorn doesn't wait() orphans)
     restart: unless-stopped
     mem_limit: 2g
     ulimits:
@@ -196,6 +197,7 @@ services:
       context: ../relevance-tuner/services/classifier-api
       dockerfile: Dockerfile
     container_name: liga-classifier
+    init: true  # tini reaps zombie healthcheck processes (uvicorn doesn't wait() orphans)
     restart: unless-stopped
     mem_limit: 512m
     environment:

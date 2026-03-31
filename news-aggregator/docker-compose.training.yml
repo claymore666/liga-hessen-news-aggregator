@@ -16,6 +16,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: liga-news-backend-training
+    init: true  # tini reaps zombie healthcheck processes
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+asyncpg://liga:training@training-db:5432/liga_training
