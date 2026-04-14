@@ -495,11 +495,11 @@ class GPU1PowerManager:
 
     async def shutdown_if_idle(self) -> bool:
         """
-        Shutdown gpu1 if we woke it and it's been idle.
+        Shutdown gpu1 if it's been idle.
 
         Only shuts down if:
         - auto_shutdown is enabled
-        - We woke gpu1 (was_sleeping is True)
+        - gpu1 is reachable (we adopt it on first check if we didn't wake it)
         - Idle time exceeds idle_timeout
         - No other users are logged in (only ligahessen or no users)
 
@@ -509,7 +509,18 @@ class GPU1PowerManager:
         if not self.auto_shutdown:
             return False
 
+        # Adopt orphaned gpu1 instances (e.g., after unattended-upgrades reboot
+        # at off-hours). Start a fresh idle clock so a freshly-up gpu1 isn't
+        # killed before it has a chance to receive work.
         if not self._was_sleeping:
+            if not await self.is_available():
+                return False
+            self._was_sleeping = True
+            self._last_activity = time.time()
+            logger.info(
+                f"Adopted orphaned gpu1 instance, will shutdown after "
+                f"{self.idle_timeout}s idle if no users present"
+            )
             return False
 
         idle_time = self.get_idle_time()

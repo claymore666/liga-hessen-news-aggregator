@@ -122,6 +122,101 @@ class TestGPU1Timezone:
 
 
 # ---------------------------------------------------------------------------
+# Orphan adoption — shutdown_if_idle() handles gpu1 instances we didn't wake
+# (e.g., unattended-upgrades reboot at off-hours leaves gpu1 running)
+# ---------------------------------------------------------------------------
+
+class TestGPU1OrphanAdoption:
+    """shutdown_if_idle() must adopt orphaned gpu1 instances and shut them down."""
+
+    def _make_manager(self, idle_timeout=60):
+        from services.gpu1_power import GPU1PowerManager
+
+        return GPU1PowerManager(
+            mac_address="00:11:22:33:44:55",
+            ollama_url="http://gpu1:11434",
+            auto_shutdown=True,
+            idle_timeout=idle_timeout,
+        )
+
+    @pytest.mark.asyncio
+    async def test_adopts_reachable_orphan(self):
+        """First call adopts a reachable orphan — sets _was_sleeping, fresh idle clock."""
+        mgr = self._make_manager()
+        mgr.is_available = AsyncMock(return_value=True)
+
+        result = await mgr.shutdown_if_idle()
+
+        assert result is False  # Don't shutdown immediately on adoption
+        assert mgr._was_sleeping is True
+        assert mgr._last_activity is not None
+        assert mgr.get_idle_time() < 1.0  # Just adopted, no idle time yet
+
+    @pytest.mark.asyncio
+    async def test_does_not_adopt_unreachable_orphan(self):
+        """If gpu1 is down, no adoption — nothing to shutdown."""
+        mgr = self._make_manager()
+        mgr.is_available = AsyncMock(return_value=False)
+
+        result = await mgr.shutdown_if_idle()
+
+        assert result is False
+        assert mgr._was_sleeping is False  # Not adopted
+
+    @pytest.mark.asyncio
+    async def test_adopted_gpu1_shuts_down_after_idle_timeout(self):
+        """After adoption + idle_timeout passes, shutdown should fire."""
+        mgr = self._make_manager(idle_timeout=60)
+
+        # First call — adopts
+        mgr.is_available = AsyncMock(return_value=True)
+        await mgr.shutdown_if_idle()
+        assert mgr._was_sleeping is True
+
+        # Backdate last_activity to simulate idle period elapsed
+        mgr._last_activity = time.time() - 120
+        mgr.has_other_users = AsyncMock(return_value=False)
+        mgr.shutdown = AsyncMock(return_value=True)
+        mgr.clear_force_active = AsyncMock()
+
+        result = await mgr.shutdown_if_idle()
+
+        assert result is True
+        mgr.shutdown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_other_users_block_shutdown_after_adoption(self):
+        """A logged-in user (kamienc on console) must block shutdown."""
+        mgr = self._make_manager(idle_timeout=60)
+
+        # Adopt
+        mgr.is_available = AsyncMock(return_value=True)
+        await mgr.shutdown_if_idle()
+
+        # Idle elapsed, but a user is logged in
+        mgr._last_activity = time.time() - 120
+        mgr.has_other_users = AsyncMock(return_value=True)
+        mgr.shutdown = AsyncMock(return_value=True)
+
+        result = await mgr.shutdown_if_idle()
+
+        assert result is False
+        mgr.shutdown.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_shutdown_disabled_skips_adoption(self):
+        """If auto_shutdown is off, shutdown_if_idle short-circuits before adoption."""
+        mgr = self._make_manager()
+        mgr.auto_shutdown = False
+        mgr.is_available = AsyncMock(return_value=True)
+
+        result = await mgr.shutdown_if_idle()
+
+        assert result is False
+        assert mgr._was_sleeping is False
+
+
+# ---------------------------------------------------------------------------
 # #173 — Redis retry after 60s when _available=False
 # ---------------------------------------------------------------------------
 
