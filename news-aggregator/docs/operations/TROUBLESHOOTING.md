@@ -150,10 +150,29 @@ curl http://localhost:8000/api/admin/stats | jq '.llm_worker'
 
 2. **Ollama proxy not reachable**
    ```
-   Connection refused
+   Connection refused / TimeoutError after 120s
    ```
-   The backend connects to the Ollama proxy at `http://172.17.0.1:11434` (Docker
-   host network). Check the proxy is running on docker-ai.
+   The backend connects to the Ollama proxy backplane at
+   `http://ollamaproxy:11434` over the shared `ollamaproxy_default` Docker
+   network. Check the proxy is running on docker-ai:
+   ```bash
+   docker ps --filter name=ollamaproxy
+   docker exec liga-news-backend python3 -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('ollamaproxy',11434)); print('ok')"
+   ```
+
+   **Gotcha — silent timeouts after a network topology change.**
+   The backend is dual-homed (`lan-shared` macvlan + `news-aggregator_default`
+   bridge) and its default route lives on the macvlan. That means traffic to
+   any docker-internal subnet the container is **not** explicitly attached to
+   leaks out through the LAN router and is dropped — you get 5s/120s timeouts
+   with no useful error. If the proxy is healthy but the backend can't reach
+   it, check that `backend` is still attached to `ollamaproxy_default`:
+   ```bash
+   docker inspect liga-news-backend --format '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}} {{end}}'
+   # expect: lan-shared news-aggregator_default ollamaproxy_default
+   ```
+   If the network is missing, recreate the backend with
+   `docker compose -f docker-compose.prod.yml up -d backend`.
 
 3. **Rate limiting (429)**
    ```

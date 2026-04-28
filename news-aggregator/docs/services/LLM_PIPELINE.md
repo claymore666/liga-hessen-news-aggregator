@@ -129,9 +129,15 @@ item.needs_llm_processing = False
 ### Environment Variables
 
 ```bash
-OLLAMA_BASE_URL=http://172.17.0.1:11434  # Ollama proxy on docker-ai
-OLLAMA_MODEL=gpt-oss-120b                # Routed to Cerebras/Groq via proxy
+OLLAMA_BASE_URL=http://ollamaproxy:11434  # Ollama proxy backplane (on ollamaproxy_default network)
+OLLAMA_MODEL=gpt-oss-120b                 # Routed to Cerebras/Groq via proxy
 ```
+
+The backend is dual-homed (`lan-shared` macvlan + `news-aggregator_default` bridge),
+so its default route exits via the LAN. To reach the proxy directly by Docker DNS,
+the backend container also joins the external `ollamaproxy_default` network in
+`docker-compose.prod.yml`. Do **not** use `http://172.17.0.1:11434` — that path
+is unreachable from the macvlan-attached backend.
 
 ### System Prompt
 
