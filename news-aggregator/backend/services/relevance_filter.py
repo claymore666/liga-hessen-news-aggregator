@@ -71,7 +71,7 @@ class RelevanceFilter:
             f"{self.base_url}/classify",
             json={
                 "title": title,
-                "content": content,
+                "content": content[:100000],
                 "source": source,
             },
         )
@@ -168,7 +168,7 @@ class RelevanceFilter:
                 json={
                     "id": item_id,
                     "title": title,
-                    "content": content,
+                    "content": content[:100000],
                     "metadata": metadata,
                 },
             )
@@ -298,7 +298,7 @@ class RelevanceFilter:
             client = await self._get_client()
             payload = {
                 "title": title,
-                "content": content,
+                "content": content[:100000],
                 "threshold": threshold,
             }
             if fetched_after:
