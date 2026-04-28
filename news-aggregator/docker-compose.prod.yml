@@ -19,14 +19,19 @@ networks:
   default:
     # Default bridge for inter-container communication (db access)
   lan:
-    driver: macvlan
-    driver_opts:
-      parent: ens18  # docker-ai's LAN interface
-    ipam:
-      config:
-        - subnet: 192.168.0.0/24
-          gateway: 192.168.0.1
-          ip_range: 192.168.0.200/30  # Reserve 200-203 for containers
+    # Shared external macvlan network created once on the host:
+    #   docker network create -d macvlan --subnet 192.168.0.0/24 \
+    #     --gateway 192.168.0.1 --ip-range 192.168.0.200/29 \
+    #     -o parent=ens18 lan-shared
+    external: true
+    name: lan-shared
+  ollamaproxy:
+    # Cross-stack network owned by the ollamaproxy compose project on docker-ai.
+    # Backend joins it to reach the Ollama proxy backplane (alias: ollamaproxy)
+    # by Docker DNS instead of the host docker0 IP, which is unreachable from
+    # the macvlan-attached backend.
+    external: true
+    name: ollamaproxy_default
 
 services:
   redis:
@@ -96,7 +101,10 @@ services:
       - TZ=Europe/Berlin
       - DATABASE_URL=postgresql+asyncpg://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
       - LLM_ENABLED=${LLM_ENABLED:-true}
-      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      # Reach the Ollama proxy backplane via the shared ollamaproxy_default
+      # network. Backend's macvlan default route can't reach docker0
+      # (172.17.0.1), so name-based DNS over the proxy network is required.
+      - OLLAMA_BASE_URL=http://ollamaproxy:11434
       - OLLAMA_MODEL=gpt-oss-120b
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct:free}
@@ -166,6 +174,7 @@ services:
       default:  # For db connectivity
       lan:
         ipv4_address: 192.168.0.200  # Static IP on LAN for WoL
+      ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
 
   frontend:
     build:
