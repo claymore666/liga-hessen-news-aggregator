@@ -21,7 +21,7 @@ networks:
   lan:
     # Shared external macvlan network created once on the host:
     #   docker network create -d macvlan --subnet 192.168.0.0/24 \
-    #     --gateway 192.168.0.1 --ip-range 192.168.0.200/29 \
+    #     --gateway 192.168.0.1 --ip-range 192.168.0.208/29 \
     #     -o parent=ens18 lan-shared
     external: true
     name: lan-shared
@@ -173,7 +173,7 @@ services:
     networks:
       default:  # For db connectivity
       lan:
-        ipv4_address: 192.168.0.200  # Static IP on LAN for WoL
+        ipv4_address: 192.168.0.208  # Static IP on LAN for WoL
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
 
   frontend:
