@@ -217,7 +217,11 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     environment:
-      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      # Reach the Ollama embeddings backplane via the shared ollamaproxy_default
+      # network (same pattern as backend). The previous host-bridge URL
+      # (172.17.0.1:11434) stopped working once ollama-embeddings moved into
+      # the ollamaproxy stack with no host port mapping.
+      - OLLAMA_BASE_URL=http://ollamaproxy:11434
       - DATABASE_URL=postgresql://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
     volumes:
       - ../relevance-tuner/services/classifier-api/models:/app/models
@@ -234,6 +238,7 @@ services:
         max-file: "3"
     networks:
       - default
+      - ollamaproxy
 
 volumes:
   postgres-data:
