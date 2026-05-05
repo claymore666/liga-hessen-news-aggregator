@@ -19,10 +19,18 @@ networks:
   default:
     # Default bridge for inter-container communication (db access)
   lan:
-    # Shared external macvlan network created once on the host:
-    #   docker network create -d macvlan --subnet 192.168.0.0/24 \
-    #     --gateway 192.168.0.1 --ip-range 192.168.0.208/29 \
-    #     -o parent=ens18 lan-shared
+    # Shared external network created on the host via the
+    # docker-net-dhcp plugin so the backend gets a DHCP-issued IP
+    # from the LAN router. Replaced the previous static-IPAM macvlan
+    # (range .208/29) after recurring static-IP collisions with the
+    # D-Link switch on .200 — see Jan 4 LAN outage.
+    #
+    # Create on the host once (parent NIC: ens18 on docker-ai):
+    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v0.5.3
+    #   docker network create \
+    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v0.5.3 \
+    #     --ipam-driver=null \
+    #     -o mode=macvlan -o parent=ens18 lan-shared
     external: true
     name: lan-shared
   ollamaproxy:
@@ -173,7 +181,6 @@ services:
     networks:
       default:  # For db connectivity
       lan:
-        ipv4_address: 192.168.0.208  # Static IP on LAN for WoL
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
 
   frontend:
