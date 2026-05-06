@@ -26,9 +26,9 @@ networks:
     # D-Link switch on .200 — see Jan 4 LAN outage.
     #
     # Create on the host once (parent NIC: ens18 on docker-ai):
-    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v0.5.3
+    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v0.9.0
     #   docker network create \
-    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v0.5.3 \
+    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v0.9.0 \
     #     --ipam-driver=null \
     #     -o mode=macvlan -o parent=ens18 lan-shared
     external: true
