@@ -182,6 +182,14 @@ services:
       default:  # For db connectivity
       lan:
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
+    # Docker's embedded DNS (127.0.0.11) sometimes drops responses when the
+    # upstream LAN resolver (192.168.0.9) is slow, causing intermittent failures
+    # resolving gpu1.fritz.box for the gpu1_power user-check / shutdown SSH.
+    # Make glibc retry instead of returning NXDOMAIN on the first timeout.
+    dns_opt:
+      - timeout:2
+      - attempts:3
+      - ndots:0
 
   frontend:
     build:
