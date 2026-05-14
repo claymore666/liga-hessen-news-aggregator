@@ -22,19 +22,32 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# Cap concurrent /api/embed calls across all embedder instances. The CPU
+# embedding backend on docker-ai has 4 worker slots; anything beyond that
+# queues up and times out at the proxy's 120s ceiling. Default to 3 to leave
+# one slot for other proxy clients (e.g. pve1).
+_EMBED_CONCURRENCY = int(os.environ.get("OLLAMA_EMBED_CONCURRENCY", "3"))
+_EMBED_SEMAPHORE = asyncio.Semaphore(_EMBED_CONCURRENCY)
+
 
 class OllamaEmbedder:
     """Embedder that calls Ollama's /api/embed endpoint over HTTP."""
 
+    # Retries are for real failures (proxy/upstream errors), not timeouts —
+    # the 300s client timeout below covers slow embeds. Long-ish gaps let any
+    # abandoned upstream work drain before we hit the worker pool again.
     _RETRY_ATTEMPTS = 3
-    _RETRY_BACKOFF_SECONDS = [1, 2, 4]
+    _RETRY_BACKOFF_SECONDS = [30, 90]
 
     def __init__(self, model_name: str, max_length: int = 2000, task_prefix: str = ""):
         self.model_name = model_name
         self.max_length = max_length
         self.task_prefix = task_prefix
         self._embedding_dim = 768
-        self._client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=120.0)
+        # 300s matches the proxy's WriteTimeout. A single embed on CPU can
+        # take ~120s under load; the previous 120s ceiling caused spurious
+        # timeouts that triggered retries against a still-busy backend.
+        self._client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=300.0)
         self._availability_cache: tuple[bool, float] | None = None
         self._availability_ttl = 900.0  # 15 minutes — models don't disappear quickly
 
@@ -89,10 +102,11 @@ class OllamaEmbedder:
             last_exc = None
             for attempt in range(self._RETRY_ATTEMPTS):
                 try:
-                    resp = await self._client.post(
-                        "/api/embed",
-                        json={"model": self.model_name, "input": batch, "truncate": True},
-                    )
+                    async with _EMBED_SEMAPHORE:
+                        resp = await self._client.post(
+                            "/api/embed",
+                            json={"model": self.model_name, "input": batch, "truncate": True},
+                        )
                     resp.raise_for_status()
                     data = resp.json()
                     all_embeddings.extend(data["embeddings"])
@@ -103,7 +117,7 @@ class OllamaEmbedder:
                         backoff = self._RETRY_BACKOFF_SECONDS[attempt]
                         logger.warning(
                             f"Ollama request failed (attempt {attempt + 1}/{self._RETRY_ATTEMPTS}), "
-                            f"retrying in {backoff}s: {exc}"
+                            f"retrying in {backoff}s: {type(exc).__name__}: {exc!r}"
                         )
                         await asyncio.sleep(backoff)
             else:
