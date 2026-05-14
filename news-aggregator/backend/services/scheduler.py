@@ -72,12 +72,39 @@ def _should_skip_channel(channel_id: int) -> bool:
 
 def _record_channel_success(channel_id: int) -> None:
     """Reset circuit breaker on successful fetch."""
-    _channel_failures.pop(channel_id, None)
+    if _channel_failures.pop(channel_id, 0) >= CIRCUIT_BREAKER_THRESHOLD:
+        logger.warning(f"Circuit breaker cleared for channel {channel_id} (fetch succeeded)")
 
 
 def _record_channel_failure(channel_id: int) -> None:
     """Increment failure count for circuit breaker."""
-    _channel_failures[channel_id] = _channel_failures.get(channel_id, 0) + 1
+    prev = _channel_failures.get(channel_id, 0)
+    _channel_failures[channel_id] = prev + 1
+    # Warn on the cycle that crosses the threshold (skips start happening now)
+    if prev + 1 == CIRCUIT_BREAKER_THRESHOLD:
+        logger.warning(
+            f"Circuit breaker tripped for channel {channel_id} after "
+            f"{CIRCUIT_BREAKER_THRESHOLD} consecutive failures — fetches will be skipped "
+            f"with exponential backoff until success or daily reset"
+        )
+
+
+async def reset_circuit_breakers() -> None:
+    """Clear all tripped circuit breakers (scheduled daily).
+
+    Channels stuck in the breaker get another chance each day. Without this,
+    in-memory breaker state would persist until backend restart.
+    """
+    tripped = [cid for cid, n in _channel_failures.items() if n >= CIRCUIT_BREAKER_THRESHOLD]
+    cleared = len(_channel_failures)
+    _channel_failures.clear()
+    if tripped:
+        logger.warning(
+            f"Daily circuit breaker reset: cleared {cleared} channel(s), "
+            f"{len(tripped)} of which were tripped (IDs: {sorted(tripped)})"
+        )
+    else:
+        logger.info(f"Daily circuit breaker reset: cleared {cleared} channel(s), none were tripped")
 
 # Connector types that use proxy reservation
 PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
@@ -874,6 +901,17 @@ def start_scheduler() -> None:
         minute=15,
         id="cleanup_old_events",
         name="Clean up old item events",
+        replace_existing=True,
+    )
+
+    # Reset circuit breakers daily at 4 AM so stuck channels get another chance
+    scheduler.add_job(
+        reset_circuit_breakers,
+        trigger="cron",
+        hour=4,
+        minute=0,
+        id="reset_circuit_breakers",
+        name="Reset channel circuit breakers",
         replace_existing=True,
     )
 

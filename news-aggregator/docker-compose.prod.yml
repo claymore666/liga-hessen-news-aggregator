@@ -19,10 +19,18 @@ networks:
   default:
     # Default bridge for inter-container communication (db access)
   lan:
-    # Shared external macvlan network created once on the host:
-    #   docker network create -d macvlan --subnet 192.168.0.0/24 \
-    #     --gateway 192.168.0.1 --ip-range 192.168.0.208/29 \
-    #     -o parent=ens18 lan-shared
+    # Shared external network created on the host via the
+    # docker-net-dhcp plugin so the backend gets a DHCP-issued IP
+    # from the LAN router. Replaced the previous static-IPAM macvlan
+    # (range .208/29) after recurring static-IP collisions with the
+    # D-Link switch on .200 — see Jan 4 LAN outage.
+    #
+    # Create on the host once (parent NIC: ens18 on docker-ai):
+    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v0.9.0
+    #   docker network create \
+    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v0.9.0 \
+    #     --ipam-driver=null \
+    #     -o mode=macvlan -o parent=ens18 lan-shared
     external: true
     name: lan-shared
   ollamaproxy:
@@ -173,8 +181,15 @@ services:
     networks:
       default:  # For db connectivity
       lan:
-        ipv4_address: 192.168.0.208  # Static IP on LAN for WoL
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
+    # Docker's embedded DNS (127.0.0.11) sometimes drops responses when the
+    # upstream LAN resolver (192.168.0.9) is slow, causing intermittent failures
+    # resolving gpu1.fritz.box for the gpu1_power user-check / shutdown SSH.
+    # Make glibc retry instead of returning NXDOMAIN on the first timeout.
+    dns_opt:
+      - timeout:2
+      - attempts:3
+      - ndots:0
 
   frontend:
     build:
@@ -210,7 +225,11 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     environment:
-      - OLLAMA_BASE_URL=http://172.17.0.1:11434
+      # Reach the Ollama embeddings backplane via the shared ollamaproxy_default
+      # network (same pattern as backend). The previous host-bridge URL
+      # (172.17.0.1:11434) stopped working once ollama-embeddings moved into
+      # the ollamaproxy stack with no host port mapping.
+      - OLLAMA_BASE_URL=http://ollamaproxy:11434
       - DATABASE_URL=postgresql://liga:${POSTGRES_PASSWORD}@db:5432/liga_news
     volumes:
       - ../relevance-tuner/services/classifier-api/models:/app/models
@@ -227,6 +246,7 @@ services:
         max-file: "3"
     networks:
       - default
+      - ollamaproxy
 
 volumes:
   postgres-data:

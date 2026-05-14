@@ -13,20 +13,26 @@
 # =============================================================================
 
 # Network for LAN access (Wake-on-LAN)
-# Note: Verify the parent interface name with `ip link` on the host
-# Common names: eth0, ens18, enp0s3, etc.
 networks:
   default:
     # Default bridge for inter-container communication (db access)
   lan:
-    driver: macvlan
-    driver_opts:
-      parent: ${LAN_INTERFACE:-eth0}  # Set LAN_INTERFACE in .env to match host
-    ipam:
-      config:
-        - subnet: 192.168.0.0/24
-          gateway: 192.168.0.1
-          ip_range: 192.168.0.200/30  # Reserve 200-203 for containers
+    # Shared external network created on the host via the
+    # docker-net-dhcp plugin so the backend gets a DHCP-issued IP
+    # from the LAN router. The previous static-IPAM macvlan range
+    # was 192.168.0.200/30, which included the D-Link switch's
+    # 192.168.0.200 — caused ARP storms and link flaps when the
+    # collision triggered. Aligned with docker-compose.prod.yml so
+    # `docker compose up` does the same thing on either host.
+    #
+    # Create on the host once (substitute the right parent NIC):
+    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v0.5.3
+    #   docker network create \
+    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v0.5.3 \
+    #     --ipam-driver=null \
+    #     -o mode=macvlan -o parent=<NIC> lan-shared
+    external: true
+    name: lan-shared
 
 services:
   redis:
@@ -157,7 +163,6 @@ services:
     networks:
       default:  # For db connectivity
       lan:
-        ipv4_address: 192.168.0.200  # Static IP on LAN for WoL
 
   frontend:
     build:

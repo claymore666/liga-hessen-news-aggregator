@@ -13,7 +13,11 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from classifier import EmbeddingClassifier, ParaphraseEmbedder
+from classifier import (
+    EmbeddingClassifier,
+    ParaphraseEmbedder,
+    configure_embed_concurrency_from_proxy,
+)
 from pgvector_store import PgVectorStore
 
 __version__ = "3.0.0"
@@ -38,6 +42,10 @@ async def lifespan(app: FastAPI):
     global classifier, vector_store, duplicate_store
     logger.info("Loading embedding classifier...")
     try:
+        # Size the shared embed-concurrency semaphore from the proxy's
+        # advertised buffer_workers before any embed calls happen.
+        await configure_embed_concurrency_from_proxy()
+
         classifier = EmbeddingClassifier.load("models/embedding_classifier_nomic-v2.pkl")
         info = await classifier.get_info()
         logger.info(f"Classifier loaded: {info}")
