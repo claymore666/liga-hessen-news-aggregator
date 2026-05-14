@@ -23,11 +23,61 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # Cap concurrent /api/embed calls across all embedder instances. The CPU
-# embedding backend on docker-ai has 4 worker slots; anything beyond that
-# queues up and times out at the proxy's 120s ceiling. Default to 3 to leave
-# one slot for other proxy clients (e.g. pve1).
-_EMBED_CONCURRENCY = int(os.environ.get("OLLAMA_EMBED_CONCURRENCY", "3"))
-_EMBED_SEMAPHORE = asyncio.Semaphore(_EMBED_CONCURRENCY)
+# embedding backend on docker-ai has N worker slots (proxy BUFFER_WORKERS);
+# anything beyond that queues up and ages out at the client's httpx timeout.
+# The semaphore is lazily initialized — on startup, main.py calls
+# configure_embed_concurrency_from_proxy() to size it from the proxy's
+# GET /api/limits (buffer_workers - reserve). If unset by the time encode()
+# runs, we fall back to OLLAMA_EMBED_CONCURRENCY (default 3).
+_EMBED_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _embed_concurrency_default() -> int:
+    return int(os.environ.get("OLLAMA_EMBED_CONCURRENCY", "3"))
+
+
+def _get_embed_semaphore() -> asyncio.Semaphore:
+    global _EMBED_SEMAPHORE
+    if _EMBED_SEMAPHORE is None:
+        _EMBED_SEMAPHORE = asyncio.Semaphore(_embed_concurrency_default())
+    return _EMBED_SEMAPHORE
+
+
+async def configure_embed_concurrency_from_proxy() -> int:
+    """Probe ollamaproxy GET /api/limits and size the global embed semaphore.
+
+    Reserves OLLAMA_EMBED_CONCURRENCY_RESERVE slots (default 1) for other
+    proxy clients. Falls back to OLLAMA_EMBED_CONCURRENCY on any failure
+    (missing endpoint, network error, bad payload). Returns the chosen size.
+    """
+    global _EMBED_SEMAPHORE
+    reserve = int(os.environ.get("OLLAMA_EMBED_CONCURRENCY_RESERVE", "1"))
+    fallback = _embed_concurrency_default()
+    size = fallback
+    try:
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=5.0) as c:
+            r = await c.get("/api/limits")
+            r.raise_for_status()
+            buf = int(r.json().get("buffer_workers", 0))
+        if buf > 0:
+            size = max(1, buf - reserve)
+            logger.info(
+                f"Sized embed semaphore from proxy /api/limits: "
+                f"buffer_workers={buf}, reserve={reserve}, size={size}"
+            )
+        else:
+            logger.warning(
+                f"Proxy /api/limits returned buffer_workers={buf}, "
+                f"using fallback OLLAMA_EMBED_CONCURRENCY={fallback}"
+            )
+    except Exception as exc:
+        logger.warning(
+            f"Could not fetch /api/limits, using fallback "
+            f"OLLAMA_EMBED_CONCURRENCY={fallback}: "
+            f"{type(exc).__name__}: {exc!r}"
+        )
+    _EMBED_SEMAPHORE = asyncio.Semaphore(size)
+    return size
 
 
 class OllamaEmbedder:
@@ -102,7 +152,7 @@ class OllamaEmbedder:
             last_exc = None
             for attempt in range(self._RETRY_ATTEMPTS):
                 try:
-                    async with _EMBED_SEMAPHORE:
+                    async with _get_embed_semaphore():
                         resp = await self._client.post(
                             "/api/embed",
                             json={"model": self.model_name, "input": batch, "truncate": True},
