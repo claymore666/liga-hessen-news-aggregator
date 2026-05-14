@@ -310,6 +310,50 @@ docker compose restart classifier
 ```bash
 CLASSIFIER_API_URL=http://localhost:8082
 CLASSIFIER_ENABLED=true
+
+# Embed-concurrency policy (consumed by the classifier API container)
+OLLAMA_EMBED_CONCURRENCY=3           # fallback if /api/limits is unreachable
+OLLAMA_EMBED_CONCURRENCY_RESERVE=1   # slots left for other proxy clients
+```
+
+On startup the classifier probes `GET ollamaproxy:11434/api/limits` and
+sizes a global in-flight semaphore to `buffer_workers - RESERVE`. If the
+endpoint isn't available (older proxy), it falls back to
+`OLLAMA_EMBED_CONCURRENCY`. The chosen size is logged at INFO:
+
+```
+INFO:classifier:Sized embed semaphore from proxy /api/limits:
+  buffer_workers=4, reserve=1, size=3
+```
+
+## Embedding Backpressure
+
+The classifier issues `/api/embed` calls to `ollamaproxy`. On docker-ai
+the proxy may route to `cpu-embeddings` (no GPU) when gpu1 is asleep,
+where a single embed can take 30–120 s. Without a client-side cap,
+concurrent embeds queue at the proxy's `BUFFER_WORKERS` ceiling; queued
+requests age toward the client's httpx timeout and fail as 502s, which
+the client then retries — amplifying the queue. The 2026-05-14 incident
+showed this cascade clearly.
+
+**Fix (`relevance-tuner/services/classifier-api/classifier.py`):**
+
+| Knob | Value | Why |
+|---|---|---|
+| In-flight semaphore | `min(buffer_workers - 1, env)` (default 3) | Never queue more than the backend can serve; leave headroom for other clients. Waiters block in asyncio (no timer). |
+| httpx timeout | 300 s | Matches proxy `WriteTimeout`; covers worst-case cpu embed. |
+| Retry attempts | 3 | Initial + 2 retries. |
+| Retry backoffs | `[30 s, 90 s]` | Long enough for abandoned upstream work to drain before re-hitting the worker pool. |
+| Failure log | `type(exc).__name__: repr(exc)` | The previous bare `: ` log lost the exception kind. |
+
+**Diagnosing residual 502s.** The proxy now sets an `X-Error-Kind`
+response header and an `error_kind=…` access-log field. Useful values:
+`client_canceled` (we gave up — usually our httpx timeout), `upstream_timeout`,
+`upstream_connect_refused`, `buffer_full`, `rate_limited`. Example:
+
+```
+status=502 duration=30.34s error_kind=client_canceled  → our side gave up
+status=502 error_kind=upstream_connect_refused         → backend really down
 ```
 
 ### Docker Compose
