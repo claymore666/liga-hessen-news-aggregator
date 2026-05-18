@@ -261,6 +261,28 @@
       "timestamp": "2026-02-25T16:30:39.488920",
       "train_size": 4333,
       "test_size": 765
+    },
+    {
+      "model_fingerprint": "0cec481900a4",
+      "relevance_accuracy": 0.7723,
+      "priority_accuracy": 0.546,
+      "priority_within_one": 0.9684,
+      "ak_accuracy": 0.6098,
+      "speed_items_per_sec": 63.5,
+      "timestamp": "2026-04-28T18:34:45.044885",
+      "train_size": 6458,
+      "test_size": 1089
+    },
+    {
+      "model_fingerprint": "4069591c56d6",
+      "relevance_accuracy": 0.7845,
+      "priority_accuracy": 0.4857,
+      "priority_within_one": 0.96,
+      "ak_accuracy": 0.6121,
+      "speed_items_per_sec": 67.3,
+      "timestamp": "2026-04-28T20:42:56.573440",
+      "train_size": 6493,
+      "test_size": 1095
     }
   ],
   "jina-v3": [

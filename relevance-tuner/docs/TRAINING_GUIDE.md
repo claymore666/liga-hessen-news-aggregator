@@ -386,3 +386,47 @@ Some AKs have very few training examples (AK4: ~25, QAG: ~30). With more product
 - Adding more labeled examples for underrepresented AKs
 - Adjusting `class_weight` in RandomForest config
 - Using the multi-label classifier (`experiments/train_multilabel_classifier.py`)
+
+## Experiments / Ablations
+
+### Sample weighting by label trust (2026-04-28) — NOT ADOPTED
+
+**Hypothesis.** Training labels come from three sources of varying trust:
+human review > current LLM prompt > older LLM prompts. Weighting them
+differently in `sklearn`'s `sample_weight` should let the classifier
+emphasise the most trustworthy labels.
+
+**Setup.**
+
+- Weights assigned during export (`export_training_data.py`):
+  - `5.0` if `is_manually_reviewed`
+  - `2.0` if labeled by a "modern" prompt — at the time:
+    `(gpt-oss-120b, v1)`, `(qwen-3-235b-a22b-instruct-2507, v3)`,
+    `(qwen3:30b, v1)`
+  - `1.0` otherwise (legacy LLM labels)
+- Weights threaded through `EmbeddingClassifier.fit()` into the
+  `sample_weight` arg of all three heads (relevance LR, priority LR,
+  AK RF).
+- Train set: 6,458–6,493 items. Test set: ~1,090.
+
+**Result.**
+
+| Run                        | Fingerprint   | Relevance acc | Priority acc | Priority within-1 | AK acc |
+| -------------------------- | ------------- | ------------- | ------------ | ----------------- | ------ |
+| A — unweighted (baseline)  | `0cec481900a4` | 0.7723        | **0.546**    | 0.968             | 0.610  |
+| B — weighted (5/2/1)       | `4069591c56d6` | **0.7845**    | 0.486        | 0.960             | 0.612  |
+
+Weighting helped relevance slightly (+1.2pp) but cost priority accuracy
+(-6pp). Within-1 priority and AK were unchanged. On the held-out eval
+slice both models scored ~0.07 priority accuracy — neither separated.
+
+**Decision.** Not adopted. Net effect is a wash on the metrics we
+care about, with a real regression on priority — the head most
+sensitive to label noise, where weighting was supposed to help most.
+
+**If revisited.** Apply weighting only to the relevance head (where
+the small gain showed up), leave priority/AK uniform. Or treat
+`is_manually_reviewed` items as a tiny supervised fine-tune on top of
+an unweighted base, rather than mixing scales in one fit. Code for the
+weighted-export + weighted-fit version is recoverable from git history
+prior to the cleanup commit on 2026-05-18.
