@@ -136,6 +136,12 @@ services:
       - GPU1_ACTIVE_HOURS_START=${GPU1_ACTIVE_HOURS_START:-7}
       - GPU1_ACTIVE_HOURS_END=${GPU1_ACTIVE_HOURS_END:-16}
       - GPU1_ACTIVE_WEEKDAYS_ONLY=${GPU1_ACTIVE_WEEKDAYS_ONLY:-true}
+      # Embeddings gate: background workers run freely 08:00-18:00 local time.
+      # Outside that window they only run if gpu1 is reachable; otherwise they
+      # idle and drain the backlog when the window reopens.
+      - CPU_EMBEDDINGS_HOURS_START=${CPU_EMBEDDINGS_HOURS_START:-8}
+      - CPU_EMBEDDINGS_HOURS_END=${CPU_EMBEDDINGS_HOURS_END:-18}
+      - CPU_EMBEDDINGS_TZ=${CPU_EMBEDDINGS_TZ:-Europe/Berlin}
       # Worker/Scheduler control (can disable for testing)
       - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
       - LLM_WORKER_ENABLED=${LLM_WORKER_ENABLED:-true}

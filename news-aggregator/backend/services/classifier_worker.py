@@ -183,6 +183,12 @@ class ClassifierWorker:
                     await asyncio.sleep(1.0)
                     continue
 
+                from services.embeddings_gate import embeddings_allowed
+                allowed, _gate_reason = await embeddings_allowed()
+                if not allowed:
+                    await asyncio.sleep(self.idle_sleep)
+                    continue
+
                 # Process unclassified items
                 processed = await self._process_unclassified_items()
                 if processed > 0:

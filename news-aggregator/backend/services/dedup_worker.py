@@ -164,14 +164,20 @@ class DedupWorker:
                     await asyncio.sleep(1.0)
                     continue
 
-                # Priority 1: Index items in vector store (prerequisite for Phase 2)
-                indexed = await self._process_unindexed_items()
-                if indexed > 0:
-                    await self._on_success()
-                    await asyncio.sleep(0.5)
-                    continue
+                from services.embeddings_gate import embeddings_allowed
+                embeds_ok, _gate_reason = await embeddings_allowed()
 
-                # Priority 2: Phase 1 dedup (URL, hash, title - no GPU needed)
+                # Priority 1: Index items in vector store (prerequisite for Phase 2)
+                if embeds_ok:
+                    indexed = await self._process_unindexed_items()
+                    if indexed > 0:
+                        await self._on_success()
+                        await asyncio.sleep(0.5)
+                        continue
+
+                # Priority 2: Phase 1 dedup (URL, hash, title — no embeddings needed,
+                # runs regardless of the embeddings gate so URL-level dupes still
+                # collapse during off-hours-gpu1-down.)
                 phase1 = await self._process_phase1_dedup()
                 if phase1 > 0:
                     await self._on_success()
@@ -179,11 +185,12 @@ class DedupWorker:
                     continue
 
                 # Priority 3: Phase 2 dedup (semantic via classifier API)
-                phase2 = await self._process_phase2_dedup()
-                if phase2 > 0:
-                    await self._on_success()
-                    await asyncio.sleep(0.5)
-                    continue
+                if embeds_ok:
+                    phase2 = await self._process_phase2_dedup()
+                    if phase2 > 0:
+                        await self._on_success()
+                        await asyncio.sleep(0.5)
+                        continue
 
                 # Daily sync check: verify DB and ChromaDB are in sync
                 today = utcnow().date()

@@ -135,6 +135,14 @@ class Settings(BaseSettings):
     gpu1_active_hours_end: int = 16  # Hour (0-23) when gpu1 usage stops (default 4 PM)
     gpu1_active_weekdays_only: bool = True  # Only wake on weekdays (Mon-Fri)
 
+    # Embeddings gate: background workers may trigger embedding work only when
+    # in-hours, or out-of-hours if gpu1 is reachable. Outside that window the
+    # classifier and dedup workers idle (existing retry loop drains the
+    # backlog when the gate reopens).
+    cpu_embeddings_hours_start: int = 8  # Hour (0-23) start of always-on window
+    cpu_embeddings_hours_end: int = 18  # Hour (0-23) end of always-on window
+    cpu_embeddings_tz: str = "Europe/Berlin"
+
     # Scheduler
     scheduler_enabled: bool = True  # Set to False to disable scheduler on startup
     fetch_interval_minutes: int = 30
