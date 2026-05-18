@@ -42,6 +42,8 @@ backups/
 
 # Misc docs not for repo
 CEREBRAS_EMAIL_AUTOMATION.md
+GROQ_EMAIL_AUTOMATION.md
+OPENROUTER_EMAIL_AUTOMATION.md
 
 # News-aggregator specific (if not needed here)
 news-aggregator/backend/venv/
