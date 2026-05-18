@@ -8,6 +8,9 @@ The classifier provides fast ML-based classification using embedding models. It 
 - `relevance-tuner/services/classifier-api/` - Classifier service
 - `backend/services/relevance_filter.py` - Client wrapper
 - `backend/services/classifier_worker.py` - Background worker
+- `backend/services/embeddings_gate.py` - Time-of-day gate (see [GPU1_POWER_MANAGEMENT.md](../operations/GPU1_POWER_MANAGEMENT.md#configuration))
+
+**Embeddings gate**: the background classifier and dedup workers run freely 08:00-18:00 Europe/Berlin (configurable via `CPU_EMBEDDINGS_HOURS_*`). Outside that window they idle unless gpu1 is reachable. User-triggered fetches via the pipeline are not gated.
 
 ## Architecture
 

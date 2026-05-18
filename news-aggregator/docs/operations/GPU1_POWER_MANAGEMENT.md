@@ -99,9 +99,14 @@ Environment variables (set in `.env` or docker-compose.yml):
 | `GPU1_ACTIVE_HOURS_START` | `7` | Hour (0-23) when WoL is allowed (7 AM) |
 | `GPU1_ACTIVE_HOURS_END` | `16` | Hour (0-23) when WoL stops (4 PM) |
 | `GPU1_ACTIVE_WEEKDAYS_ONLY` | `true` | Only wake Mon-Fri, not weekends |
+| `CPU_EMBEDDINGS_HOURS_START` | `8` | Hour (0-23) start of always-on embeddings window |
+| `CPU_EMBEDDINGS_HOURS_END` | `18` | Hour (0-23) end of always-on embeddings window |
+| `CPU_EMBEDDINGS_TZ` | `Europe/Berlin` | Timezone for the embeddings window |
 | `LAN_INTERFACE` | `eth0` | Host network interface for macvlan |
 
 **Active Hours**: WoL packets are only sent during active hours (default 7:00-16:00 Mon-Fri). Outside these times, items queue with `needs_llm_processing=true` and are processed when gpu1 next wakes. If gpu1 is already awake, it will be used regardless of the time.
+
+**Embeddings Gate** (classifier + dedup workers): Inside `[CPU_EMBEDDINGS_HOURS_START, CPU_EMBEDDINGS_HOURS_END)` in `CPU_EMBEDDINGS_TZ` (default 08:00-18:00 Europe/Berlin) the background workers always run. Outside that window they only run when gpu1 is reachable; otherwise they idle and the existing retry loop drains the backlog when the window reopens. Phase 1 URL/hash dedup runs regardless so URL-level duplicates still collapse overnight. The pipeline (user-triggered fetches) is intentionally not gated. The gate logs only on state transitions (e.g. `Embeddings gate: out_of_hours_gpu1_down`) — steady state is silent. Implemented in `backend/services/embeddings_gate.py`.
 
 ## Verification
 
