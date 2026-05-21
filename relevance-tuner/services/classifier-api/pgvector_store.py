@@ -333,7 +333,17 @@ class PgVectorStore:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 epoch = dt.timestamp()
-                where_clause = f"WHERE (metadata->>'fetched_at')::float >= $3"
+                # Guard the cast: legacy rows may store fetched_at as an ISO
+                # string instead of an epoch float, which would abort the whole
+                # query with "invalid input syntax for type double precision".
+                # CASE guarantees short-circuit evaluation, so the ::float cast
+                # only runs on numeric-looking values; everything else (ISO
+                # strings, NULL, missing key) is treated as outside the window.
+                where_clause = (
+                    "WHERE CASE WHEN metadata->>'fetched_at' ~ '^[0-9.]+$' "
+                    "THEN (metadata->>'fetched_at')::float >= $3 "
+                    "ELSE false END"
+                )
                 params.append(epoch)
             except (ValueError, TypeError):
                 pass

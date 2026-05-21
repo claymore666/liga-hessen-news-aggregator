@@ -401,6 +401,10 @@ class Pipeline:
                 published_at=normalized.published_at,
                 content_hash=content_hash,
                 metadata_=item_metadata,
+                # Set explicitly (matches the server_default) so the value is
+                # available on the object for vector-store indexing below
+                # without triggering an async lazy-load after flush.
+                fetched_at=utcnow(),
                 similar_to_id=similar_to_id,  # Link to primary item if confirmed duplicate
                 # Mark for LLM processing if there's a duplicate candidate to review
                 needs_llm_processing=duplicate_candidate is not None,
@@ -598,6 +602,12 @@ class Pipeline:
                                 "source": channel.source.name if channel.source else "",
                                 "priority": _get_priority_value(item.priority) if item.priority else None,
                                 "channel_id": str(channel.id),
+                                # UTC epoch float so the classifier's windowed
+                                # dedup query can include these items. fetched_at
+                                # is naive UTC and the container runs in CET/CEST,
+                                # so attach UTC before .timestamp() (see
+                                # dedup_worker and pgvector_store.find_duplicates).
+                                "fetched_at": item.fetched_at.replace(tzinfo=UTC).timestamp() if item.fetched_at else None,
                             },
                         }
                         for item in new_items

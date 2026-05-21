@@ -14,7 +14,7 @@ concurrent channel fetches.
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
@@ -693,7 +693,13 @@ class DedupWorker:
                         "source": source_name,
                         "priority": item.priority.value if hasattr(item.priority, 'value') else str(item.priority),
                         "channel_id": str(item.channel_id) if item.channel_id else "",
-                        "fetched_at": item.fetched_at.isoformat() if item.fetched_at else "",
+                        # Store as UTC epoch float — the classifier's windowed
+                        # dedup query casts fetched_at to ::float (ISO strings
+                        # crash it). fetched_at is a naive UTC datetime, and the
+                        # container runs in CET/CEST, so attach UTC explicitly
+                        # before .timestamp() to avoid a local-offset skew.
+                        # See pgvector_store.find_duplicates.
+                        "fetched_at": item.fetched_at.replace(tzinfo=timezone.utc).timestamp() if item.fetched_at else None,
                     },
                 })
                 item_ids.append(item.id)
