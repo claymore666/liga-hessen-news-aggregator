@@ -336,25 +336,36 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
         raise
 
     # Phase 2.5: Pre-filter items BEFORE entering database session
-    # This avoids async context conflicts between httpx and SQLAlchemy
+    # This avoids async context conflicts between httpx and SQLAlchemy.
+    # Skipped when the embeddings gate is closed; classifier_worker will
+    # backfill pre_filter once the gate reopens.
     pre_filter_results: dict[str, dict] = {}
     if relevance_filter and not training_mode and raw_items:
-        logger.debug(f"Pre-filtering {len(raw_items)} items for channel {channel_id}")
-        for raw_item in raw_items:
-            try:
-                should_process, result = await relevance_filter.should_process(
-                    title=raw_item.title,
-                    content=raw_item.content,
-                    source=source_name,
-                )
-                if result:
-                    pre_filter_results[raw_item.external_id] = {
-                        "should_process": should_process,
-                        "result": result,
-                    }
-            except Exception as e:
-                logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
-        logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
+        from services.embeddings_gate import embeddings_allowed
+        gate_open, gate_reason = await embeddings_allowed()
+        if not gate_open:
+            logger.info(
+                f"Skipping pre-filter for channel {channel_id} "
+                f"({len(raw_items)} items, gate={gate_reason}); "
+                "classifier_worker will backfill."
+            )
+        else:
+            logger.debug(f"Pre-filtering {len(raw_items)} items for channel {channel_id}")
+            for raw_item in raw_items:
+                try:
+                    should_process, result = await relevance_filter.should_process(
+                        title=raw_item.title,
+                        content=raw_item.content,
+                        source=source_name,
+                    )
+                    if result:
+                        pre_filter_results[raw_item.external_id] = {
+                            "should_process": should_process,
+                            "result": result,
+                        }
+                except Exception as e:
+                    logger.warning(f"Pre-filter failed for item '{raw_item.title[:40]}': {e}")
+            logger.debug(f"Pre-filtered {len(pre_filter_results)}/{len(raw_items)} items")
 
     # Phase 3: Database writes - process and store items
     # Note: No global lock needed - PostgreSQL MVCC handles concurrent writes

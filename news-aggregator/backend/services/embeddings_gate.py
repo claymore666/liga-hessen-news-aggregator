@@ -1,14 +1,23 @@
 """
-Embeddings gate for background workers.
+Embeddings gate for all background embedding work.
 
 Policy: inside [cpu_embeddings_hours_start, cpu_embeddings_hours_end) in
 cpu_embeddings_tz, embedding work is always allowed. Outside that window,
 it's allowed only when gpu1 is reachable. When gpu1 is also unreachable,
-the gate denies and the worker idles; the existing retry loop drains the
-backlog once the gate reopens.
+the gate denies and callers skip their embedding-bound work; backlog drains
+once the gate reopens.
 
-The pipeline (user-triggered fetches) is intentionally not gated — the
-gate applies to background workers only.
+Consulted by:
+  - classifier_worker (gate the whole loop)
+  - dedup_worker (gate Phase 2 semantic + vector indexing; Phase 1 URL/hash
+    dedup is embedding-free and runs regardless)
+  - scheduler.fetch_channel (gate the pre-filter pass; classifier_worker
+    backfills missing pre_filter once the gate reopens)
+  - pipeline.process (gate semantic find_duplicates, fallback should_process
+    and index_items_batch; dedup_worker backfills both Phase 2 and indexing)
+
+Only embedding-free paths (URL/hash dedup, keyword rules, age filter,
+LLM analysis) run when the gate is closed.
 """
 
 from __future__ import annotations

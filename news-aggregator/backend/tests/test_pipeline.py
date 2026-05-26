@@ -1,6 +1,7 @@
 """Tests for the item processing pipeline."""
 
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -367,3 +368,103 @@ class TestPipeline:
 
         assert len(new_items) == 1
         assert new_items[0].external_id == "new-1"
+
+
+class TestPipelineEmbeddingsGate:
+    """Pipeline must consult embeddings_allowed() before any classifier call."""
+
+    @staticmethod
+    def _stub_filter() -> AsyncMock:
+        rf = AsyncMock()
+        rf.find_duplicates = AsyncMock(return_value=[])
+        rf.should_process = AsyncMock(return_value=(True, {"relevance_confidence": 0.5}))
+        rf.index_items_batch = AsyncMock(return_value=0)
+        return rf
+
+    @staticmethod
+    async def _seed_channel(db: AsyncSession) -> Channel:
+        source = Source(name="GateTest")
+        db.add(source)
+        await db.flush()
+        channel = Channel(
+            source_id=source.id,
+            connector_type=ConnectorType.RSS,
+            config={},
+        )
+        db.add(channel)
+        await db.flush()
+        return channel
+
+    @pytest.mark.asyncio
+    async def test_gate_closed_skips_all_embedding_calls(self, db_session: AsyncSession):
+        channel = await self._seed_channel(db_session)
+        rf = self._stub_filter()
+        raw_items = [
+            RawItem(
+                external_id="gate-1",
+                title="Test 1",
+                content="Body 1",
+                url="https://example.com/gate-1",
+            ),
+        ]
+
+        pipeline = Pipeline(db_session, relevance_filter=rf)
+        with patch(
+            "services.embeddings_gate.embeddings_allowed",
+            new=AsyncMock(return_value=(False, "out_of_hours_gpu1_down")),
+        ):
+            new_items = await pipeline.process(raw_items, channel)
+
+        assert len(new_items) == 1
+        rf.find_duplicates.assert_not_awaited()
+        rf.should_process.assert_not_awaited()
+        rf.index_items_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_gate_open_runs_embedding_calls(self, db_session: AsyncSession):
+        channel = await self._seed_channel(db_session)
+        rf = self._stub_filter()
+        raw_items = [
+            RawItem(
+                external_id="gate-open-1",
+                title="Test open",
+                content="Body open",
+                url="https://example.com/gate-open-1",
+            ),
+        ]
+
+        pipeline = Pipeline(db_session, relevance_filter=rf)
+        with patch(
+            "services.embeddings_gate.embeddings_allowed",
+            new=AsyncMock(return_value=(True, "in_hours")),
+        ):
+            new_items = await pipeline.process(raw_items, channel)
+
+        assert len(new_items) == 1
+        rf.find_duplicates.assert_awaited()
+        rf.should_process.assert_awaited()
+        rf.index_items_batch.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_training_mode_skips_gate_and_filter(self, db_session: AsyncSession):
+        """training_mode bypasses the relevance filter entirely; gate is never consulted."""
+        channel = await self._seed_channel(db_session)
+        rf = self._stub_filter()
+        raw_items = [
+            RawItem(
+                external_id="train-1",
+                title="Training item",
+                content="Body",
+                url="https://example.com/train-1",
+            ),
+        ]
+
+        gate_mock = AsyncMock(return_value=(True, "in_hours"))
+        pipeline = Pipeline(db_session, relevance_filter=rf, training_mode=True)
+        with patch("services.embeddings_gate.embeddings_allowed", new=gate_mock):
+            await pipeline.process(raw_items, channel)
+
+        gate_mock.assert_not_awaited()
+        rf.find_duplicates.assert_not_awaited()
+        rf.should_process.assert_not_awaited()
+        rf.index_items_batch.assert_not_awaited()

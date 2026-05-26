@@ -197,6 +197,20 @@ class Pipeline:
         # find each other via ChromaDB since neither is indexed yet)
         batch_titles: list[str] = []  # Cleaned titles for comparison
 
+        # Embeddings gate: when closed (out of CPU window + gpu1 down), skip
+        # every call that ends up at ollamaproxy embeddings. Catchup workers
+        # will backfill: classifier_worker for missing pre_filter, dedup_worker
+        # for unindexed items and Phase-2 semantic dedup.
+        embeds_ok = True
+        if self.relevance_filter and not self.training_mode:
+            from services.embeddings_gate import embeddings_allowed
+            embeds_ok, _gate_reason = await embeddings_allowed()
+            if not embeds_ok:
+                logger.info(
+                    f"Pipeline embeddings gate closed ({_gate_reason}); "
+                    "skipping semantic dedup, fallback pre-filter and indexing."
+                )
+
         for raw in raw_items:
             # Create item-specific logger for this processing run
             item_logger = self.processing_logger.new_item_run() if self.processing_logger else None
@@ -279,7 +293,8 @@ class Pipeline:
             # 3b. Check for semantic duplicates (cross-channel, different articles on same topic)
             # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
             # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
-            if not similar_to_id and self.relevance_filter and not self.training_mode:
+            # Skipped when the embeddings gate is closed; dedup_worker Phase 2 backfills.
+            if not similar_to_id and self.relevance_filter and not self.training_mode and embeds_ok:
                 try:
                     # Strip boilerplate before embedding to avoid false positive similarity
                     clean_title = _strip_boilerplate(normalized.title)
@@ -426,8 +441,9 @@ class Pipeline:
                 if normalized.external_id in self.pre_filter_results:
                     cached = self.pre_filter_results[normalized.external_id]
                     pre_filter_result = cached["result"]
-                elif self.relevance_filter:
-                    # Fallback: call classifier directly (may fail in async SQLAlchemy context)
+                elif self.relevance_filter and embeds_ok:
+                    # Fallback: call classifier directly (may fail in async SQLAlchemy context).
+                    # Skipped when gate is closed; classifier_worker will backfill later.
                     try:
                         _, pre_filter_result = await self.relevance_filter.should_process(
                             title=normalized.title,
@@ -589,7 +605,9 @@ class Pipeline:
                         logger.warning(f"Failed to log processing steps for item {item.id}: {e}")
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
-            if self.relevance_filter and not self.training_mode:
+            # Skipped when the embeddings gate is closed; dedup_worker._process_unindexed_items
+            # will backfill items missing the vectordb_indexed flag once the gate reopens.
+            if self.relevance_filter and not self.training_mode and embeds_ok:
                 indexed_ids = []
                 try:
                     # Strip boilerplate before indexing to improve duplicate detection quality
