@@ -376,47 +376,41 @@ docker compose logs backend | grep -i "browser pool"
    docker compose logs backend | grep "SPA fallback"
    ```
 
-### VectorDB Index Out of Sync (DB ↔ ChromaDB Drift)
+### VectorDB Index Out of Sync (DB ↔ Vector Store Drift)
 
-**Symptoms**: Log shows `VECTORDB SYNC CHECK: DB says N items indexed, ChromaDB has M items`
+**Symptoms**: Log shows `VECTORDB SYNC CHECK: DB says N items indexed, vector store has M items`
 
-This happens when items have the `vectordb_indexed` metadata flag set in PostgreSQL but are not actually in ChromaDB (e.g., after a ChromaDB volume reset, container rebuild, or data migration).
+This happens when items have the `vectordb_indexed` metadata flag set in PostgreSQL but are not actually in the vector store (e.g., after a volume reset, container rebuild, or data migration), or when the vector store has entries for items that have since been deleted from PostgreSQL.
 
-**Diagnose**:
+**Diagnose** — preview both directions of the drift:
 ```bash
-# Check the gap
-docker exec liga-news-db psql -U liga -d liga_news -t -c \
-  "SELECT COUNT(*) FROM items WHERE metadata::text LIKE '%vectordb_indexed%';"
-# Compare with ChromaDB count from classifier health endpoint
-```
-
-**Fix** — reset stale flags so the dedup worker re-indexes automatically:
-```bash
-# 1. Export ChromaDB IDs to a file
 docker exec liga-news-backend python3 -c "
 import urllib.request, json
-r = urllib.request.urlopen('http://classifier:8082/ids')
-d = json.loads(r.read())
-print(','.join(d.get('ids', [])))
-" > /tmp/chromadb_ids.txt
-
-# 2. Create SQL to reset flags for items NOT in ChromaDB
-IDS=$(cat /tmp/chromadb_ids.txt)
-cat > /tmp/reset_flags.sql << SQLEOF
-UPDATE items
-SET metadata = (metadata::jsonb - 'vectordb_indexed') - 'vectordb_indexed_at'
-WHERE id NOT IN ($IDS);
-SQLEOF
-
-# 3. Run it
-docker cp /tmp/reset_flags.sql liga-news-db:/tmp/reset_flags.sql
-docker exec liga-news-db psql -U liga -d liga_news -f /tmp/reset_flags.sql
-
-# 4. Monitor re-indexing (dedup worker processes ~50 items/3s automatically)
-docker logs -f liga-news-backend 2>&1 | grep "Indexed.*items"
+req = urllib.request.Request(
+    'http://localhost:8000/api/admin/housekeeping/vector-sync/preview', method='POST')
+print(json.dumps(json.loads(urllib.request.urlopen(req, timeout=60).read()), indent=2))
+"
+# orphaned_ids: in vector store but not in DB (will be deleted)
+# missing_ids:  in DB but not in vector store (will be requeued for re-indexing)
 ```
 
-Re-indexing 12,000+ items takes ~12 minutes. The dedup worker picks up unflagged items automatically in batches of 50.
+**Fix** — trigger the housekeeping sync. It deletes orphans and clears
+`vectordb_indexed` flags for missing items in one shot; the dedup worker
+re-indexes them async, subject to the embeddings gate:
+
+```bash
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+req = urllib.request.Request(
+    'http://localhost:8000/api/admin/housekeeping/vector-sync', method='POST')
+print(json.dumps(json.loads(urllib.request.urlopen(req, timeout=120).read()), indent=2))
+"
+
+# Monitor re-indexing (dedup worker processes 50 items/batch)
+docker logs -f liga-news-backend 2>&1 | grep "Indexing.*items"
+```
+
+CPU embeddings on docker-ai re-index roughly 50 items per 10-20 s, so ~1,700 items takes ~10 min and ~12,000 items takes a couple of hours.
 
 ### Duplicate Detection Issues
 

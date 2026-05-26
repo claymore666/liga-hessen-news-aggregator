@@ -10,7 +10,7 @@ The classifier provides fast ML-based classification using embedding models. It 
 - `backend/services/classifier_worker.py` - Background worker
 - `backend/services/embeddings_gate.py` - Time-of-day gate (see [GPU1_POWER_MANAGEMENT.md](../operations/GPU1_POWER_MANAGEMENT.md#configuration))
 
-**Embeddings gate**: the background classifier and dedup workers run freely 08:00-18:00 Europe/Berlin (configurable via `CPU_EMBEDDINGS_HOURS_*`). Outside that window they idle unless gpu1 is reachable. User-triggered fetches via the pipeline are not gated.
+**Embeddings gate**: inside 08:00-18:00 Europe/Berlin (configurable via `CPU_EMBEDDINGS_HOURS_*`), all embedding work is allowed. Outside that window it's allowed only when gpu1 is reachable. The gate is consulted by the classifier worker, the dedup worker (Phase 2 + indexing — Phase 1 URL/hash dedup runs regardless), the scheduler's pre-filter pass and the pipeline's semantic dedup / fallback pre-filter / vector indexing. When the gate is closed, items queue with the appropriate metadata flags missing; the classifier and dedup workers backfill them once the gate reopens. The manual `/admin/classify-items` endpoint is the only embedding-bound call that bypasses the gate.
 
 ## Architecture
 

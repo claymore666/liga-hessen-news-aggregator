@@ -327,13 +327,22 @@ print(urllib.request.urlopen(req).read().decode())
 
 ### Solution: Re-index Missing Items (Stale Flags)
 
-When PostgreSQL metadata flags say items are indexed but ChromaDB doesn't have them
-(e.g., after ChromaDB volume reset or container rebuild):
+When PostgreSQL metadata flags say items are indexed but the vector store
+doesn't have them (e.g., after a volume reset or container rebuild), trigger
+the housekeeping sync — it deletes orphans and clears `vectordb_indexed` flags
+for missing items so the dedup worker re-indexes them (subject to the
+embeddings gate):
 
 ```bash
-# See TROUBLESHOOTING.md → "VectorDB Index Out of Sync" for full procedure
-# Summary: reset vectordb_indexed flags → dedup worker re-indexes automatically
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+req = urllib.request.Request(
+    'http://localhost:8000/api/admin/housekeeping/vector-sync', method='POST')
+print(json.dumps(json.loads(urllib.request.urlopen(req, timeout=120).read()), indent=2))
+"
 ```
+
+Preview first with `/admin/housekeeping/vector-sync/preview`.
 
 ### Automatic Sync
 

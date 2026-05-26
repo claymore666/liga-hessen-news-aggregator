@@ -772,18 +772,19 @@ class DedupWorker:
             if abs(diff) > 50:
                 logger.error(
                     f"VECTORDB SYNC CHECK: DB says {db_count} items indexed, "
-                    f"ChromaDB has {chromadb_count} items. "
+                    f"vector store has {chromadb_count} items. "
                     f"Difference: {diff} items. "
-                    f"Run /sync-duplicate-store or reset vectordb_indexed flags."
+                    f"POST /admin/housekeeping/vector-sync to delete orphans "
+                    f"and requeue missing items for re-indexing."
                 )
             elif diff > 0:
                 logger.warning(
-                    f"VectorDB sync: {diff} items in DB but not in ChromaDB "
-                    f"(DB: {db_count}, ChromaDB: {chromadb_count})"
+                    f"VectorDB sync: {diff} items in DB but not in vector store "
+                    f"(DB: {db_count}, vector store: {chromadb_count})"
                 )
             else:
                 logger.info(
-                    f"VectorDB sync check OK: DB={db_count}, ChromaDB={chromadb_count}"
+                    f"VectorDB sync check OK: DB={db_count}, vector store={chromadb_count}"
                 )
         except Exception as e:
             logger.warning(f"VectorDB sync check failed: {e}")
