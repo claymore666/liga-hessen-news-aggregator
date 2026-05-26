@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, func, and_
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db, utcnow
+from database import get_db, json_merge_remove, utcnow
 from models import Item, Priority, Setting
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,12 @@ class VectorSyncPreview(BaseModel):
 class VectorSyncResult(BaseModel):
     """Result of vector index sync operation."""
     orphaned_deleted: int = Field(description="Orphaned IDs removed from vector index")
-    missing_indexed: int = Field(description="Missing IDs added to vector index")
+    missing_queued_for_reindex: int = Field(
+        description=(
+            "DB items that were flagged vectordb_indexed but missing from the vector "
+            "store; their flag was cleared so dedup_worker re-indexes them async."
+        )
+    )
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -372,34 +377,58 @@ async def execute_vector_sync(
 ) -> VectorSyncResult:
     """Sync vector index with database.
 
-    - Removes orphaned entries (IDs in vector index but not in database)
-    - Does NOT re-index missing items (too expensive, handled by classifier worker)
+    - Removes orphaned entries (IDs in vector index but not in database).
+    - For items present in DB but missing from the vector index, clears their
+      vectordb_indexed flag so dedup_worker._process_unindexed_items re-indexes
+      them on its next pass (subject to the embeddings gate).
     """
     from services.relevance_filter import create_relevance_filter
 
     relevance_filter = await create_relevance_filter()
     if not relevance_filter:
-        return VectorSyncResult(orphaned_deleted=0, missing_indexed=0)
+        return VectorSyncResult(orphaned_deleted=0, missing_queued_for_reindex=0)
 
-    # Get all IDs from vector index
     indexed_ids = await relevance_filter.get_all_indexed_ids()
     indexed_set = set(indexed_ids)
 
-    # Get all IDs from database
     result = await db.execute(select(Item.id))
     db_ids = {str(row[0]) for row in result.fetchall()}
 
-    # Find orphaned (in vector but not in DB)
     orphaned = list(indexed_set - db_ids)
+    missing = [int(x) for x in (db_ids - indexed_set)]
 
-    # Delete orphaned entries
     orphaned_deleted = 0
     if orphaned:
         deleted_search, deleted_dup = await relevance_filter.delete_items(orphaned)
         orphaned_deleted = max(deleted_search, deleted_dup)
         logger.info(f"Vector sync: deleted {orphaned_deleted} orphaned entries")
 
+    missing_queued = 0
+    if missing:
+        # Clear vectordb_indexed* keys so dedup_worker re-indexes these items.
+        # Process in chunks to keep the UPDATE statement size reasonable.
+        chunk = 1000
+        for i in range(0, len(missing), chunk):
+            batch = missing[i : i + chunk]
+            res = await db.execute(
+                update(Item)
+                .where(Item.id.in_(batch))
+                .values(
+                    metadata_=json_merge_remove(
+                        Item.metadata_,
+                        {},
+                        ["vectordb_indexed", "vectordb_indexed_at"],
+                    )
+                )
+            )
+            missing_queued += res.rowcount or 0
+        await db.commit()
+        logger.info(
+            f"Vector sync: cleared vectordb_indexed flag for {missing_queued} items "
+            "(dedup_worker will re-index them)"
+        )
+
     return VectorSyncResult(
         orphaned_deleted=orphaned_deleted,
-        missing_indexed=0,  # Not implemented - too expensive
+        missing_queued_for_reindex=missing_queued,
     )
