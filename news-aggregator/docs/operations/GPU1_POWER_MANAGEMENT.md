@@ -106,7 +106,14 @@ Environment variables (set in `.env` or docker-compose.yml):
 
 **Active Hours**: WoL packets are only sent during active hours (default 7:00-16:00 Mon-Fri). Outside these times, items queue with `needs_llm_processing=true` and are processed when gpu1 next wakes. If gpu1 is already awake, it will be used regardless of the time.
 
-**Embeddings Gate** (classifier + dedup workers): Inside `[CPU_EMBEDDINGS_HOURS_START, CPU_EMBEDDINGS_HOURS_END)` in `CPU_EMBEDDINGS_TZ` (default 08:00-18:00 Europe/Berlin) the background workers always run. Outside that window they only run when gpu1 is reachable; otherwise they idle and the existing retry loop drains the backlog when the window reopens. Phase 1 URL/hash dedup runs regardless so URL-level duplicates still collapse overnight. The pipeline (user-triggered fetches) is intentionally not gated. The gate logs only on state transitions (e.g. `Embeddings gate: out_of_hours_gpu1_down`) — steady state is silent. Implemented in `backend/services/embeddings_gate.py`.
+**Embeddings Gate**: Inside `[CPU_EMBEDDINGS_HOURS_START, CPU_EMBEDDINGS_HOURS_END)` in `CPU_EMBEDDINGS_TZ` (default 08:00-18:00 Europe/Berlin) all embedding work is allowed. Outside that window it's allowed only when gpu1 is reachable; otherwise the consumers skip their embedding-bound work and dedicated catchup workers backfill once the gate reopens. Consulted by:
+
+- the classifier worker (whole loop),
+- the dedup worker (Phase 2 semantic dedup + vector indexing — Phase 1 URL/hash dedup runs regardless),
+- the scheduler's pre-filter pass (classifier_worker backfills missing `pre_filter`),
+- the pipeline's semantic dedup, fallback pre-filter and vector indexing (dedup_worker backfills both Phase 2 and indexing).
+
+The only embedding-bound call that bypasses the gate is the manual `/admin/classify-items` admin endpoint. The gate logs only on state transitions (e.g. `Embeddings gate: out_of_hours_gpu1_down`) — steady state is silent. Implemented in `backend/services/embeddings_gate.py`.
 
 ## Verification
 

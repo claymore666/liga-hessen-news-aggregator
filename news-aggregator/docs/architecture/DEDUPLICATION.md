@@ -482,7 +482,7 @@ Items track their processing state via metadata:
 | `metadata_.duplicate_checked` | Dedup check completed | After duplicate check (even if none found) |
 | `metadata_.duplicate_checked_at` | Timestamp of check | Same as above |
 | `metadata_.duplicate_score` | Similarity score | If duplicate found |
-| `metadata_.vectordb_indexed` | ChromaDB indexing | After successful indexing |
+| `metadata_.vectordb_indexed` | Vector store indexing | After successful indexing |
 
 ### Backlog Query
 
