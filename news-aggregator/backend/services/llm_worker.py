@@ -23,6 +23,15 @@ from services.llm.base import RateLimitError
 logger = logging.getLogger(__name__)
 
 
+class BatchProcessingError(Exception):
+    """Raised when a batch makes zero progress (every item failed).
+
+    Bubbles to the main loop so per-item failures feed the consecutive-error
+    backoff/circuit-breaker instead of silently spinning and inflating the
+    error counter (e.g. when gpu1 is asleep or the model is unavailable).
+    """
+
+
 class LLMWorker:
     """
     Priority queue worker for LLM processing.
@@ -372,6 +381,9 @@ class LLMWorker:
                     pass  # Will be picked up via backlog
             raise  # Let outer loop handle backoff
 
+        except BatchProcessingError:
+            raise  # Let outer loop handle backoff (items remain in backlog)
+
         except Exception as e:
             logger.error(f"Error processing fresh items: {e}")
             async with self._stats_lock:
@@ -439,6 +451,8 @@ class LLMWorker:
             processed = await self._process_items(item_ids, processor, is_fresh=False)
         except RateLimitError:
             raise  # Let outer loop handle backoff
+        except BatchProcessingError:
+            raise  # Let outer loop handle backoff + circuit breaker
         except Exception as e:
             logger.error(f"Error processing backlog items: {e}")
             async with self._stats_lock:
@@ -477,6 +491,7 @@ class LLMWorker:
         from services.item_events import record_event, EVENT_LLM_PROCESSED
 
         processed = 0
+        failed = 0
         item_type = "fresh" if is_fresh else "backlog"
 
         for item_id in item_ids:
@@ -798,9 +813,20 @@ class LLMWorker:
                 raise
 
             except Exception as e:
+                failed += 1
                 logger.warning(f"Failed to process {item_type} item {item_id}: {e}")
                 async with self._stats_lock:
                     self._stats["errors"] += 1
+
+        # If the whole batch failed without a single success, surface it to the
+        # main loop so consecutive-error backoff and the circuit breaker engage.
+        # Otherwise a persistent failure mode (gpu1 asleep, model unavailable,
+        # poison items re-selected every cycle) silently spins and inflates the
+        # error counter without ever tripping the breaker.
+        if processed == 0 and failed > 0:
+            raise BatchProcessingError(
+                f"All {failed} {item_type} item(s) in batch failed"
+            )
 
         return processed
 

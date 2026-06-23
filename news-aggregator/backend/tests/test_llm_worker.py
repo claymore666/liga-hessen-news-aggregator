@@ -348,6 +348,103 @@ class TestLLMWorkerProcessItems:
         # Should stop immediately due to pause
         assert result == 0
 
+    @pytest.mark.asyncio
+    async def test_process_items_raises_when_whole_batch_fails(self, worker):
+        """A batch with zero successes and >=1 failure raises BatchProcessingError
+        so the main loop engages consecutive-error backoff / circuit breaker
+        instead of silently spinning and inflating the error counter."""
+        from services.llm_worker import BatchProcessingError
+
+        mock_item = MagicMock()
+        mock_item.id = 1
+        mock_item.title = "Test Article"
+        mock_item.content = "Test content"
+        mock_item.url = "https://test.com/1"
+        mock_item.channel = MagicMock()
+        mock_item.channel.source = MagicMock()
+        mock_item.channel.source.name = "Test Source"
+        mock_item.needs_llm_processing = True
+        mock_item.metadata_ = {}
+        mock_item.priority_score = 50
+        mock_item.assigned_aks = None
+        mock_item.published_at = None
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_item
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        # Processor raises for every item (e.g. gpu1 asleep / model unavailable)
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            side_effect=ConnectionError("model unavailable")
+        )
+
+        with patch("services.llm_worker.async_session_maker") as mock_session:
+            mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_session.return_value.__aexit__ = AsyncMock(return_value=None)
+            with patch("services.item_events.record_event", new_callable=AsyncMock):
+                with pytest.raises(BatchProcessingError):
+                    await worker._process_items([1, 2], mock_processor, is_fresh=False)
+
+        # Per-item failures were counted
+        assert worker._stats["errors"] == 2
+
+    @pytest.mark.asyncio
+    async def test_process_items_no_raise_on_partial_success(self, worker):
+        """A batch with at least one success must NOT raise, even if other
+        items fail — only fully-failed batches trip the breaker."""
+        good_item = MagicMock()
+        good_item.id = 1
+        good_item.title = "Good"
+        good_item.content = "c"
+        good_item.url = "https://test.com/1"
+        good_item.channel = MagicMock()
+        good_item.channel.source = MagicMock()
+        good_item.channel.source.name = "Src"
+        good_item.needs_llm_processing = True
+        good_item.metadata_ = {}
+        good_item.priority_score = 50
+        good_item.assigned_aks = None
+        good_item.published_at = None
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = good_item
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        analysis = {
+            "summary": "s",
+            "priority": "medium",
+            "relevant": True,
+            "relevance_score": 0.7,
+            "assigned_aks": [],
+            "tags": [],
+        }
+        # First item succeeds, second raises
+        mock_processor = MagicMock()
+        mock_processor.analyze_from_data_with_messages = AsyncMock(
+            side_effect=[
+                (analysis, [{"role": "assistant", "content": "{}"}]),
+                ConnectionError("boom"),
+            ]
+        )
+        mock_processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
+
+        with patch("services.llm_worker.async_session_maker") as mock_session:
+            mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_session.return_value.__aexit__ = AsyncMock(return_value=None)
+            with patch("services.item_events.record_event", new_callable=AsyncMock):
+                result = await worker._process_items([1, 2], mock_processor, is_fresh=False)
+
+        # One success → no raise; one failure counted
+        assert result == 1
+        assert worker._stats["errors"] == 1
+
 
 class TestModuleFunctions:
     """Tests for module-level functions."""
