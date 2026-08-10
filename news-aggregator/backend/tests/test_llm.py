@@ -1,5 +1,6 @@
 """Tests for LLM services."""
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,22 @@ from services.llm import (
     OllamaProvider,
     OpenRouterProvider,
 )
+
+
+def _mock_http_client(get=None, post=None):
+    """Build a stand-in for a provider's persistent httpx.AsyncClient.
+
+    Providers hold a long-lived client via ``_get_client()`` and call
+    ``await client.get/post(...)`` directly, so the mock must expose awaitable
+    methods rather than an async context manager.
+    """
+    client = MagicMock(spec=httpx.AsyncClient)
+    client.is_closed = False
+    if get is not None:
+        client.get = AsyncMock(return_value=get)
+    if post is not None:
+        client.post = AsyncMock(return_value=post)
+    return client
 
 
 # === LLMResponse Tests ===
@@ -76,11 +93,7 @@ class TestOllamaProvider:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("services.llm.ollama.httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
-
+        with patch.object(provider, "_client", _mock_http_client(post=mock_response)):
             response = await provider.complete("Test prompt")
 
         assert response.text == "Test response"
@@ -95,11 +108,7 @@ class TestOllamaProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        with patch("services.llm.ollama.httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
-                return_value=mock_response
-            )
-
+        with patch.object(provider, "_client", _mock_http_client(get=mock_response)):
             result = await provider.is_available()
 
         assert result is True
@@ -109,11 +118,10 @@ class TestOllamaProvider:
         """is_available should return False on connection error."""
         provider = OllamaProvider()
 
-        with patch("services.llm.ollama.httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
-                side_effect=Exception("Connection refused")
-            )
+        client = _mock_http_client()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
+        with patch.object(provider, "_client", client):
             result = await provider.is_available()
 
         assert result is False
@@ -155,11 +163,7 @@ class TestOpenRouterProvider:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("services.llm.openrouter.httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
-
+        with patch.object(provider, "_client", _mock_http_client(post=mock_response)):
             response = await provider.complete("Test prompt")
 
         assert response.text == "Test response"

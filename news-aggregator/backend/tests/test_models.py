@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import (
 from database import utcnow
+from models import (
     Channel,
     ConnectorType,
     Item,

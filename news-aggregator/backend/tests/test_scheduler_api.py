@@ -1,7 +1,25 @@
 """Tests for scheduler API endpoints."""
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
+
+from services.scheduler import scheduler
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def stop_scheduler_between_tests():
+    """Stop the module-level scheduler after each test.
+
+    ``scheduler`` is an AsyncIOScheduler singleton that binds to whichever event
+    loop started it, while pytest-asyncio gives every test a fresh loop. A
+    scheduler left running by one test therefore raises "Event loop is closed"
+    in the next one. Shutting it down here happens while the owning loop is
+    still alive, which keeps these tests independent of execution order.
+    """
+    yield
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 class TestSchedulerStatus:
@@ -56,7 +74,6 @@ class TestSchedulerControl:
         data = response.json()
         assert data["status"] == "already_running"
 
-    @pytest.mark.skip(reason="APScheduler event loop issues in test environment")
     @pytest.mark.asyncio
     async def test_stop_scheduler(self, client: AsyncClient):
         """POST /api/scheduler/stop stops scheduler."""
@@ -70,7 +87,6 @@ class TestSchedulerControl:
         assert "status" in data
         assert data["status"] in ("stopped", "already_stopped")
 
-    @pytest.mark.skip(reason="APScheduler event loop issues in test environment")
     @pytest.mark.asyncio
     async def test_stop_scheduler_already_stopped(self, client: AsyncClient):
         """Stopping already stopped scheduler returns appropriate status."""

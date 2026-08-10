@@ -324,18 +324,44 @@ class TestConfigImport:
         """Import in replace mode clears existing config."""
         # First, verify we have existing data
         export_before = await client.get("/api/admin/config/export")
-        assert len(export_before.json()["sources"]) >= 1
+        names_before = {s["name"] for s in export_before.json()["sources"]}
+        assert source_in_db.name in names_before
 
-        # Import with replace mode
+        # Import with replace mode (confirm_delete acknowledges the cascade delete)
         response = await client.post(
             "/api/admin/config/import",
-            params={"mode": "replace"},
+            params={"mode": "replace", "confirm_delete": True},
             json=sample_config_export,
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
+
+        # The pre-existing source must be gone, replaced by the imported one
+        export_after = await client.get("/api/admin/config/export")
+        names_after = {s["name"] for s in export_after.json()["sources"]}
+        assert source_in_db.name not in names_after
+        assert sample_config_export["sources"][0]["name"] in names_after
+
+    @pytest.mark.asyncio
+    async def test_import_replace_requires_confirm_delete(
+        self, client: AsyncClient, sample_config_export: dict[str, Any], source_in_db: Source
+    ):
+        """Replace mode without confirm_delete is refused and deletes nothing."""
+        response = await client.post(
+            "/api/admin/config/import",
+            params={"mode": "replace"},
+            json=sample_config_export,
+        )
+
+        assert response.status_code == 400
+        assert "confirm_delete" in response.json()["detail"]
+
+        # Existing config must be untouched
+        export_after = await client.get("/api/admin/config/export")
+        names_after = {s["name"] for s in export_after.json()["sources"]}
+        assert source_in_db.name in names_after
 
     @pytest.mark.asyncio
     async def test_import_invalid_config_rejected(self, client: AsyncClient):
