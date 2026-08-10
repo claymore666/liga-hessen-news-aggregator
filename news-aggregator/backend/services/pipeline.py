@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, UTC
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, unquote
 
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Channel, Item, Priority, Rule, RuleType
+from models import Channel, Item, Priority, Rule, RuleType, Source
 from config import settings
 from database import utcnow
 
@@ -173,6 +173,23 @@ class Pipeline:
         # Use naive UTC datetime (consistent with DB storage)
         self.cutoff_date = utcnow() - timedelta(days=self.MAX_AGE_DAYS)
 
+    async def _resolve_source_name(self, channel: Channel) -> str | None:
+        """Source name for a channel without relying on lazy loading.
+
+        Callers normally eager-load ``Channel.source``, but when one does not,
+        touching the relationship inside this async path raises SQLAlchemy's
+        ``greenlet_spawn`` error. That used to surface as a swallowed exception
+        that silently downgraded classification to keywords only, so resolve the
+        name explicitly instead.
+        """
+        if "source" not in sa_inspect(channel).unloaded:
+            return channel.source.name if channel.source else None
+
+        if channel.source_id is None:
+            return None
+        source = await self.db.get(Source, channel.source_id)
+        return source.name if source else None
+
     async def process(self, raw_items: list[RawItem], channel: Channel) -> list[Item]:
         """Process raw items through the pipeline.
 
@@ -193,6 +210,9 @@ class Pipeline:
             List of newly created items.
         """
         new_items = []
+        # Resolve once up front: reading channel.source lazily mid-pipeline can
+        # raise in the async session and would be silently swallowed downstream
+        source_name = await self._resolve_source_name(channel)
         # Track items for intra-batch deduplication (items arriving together can't
         # find each other via ChromaDB since neither is indexed yet)
         batch_titles: list[str] = []  # Cleaned titles for comparison
@@ -279,7 +299,7 @@ class Pipeline:
                                 EVENT_DUPLICATE_DETECTED,
                                 data={
                                     "duplicate_title": normalized.title,
-                                    "duplicate_source": channel.source.name if channel.source else None,
+                                    "duplicate_source": source_name,
                                     "duplicate_channel_id": channel.id,
                                     "duplicate_url": normalized.url,
                                     "method": "url_match",
@@ -351,7 +371,7 @@ class Pipeline:
                                         EVENT_DUPLICATE_DETECTED,
                                         data={
                                             "duplicate_title": normalized.title,
-                                            "duplicate_source": channel.source.name if channel.source else None,
+                                            "duplicate_source": source_name,
                                             "duplicate_channel_id": channel.id,
                                             "duplicate_url": normalized.url,
                                             "similarity_score": match_score,
@@ -448,7 +468,7 @@ class Pipeline:
                         _, pre_filter_result = await self.relevance_filter.should_process(
                             title=normalized.title,
                             content=normalized.content,
-                            source=channel.source.name if channel.source else "",
+                            source=source_name or "",
                         )
                     except Exception as e:
                         logger.warning(f"Pre-filter failed, using keywords as fallback: {e}")
@@ -580,7 +600,7 @@ class Pipeline:
                         EVENT_CREATED,
                         data={
                             "channel_id": channel.id,
-                            "source": channel.source.name if channel.source else None,
+                            "source": source_name,
                             "priority": _get_priority_value(item.priority),
                         },
                     )
@@ -617,7 +637,7 @@ class Pipeline:
                             "title": _strip_boilerplate(item.title),
                             "content": _strip_boilerplate(item.content),
                             "metadata": {
-                                "source": channel.source.name if channel.source else "",
+                                "source": source_name or "",
                                 "priority": _get_priority_value(item.priority) if item.priority else None,
                                 "channel_id": str(channel.id),
                                 # UTC epoch float so the classifier's windowed
