@@ -8,9 +8,13 @@ Each pool has independent thresholds and is managed separately.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import random
+import re
+import socket
+import ssl
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -26,6 +30,59 @@ logger = logging.getLogger(__name__)
 # Persistent storage for known good proxies
 KNOWN_PROXIES_FILE = Path(__file__).parent.parent / "data" / "known_proxies.json"
 
+# Leading scheme on a proxy line, e.g. "http://1.2.3.4:8080" or "socks5://..."
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# First IPv4 address appearing in a validation response body
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def parse_proxy_line(line: str) -> str | None:
+    """Extract a canonical ``ip:port`` proxy from one line of a proxy list.
+
+    Sources are wildly inconsistent: bare ``ip:port``, scheme-prefixed
+    ``http://ip:port``, ``ip:port:country:anonymity``, comment lines and
+    CSV-ish headers all appear. Anything that is not a real IPv4 address plus a
+    valid port is rejected rather than passed through as a junk "proxy".
+    """
+    line = line.strip()
+    if not line or line.startswith(("#", "//", ";")):
+        return None
+
+    # Take the first whitespace/comma separated field ("1.2.3.4:80  Germany")
+    line = re.split(r"[\s,]+", line, maxsplit=1)[0]
+    line = _SCHEME_RE.sub("", line)
+    if not line:
+        return None
+
+    # "ip:port", optionally followed by extra ":"-separated metadata
+    parts = line.split(":")
+    if len(parts) < 2:
+        return None
+
+    host, port_str = parts[0], parts[1]
+    try:
+        ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        return None
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        return None
+    if not 1 <= port <= 65535:
+        return None
+
+    return f"{host}:{port}"
+
+
+def _source_label(url: str) -> str:
+    """Short but unambiguous identifier for a proxy source.
+
+    Several sources are literally named ``http.txt``, so the bare filename is
+    useless in logs.
+    """
+    return "/".join(url.split("/")[-3:]) or url
+
 
 class ProxyManager:
     """Independent proxy management service with separate HTTP and HTTPS pools.
@@ -35,19 +92,18 @@ class ProxyManager:
     - https_proxies: HTTPS tunnel capable, filled to min_https_proxies
     """
 
-    # Multiple proxy sources for better coverage
+    # Multiple proxy sources for better coverage.
+    # Line formats differ per source (bare ip:port, scheme-prefixed, ip:port:country,
+    # comment lines) — everything goes through parse_proxy_line.
     PROXY_SOURCES = [
-        # Original sources
         "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
         "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
         "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
-        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
-        # Additional sources - validated more frequently
         "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
-        "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/xResults/RAW.txt",
+        "https://raw.githubusercontent.com/officialputuid/KangProxy/main/http/http.txt",
         "https://vakhov.github.io/fresh-proxy-list/http.txt",
         "https://vakhov.github.io/fresh-proxy-list/https.txt",
         "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
@@ -56,18 +112,24 @@ class ProxyManager:
 
     # Validation settings
     VALIDATION_TIMEOUT = 3.0  # seconds - allow slightly slower proxies
+    # Endpoints that echo the caller's IP as plain text, so we can verify the
+    # response really came back through the proxy.
     VALIDATION_URLS = [
         "http://httpbin.org/ip",
         "http://ifconfig.me/ip",
         "http://icanhazip.com",
         "http://ident.me",
     ]
+    VALIDATION_ATTEMPTS = 2  # Distinct endpoints to try before rejecting a proxy
+    MAX_RESPONSE_BYTES = 4096  # Hard cap on validation response size
     MAX_LATENCY_MS = 2500  # Accept proxies under 2.5 seconds
+    MAX_PROXIES_PER_SOURCE = 20000  # Keep one huge list from swamping the others
     BATCH_SIZE = 25  # Test this many proxies per batch (keep low to avoid CPU spikes)
     BATCH_COOLDOWN = 5  # Seconds between batches to avoid hammering
     REVALIDATION_INTERVAL = 600  # Seconds between health checks (10 min)
     MAX_FAILURES = 3  # Remove proxy after this many consecutive failures
     KNOWN_PROXIES_TO_TRY_FIRST = 20  # Try this many from known list first
+    TUNNEL_TIMEOUT = 5.0  # seconds for the CONNECT + TLS handshake check
 
     def __init__(self):
         # Configurable pool sizes from settings
@@ -96,6 +158,10 @@ class ProxyManager:
         # Known good proxies: {proxy: {latency, failures, last_success, https_capable}}
         self._known_proxies: dict[str, dict] = {}
 
+        # Our own public IP, for transparent-proxy detection
+        self._own_ip: str | None = None
+        self._own_ip_lock = asyncio.Lock()
+
         # Per-connector proxy reservations: {connector_type: {proxy1, proxy2, ...}}
         self._reserved_http: dict[str, set[str]] = defaultdict(set)
         self._reserved_https: dict[str, set[str]] = defaultdict(set)
@@ -108,8 +174,16 @@ class ProxyManager:
             if KNOWN_PROXIES_FILE.exists():
                 with open(KNOWN_PROXIES_FILE, 'r') as f:
                     data = json.load(f)
-                    self._known_proxies = data.get("proxies", {})
-                    logger.info(f"Loaded {len(self._known_proxies)} known proxies from storage")
+                stored = data.get("proxies", {})
+                # Drop anything malformed left behind by earlier parsing bugs,
+                # so we never waste validation cycles on entries like "http://1.2.3.4"
+                self._known_proxies = {
+                    p: info for p, info in stored.items() if parse_proxy_line(p) == p
+                }
+                dropped = len(stored) - len(self._known_proxies)
+                logger.info(f"Loaded {len(self._known_proxies)} known proxies from storage")
+                if dropped:
+                    logger.warning(f"Discarded {dropped} malformed known proxies from storage")
         except Exception as e:
             logger.warning(f"Failed to load known proxies: {e}")
             self._known_proxies = {}
@@ -244,47 +318,135 @@ class ProxyManager:
         return list(all_proxies)
 
     async def _fetch_source(self, client: httpx.AsyncClient, source_url: str) -> set[str]:
-        """Fetch proxies from a single source."""
+        """Fetch and parse proxies from a single source."""
+        label = _source_label(source_url)
         proxies: set[str] = set()
         try:
             response = await client.get(source_url)
             response.raise_for_status()
 
-            for line in response.text.strip().split("\n"):
-                line = line.strip()
-                if line and ":" in line:
-                    parts = line.split(":")
-                    if len(parts) >= 2:
-                        proxy = f"{parts[0]}:{parts[1]}"
-                        proxies.add(proxy)
+            lines = response.text.splitlines()
+            skipped = 0
+            for line in lines:
+                proxy = parse_proxy_line(line)
+                if proxy:
+                    proxies.add(proxy)
+                elif line.strip():
+                    skipped += 1
+
+            if not proxies:
+                logger.warning(f"Source {label} returned {len(lines)} lines but no usable proxies")
+            elif skipped:
+                logger.debug(f"Source {label}: {len(proxies)} proxies, {skipped} unparsable lines")
+
+            if len(proxies) > self.MAX_PROXIES_PER_SOURCE:
+                dropped = len(proxies) - self.MAX_PROXIES_PER_SOURCE
+                proxies = set(random.sample(sorted(proxies), self.MAX_PROXIES_PER_SOURCE))
+                logger.info(f"Source {label} capped at {self.MAX_PROXIES_PER_SOURCE} "
+                            f"proxies ({dropped} dropped)")
         except Exception as e:
-            logger.warning(f"Failed to fetch from {source_url.split('/')[-1]}: {e}")
+            logger.warning(f"Failed to fetch from {label}: {e}")
 
         return proxies
 
-    async def validate_proxy(self, proxy: str) -> tuple[bool, float]:
-        """Test proxy with strict latency requirement (<2500ms)."""
-        proxy_url = f"http://{proxy}"
-        validation_url = random.choice(self.VALIDATION_URLS)
-        start_time = time.time()
+    async def _get_own_ip(self) -> str | None:
+        """Our public IP without a proxy, used to detect transparent proxies.
 
+        Cached for the process lifetime; a miss just disables that one check.
+        """
+        if self._own_ip is not None:
+            return self._own_ip
+
+        async with self._own_ip_lock:
+            if self._own_ip is not None:
+                return self._own_ip
+            for url in self.VALIDATION_URLS:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+                        response = await client.get(url)
+                    if response.status_code != 200:
+                        continue
+                    match = _IPV4_RE.search(response.text[: self.MAX_RESPONSE_BYTES])
+                    if match:
+                        self._own_ip = match.group(0)
+                        logger.info(f"Own public IP for proxy checks: {self._own_ip}")
+                        return self._own_ip
+                except Exception as e:
+                    logger.debug(f"Own-IP lookup via {url} failed: {e}")
+            logger.warning("Could not determine own public IP — "
+                           "transparent-proxy detection disabled")
+            return None
+
+    async def _probe_proxy(self, proxy: str, url: str, own_ip: str | None) -> tuple[str, float]:
+        """Single validation probe. Returns (verdict, latency_ms).
+
+        Verdicts: ok | dead | slow | transparent | bad_status | bad_body
+        """
+        start_time = time.time()
         try:
             async with httpx.AsyncClient(
-                proxy=proxy_url,
+                proxy=f"http://{proxy}",
                 timeout=self.VALIDATION_TIMEOUT,
+                follow_redirects=False,  # a redirect means a captive portal, not a proxy
             ) as client:
-                response = await client.get(validation_url)
-                response.raise_for_status()
-
-                latency = (time.time() - start_time) * 1000
-
-                if latency <= self.MAX_LATENCY_MS:
-                    return True, latency
-                return False, latency
-
+                async with client.stream("GET", url) as response:
+                    if response.status_code != 200:
+                        return "bad_status", (time.time() - start_time) * 1000
+                    # Cap the body: a hostile proxy must not be able to stream at us forever
+                    body = b""
+                    async for chunk in response.aiter_bytes():
+                        body += chunk
+                        if len(body) >= self.MAX_RESPONSE_BYTES:
+                            break
         except Exception as e:
-            logger.debug(f"Proxy validation failed for {proxy}: {e}")
+            logger.debug(f"Proxy probe failed for {proxy} via {url}: {e}")
+            return "dead", 0.0
+
+        latency = (time.time() - start_time) * 1000
+
+        # The endpoint echoes the caller's IP. No IP in the body means we did not
+        # reach it — an error page or interception, not a working proxy.
+        match = _IPV4_RE.search(body.decode("utf-8", "replace"))
+        if not match:
+            return "bad_body", latency
+
+        if own_ip and match.group(0) == own_ip:
+            # Request went out under our own IP: transparent proxy, useless for scraping
+            return "transparent", latency
+
+        if latency > self.MAX_LATENCY_MS:
+            return "slow", latency
+
+        return "ok", latency
+
+    async def validate_proxy(self, proxy: str) -> tuple[bool, float]:
+        """Verify a proxy actually forwards traffic, under the latency limit.
+
+        Checks that the response came back through the proxy (the echoed IP is
+        neither missing nor our own), not merely that some HTTP 200 arrived.
+        Endpoint-specific failures are retried against a second endpoint so a
+        rate-limited echo service does not condemn a good proxy.
+        """
+        if parse_proxy_line(proxy) != proxy:
+            logger.debug(f"Skipping malformed proxy entry: {proxy!r}")
             return False, 0.0
+
+        own_ip = await self._get_own_ip()
+        attempts = min(self.VALIDATION_ATTEMPTS, len(self.VALIDATION_URLS))
+        urls = random.sample(self.VALIDATION_URLS, attempts)
+
+        for url in urls:
+            verdict, latency = await self._probe_proxy(proxy, url, own_ip)
+            if verdict == "ok":
+                return True, latency
+            # Verdicts that indict the proxy itself — no point trying another endpoint
+            if verdict in ("dead", "slow", "transparent"):
+                logger.debug(f"Proxy {proxy} rejected: {verdict} ({latency:.0f}ms)")
+                return False, latency
+            # bad_status / bad_body may be the endpoint's fault; try the next one
+
+        logger.debug(f"Proxy {proxy} rejected: no endpoint returned a usable response")
+        return False, 0.0
 
     async def validate_https_tunnel(self, proxy: str) -> bool:
         """Test if proxy supports HTTPS CONNECT tunnel to x.com."""
@@ -292,37 +454,61 @@ class ProxyManager:
         return await loop.run_in_executor(None, self._validate_https_tunnel_sync, proxy)
 
     def _validate_https_tunnel_sync(self, proxy: str) -> bool:
-        """Synchronous HTTPS tunnel validation (run in executor to avoid blocking event loop)."""
-        import socket
+        """Synchronous HTTPS tunnel validation (run in executor to avoid blocking event loop).
 
-        try:
-            proxy_host, proxy_port = proxy.split(":")
-            proxy_port = int(proxy_port)
-        except ValueError:
+        A CONNECT that answers 200 is not proof of a usable tunnel — some proxies
+        accept CONNECT and then serve their own content. We complete a real TLS
+        handshake to x.com through the tunnel before calling it HTTPS-capable.
+        """
+        if parse_proxy_line(proxy) != proxy:
             return False
+        proxy_host, proxy_port_str = proxy.split(":")
+        proxy_port = int(proxy_port_str)
 
+        target = "x.com"
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.settimeout(5.0)
+            sock.settimeout(self.TUNNEL_TIMEOUT)
             sock.connect((proxy_host, proxy_port))
 
-            connect_request = f"CONNECT x.com:443 HTTP/1.1\r\nHost: x.com:443\r\n\r\n"
-            sock.send(connect_request.encode())
+            connect_request = (
+                f"CONNECT {target}:443 HTTP/1.1\r\n"
+                f"Host: {target}:443\r\n\r\n"
+            )
+            sock.sendall(connect_request.encode())
 
-            response = sock.recv(1024).decode()
+            # Read until the end of the response headers, bounded in size and time
+            response = b""
+            while b"\r\n\r\n" not in response and len(response) < self.MAX_RESPONSE_BYTES:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                response += chunk
 
-            if "200" in response.split("\r\n")[0]:
-                logger.debug(f"HTTPS tunnel OK for {proxy}")
-                return True
-            else:
-                logger.debug(f"HTTPS tunnel failed for {proxy}: {response.split(chr(13))[0]}")
+            status_line = response.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+            fields = status_line.split()
+            # "HTTP/1.1 200 Connection established" — match the code field exactly,
+            # so a "200" appearing elsewhere in the line cannot pass
+            if len(fields) < 2 or fields[1] != "200":
+                logger.debug(f"HTTPS tunnel refused by {proxy}: {status_line!r}")
                 return False
+
+            # Prove the tunnel carries TLS end to end
+            context = ssl.create_default_context()
+            with context.wrap_socket(sock, server_hostname=target) as tls_sock:
+                tls_sock.do_handshake()
+
+            logger.debug(f"HTTPS tunnel OK for {proxy}")
+            return True
 
         except Exception as e:
             logger.debug(f"HTTPS tunnel test failed for {proxy}: {e}")
             return False
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     async def _search_batch(self) -> tuple[int, int]:
         """Test a batch of proxies. Returns (http_found, https_found)."""

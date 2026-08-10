@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
-from services.proxy_manager import ProxyManager, KNOWN_PROXIES_FILE
+from services.proxy_manager import KNOWN_PROXIES_FILE, ProxyManager, parse_proxy_line
 
 
 @pytest.fixture
@@ -134,63 +134,173 @@ class TestProxyFailureTracking:
         assert "1.2.3.4:8080" in manager._known_proxies
 
 
+class TestParseProxyLine:
+    """Tests for proxy list line parsing."""
+
+    @pytest.mark.parametrize("line,expected", [
+        ("1.2.3.4:8080", "1.2.3.4:8080"),
+        ("http://199.19.73.26:1080", "199.19.73.26:1080"),
+        ("socks5://9.9.9.9:1080", "9.9.9.9:1080"),
+        ("157.66.16.48:8181:Indonesia", "157.66.16.48:8181"),
+        ("1.2.3.4:80  Germany elite", "1.2.3.4:80"),
+        ("1.2.3.4:80,DE,elite", "1.2.3.4:80"),
+        ("  8.8.8.8:443  ", "8.8.8.8:443"),
+        ("1.2.3.4:8080\r", "1.2.3.4:8080"),
+    ])
+    def test_accepts_known_formats(self, line, expected):
+        """Should normalise every format the configured sources emit."""
+        assert parse_proxy_line(line) == expected
+
+    @pytest.mark.parametrize("line", [
+        "", "   ",
+        "# comment: 1.2.3.4:80",
+        "// note",
+        "IP:PORT",
+        "Country:Anonymity",
+        "1.2.3.4",            # no port
+        "1.2.3.4:0",          # port out of range
+        "1.2.3.4:70000",      # port out of range
+        "999.1.1.1:80",       # not a valid IPv4
+        "1.2.3:80",           # truncated IPv4
+        "example.com:8080",   # hostnames are not usable as-is
+        "http://",
+        "1.2.3.4:80abc",
+    ])
+    def test_rejects_junk(self, line):
+        """Should reject anything that is not a real ip:port."""
+        assert parse_proxy_line(line) is None
+
+
+class _FakeStream:
+    """Stand-in for an httpx streaming response."""
+
+    def __init__(self, status=200, body=b'{"origin": "203.0.113.99"}', delay=0.0, exc=None):
+        self.status_code = status
+        self._body = body
+        self._delay = delay
+        self._exc = exc
+
+    async def __aenter__(self):
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._exc:
+            raise self._exc
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def aiter_bytes(self):
+        yield self._body
+
+
+def _patch_client(responses):
+    """Patch httpx.AsyncClient so .stream() serves `responses` in order."""
+    queue = list(responses)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, method, url):
+            return queue.pop(0) if queue else _FakeStream(status=500)
+
+    return patch("httpx.AsyncClient", _FakeClient)
+
+
+@pytest.fixture
+def validating_manager(manager):
+    """Manager with a known own-IP so validation never touches the network."""
+    manager._own_ip = "198.51.100.1"
+    return manager
+
+
 class TestValidateProxy:
     """Tests for proxy validation."""
 
     @pytest.mark.asyncio
-    async def test_validate_proxy_success(self, manager):
-        """Should return True for working proxy."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_response = MagicMock()
-            mock_response.raise_for_status = MagicMock()
-
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response)
-            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_client_instance.__aexit__ = AsyncMock(return_value=None)
-            mock_client.return_value = mock_client_instance
-
-            success, latency = await manager.validate_proxy("1.2.3.4:8080")
-            assert success is True
-            assert latency > 0
+    async def test_validate_proxy_success(self, validating_manager):
+        """Should accept a proxy that echoes back a foreign IP."""
+        with _patch_client([_FakeStream(body=b"203.0.113.99")]):
+            success, latency = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is True
+        assert latency > 0
 
     @pytest.mark.asyncio
-    async def test_validate_proxy_failure(self, manager):
-        """Should return False for failing proxy."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(side_effect=Exception("Connection failed"))
-            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_client_instance.__aexit__ = AsyncMock(return_value=None)
-            mock_client.return_value = mock_client_instance
-
-            success, latency = await manager.validate_proxy("1.2.3.4:8080")
-            assert success is False
-            assert latency == 0.0
+    async def test_validate_proxy_failure(self, validating_manager):
+        """Should reject a proxy that cannot be reached."""
+        with _patch_client([_FakeStream(exc=Exception("Connection failed"))]):
+            success, latency = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is False
+        assert latency == 0.0
 
     @pytest.mark.asyncio
-    async def test_validate_proxy_slow(self, manager):
-        """Should reject slow proxies."""
-        import time
+    async def test_validate_proxy_slow(self, validating_manager):
+        """Should reject proxies over the latency budget."""
+        validating_manager.MAX_LATENCY_MS = 0.001  # Impossibly low
+        with _patch_client([_FakeStream(body=b"203.0.113.99", delay=0.01)]):
+            success, _ = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is False
 
-        async def slow_request(*args, **kwargs):
-            await asyncio.sleep(0.01)  # Small delay for test
-            response = MagicMock()
-            response.raise_for_status = MagicMock()
-            return response
+    @pytest.mark.asyncio
+    async def test_rejects_transparent_proxy(self, validating_manager):
+        """Should reject a proxy that leaks our own IP (no anonymity)."""
+        with _patch_client([_FakeStream(body=b"198.51.100.1")]):
+            success, _ = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is False
 
-        # Set very low max latency to trigger rejection
-        manager.MAX_LATENCY_MS = 0.001  # Impossibly low
+    @pytest.mark.asyncio
+    async def test_rejects_body_without_ip(self, validating_manager):
+        """Should reject a captive portal / error page that echoes no IP."""
+        body = b"<html><body>Access denied</body></html>"
+        with _patch_client([_FakeStream(body=body), _FakeStream(body=body)]):
+            success, _ = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is False
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get = slow_request
-            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_client_instance.__aexit__ = AsyncMock(return_value=None)
-            mock_client.return_value = mock_client_instance
+    @pytest.mark.asyncio
+    async def test_rejects_redirect(self, validating_manager):
+        """Should reject a redirect — a real proxy returns the response itself."""
+        with _patch_client([_FakeStream(status=302, body=b""), _FakeStream(status=302, body=b"")]):
+            success, _ = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is False
 
-            success, latency = await manager.validate_proxy("1.2.3.4:8080")
-            assert success is False
+    @pytest.mark.asyncio
+    async def test_retries_second_endpoint(self, validating_manager):
+        """Should not condemn a good proxy when one echo endpoint misbehaves."""
+        with _patch_client([
+            _FakeStream(status=429, body=b"rate limited"),  # endpoint's fault
+            _FakeStream(body=b"203.0.113.99"),              # proxy is actually fine
+        ]):
+            success, _ = await validating_manager.validate_proxy("1.2.3.4:8080")
+        assert success is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_proxy_without_network(self, validating_manager):
+        """Should reject junk entries before opening any connection."""
+        with _patch_client([]):  # any stream call would yield a 500
+            success, latency = await validating_manager.validate_proxy("http://1.2.3.4")
+        assert success is False
+        assert latency == 0.0
+
+
+class TestHttpsTunnelValidation:
+    """Tests for the CONNECT tunnel check."""
+
+    def test_rejects_malformed_proxy(self, manager):
+        """Should reject junk before touching a socket."""
+        assert manager._validate_https_tunnel_sync("not-a-proxy") is False
+
+    def test_rejects_unreachable_proxy(self, manager):
+        """Should fail closed when the proxy refuses the connection."""
+        manager.TUNNEL_TIMEOUT = 0.25
+        # 192.0.2.0/24 is TEST-NET-1: guaranteed not routable
+        assert manager._validate_https_tunnel_sync("192.0.2.1:9") is False
 
 
 class TestRoundRobinRotation:
