@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useStatsStore, useUiStore } from '@/stores'
 import {
@@ -77,19 +77,55 @@ function selectPeriod(days: number) {
   uiStore.setPeriodDays(days)
 }
 
+// Let the items list run to the bottom of the viewport instead of a fixed cap.
+// Measured live so it survives the alerts banner appearing and window resizes.
+const rootEl = ref<HTMLElement | null>(null)
+const listEl = ref<HTMLElement | null>(null)
+const listCardEl = ref<HTMLElement | null>(null)
+const listMaxHeight = ref('33vh')
+const BOTTOM_GAP = 24 // matches the main content's bottom padding (lg:p-6)
+const MIN_LIST_HEIGHT = 160
+
+function updateListHeight() {
+  if (!listEl.value || !listCardEl.value) return
+  const listRect = listEl.value.getBoundingClientRect()
+  // Chrome below the scroll area inside the card (the wrapper's bottom border)
+  const overhang = listCardEl.value.getBoundingClientRect().bottom - listRect.bottom
+  // Offset from the top of the document, so the result does not depend on scroll position
+  const docTop = listRect.top + window.scrollY
+  const available = window.innerHeight - docTop - overhang - BOTTOM_GAP
+  listMaxHeight.value = `${Math.max(MIN_LIST_HEIGHT, Math.round(available))}px`
+}
+
+let resizeObserver: ResizeObserver | null = null
+
 watch(() => uiStore.periodDays, () => {
   statsStore.fetchStats({ days: uiStore.periodDays })
   loadItems()
 })
 
+watch(items, () => nextTick(updateListHeight))
+
 onMounted(() => {
   statsStore.fetchStats({ days: uiStore.periodDays })
   loadItems()
+
+  updateListHeight()
+  window.addEventListener('resize', updateListHeight)
+  // Anything above the list changing height (alerts, charts, sidebar) shifts its top edge
+  resizeObserver = new ResizeObserver(updateListHeight)
+  if (rootEl.value) resizeObserver.observe(rootEl.value)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateListHeight)
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div ref="rootEl" class="space-y-3">
     <!-- Stats Cards -->
     <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
       <div class="rounded-lg border border-blue-300 bg-blue-100 py-2 px-3">
@@ -178,16 +214,16 @@ onMounted(() => {
 
     <!-- Charts -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div class="bg-white rounded-xl shadow p-6">
+      <div class="bg-white rounded-xl shadow p-4">
         <TopicWordCloud :days="uiStore.periodDays" />
       </div>
-      <div class="bg-white rounded-xl shadow p-6">
+      <div class="bg-white rounded-xl shadow p-4">
         <SourceDonutChart :days="uiStore.periodDays" />
       </div>
     </div>
 
     <!-- Recent Items -->
-    <div class="rounded-lg border border-blue-300 overflow-hidden">
+    <div ref="listCardEl" class="rounded-lg border border-blue-300 overflow-hidden">
       <div class="bg-blue-400 px-4 py-2 border-b border-blue-500">
         <span class="text-sm font-semibold text-white">Neueste relevante Nachrichten</span>
       </div>
@@ -200,7 +236,7 @@ onMounted(() => {
         Keine Nachrichten gefunden
       </div>
 
-      <div v-else class="max-h-[33vh] overflow-y-auto">
+      <div v-else ref="listEl" class="overflow-y-auto" :style="{ maxHeight: listMaxHeight }">
         <ul>
           <li v-for="(item, index) in items" :key="item.id">
             <RouterLink

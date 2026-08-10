@@ -27,9 +27,9 @@ const pastelColors = [
 ]
 
 function getFontSize(count: number, min: number, max: number): string {
-  if (max === min) return '1.5rem'
+  if (max === min) return '1.1rem'
   const ratio = (count - min) / (max - min)
-  const size = 0.75 + ratio * 2.25
+  const size = 0.7 + ratio * 1.5
   return `${size.toFixed(2)}rem`
 }
 
@@ -71,19 +71,19 @@ watch(() => props.days, fetchTopics, { immediate: true })
 
 <template>
   <div>
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-2">
       <h2 class="text-lg font-semibold text-gray-700">Themen</h2>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center h-48">
+    <div v-if="loading" class="flex items-center justify-center h-32">
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
     </div>
 
-    <div v-else-if="topics.length === 0" class="flex items-center justify-center h-48 text-gray-400">
+    <div v-else-if="topics.length === 0" class="flex items-center justify-center h-32 text-gray-400">
       Keine Themen im gewählten Zeitraum
     </div>
 
-    <div v-else class="flex flex-wrap items-center justify-center gap-3 min-h-[12rem]">
+    <div v-else class="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 min-h-[8rem]">
       <span
         v-for="(t, i) in topics"
         :key="t.topic"
@@ -99,7 +99,7 @@ watch(() => props.days, fetchTopics, { immediate: true })
       </span>
     </div>
 
-    <p class="text-xs text-gray-400 mt-3 text-center">
+    <p class="text-xs text-gray-400 mt-2 text-center">
       {{ totalItems }} Artikel in {{ days }} Tag{{ days !== 1 ? 'en' : '' }}
     </p>
   </div>

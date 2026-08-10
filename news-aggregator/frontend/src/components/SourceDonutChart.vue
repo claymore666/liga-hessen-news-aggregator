@@ -132,9 +132,10 @@ const chartOptions = {
     legend: {
       position: 'right' as const,
       labels: {
-        boxWidth: 12,
-        padding: 8,
-        font: { size: 11 },
+        boxWidth: 10,
+        boxHeight: 10,
+        padding: 4,
+        font: { size: 10 },
       }
     },
     tooltip: {
@@ -177,7 +178,7 @@ watch(() => props.days, fetchData, { immediate: true })
       </div>
     </div>
 
-    <div class="flex items-center mb-4">
+    <div class="flex items-center mb-2">
       <div class="flex gap-1">
         <button
           v-for="g in gaOptions"
@@ -194,15 +195,15 @@ watch(() => props.days, fetchData, { immediate: true })
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center h-64">
+    <div v-if="loading" class="flex items-center justify-center h-40">
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
     </div>
 
-    <div v-else-if="top10.items.length === 0" class="flex items-center justify-center h-64 text-gray-400">
+    <div v-else-if="top10.items.length === 0" class="flex items-center justify-center h-40 text-gray-400">
       Keine Daten verfügbar
     </div>
 
-    <div v-else class="h-64">
+    <div v-else class="h-40">
       <Doughnut :key="chartKey" :data="chartData" :options="chartOptions" />
     </div>
   </div>
