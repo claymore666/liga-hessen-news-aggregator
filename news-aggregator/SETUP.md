@@ -43,12 +43,16 @@ docker compose logs -f
 ```bash
 cd backend
 
-# Create virtual environment
-python3 -m venv venv
+# Create virtual environment (uv - packages are hardlinked from the shared
+# store at /var/cache/uv, so duplicated deps cost no extra disk)
+uv venv --python /usr/bin/python3.13
 source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+uv pip install -r requirements.txt
+
+# Note: `uv venv` does not install pip. Add it only if a script needs it:
+#   uv pip install pip
 
 # Ensure PostgreSQL is running and configured in .env
 

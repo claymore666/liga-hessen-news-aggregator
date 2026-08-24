@@ -121,9 +121,9 @@ docker compose restart         # Restart without rebuild
 
 ```bash
 cd backend
-python -m venv venv
+uv venv --python /usr/bin/python3.13
 source venv/bin/activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # Run development server
 uvicorn main:app --reload

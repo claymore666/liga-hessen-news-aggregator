@@ -41,11 +41,22 @@ Both embedding models run on gpu1's Ollama, accessed via the Ollama proxy on doc
 |--------------|------|-------|----------|
 | `nomic-v2` | HuggingFace | `nomic-ai/nomic-embed-text-v2-moe` | **Production classifier** ✅ |
 | `sentence-transformers` | HuggingFace | `paraphrase-multilingual-MiniLM-L12-v2` | Fast baseline, 384d |
-| `bge-m3` | HuggingFace | `BAAI/bge-m3` | Long context, 1024d |
-| `jina-v3` | HuggingFace | `jinaai/jina-embeddings-v3` | Long context, 1024d |
+| `bge-m3` | HuggingFace | `BAAI/bge-m3` | Long context, 1024d — *not cached, re-downloads 4.3 GB* |
+| `jina-v3` | HuggingFace | `jinaai/jina-embeddings-v3` | Long context, 1024d — *not cached, re-downloads 1.1 GB* |
 | `ollama` | Ollama API | `nomic-embed-text:137m-v1.5-fp16` | Local-only, lower accuracy |
 
 **IMPORTANT**: The `ollama` and `nomic-v2` backends use DIFFERENT models despite similar names. They produce incompatible embeddings!
+
+### Local model cache (`.hf_cache/`, gitignored)
+
+Holds only the backends actually in use — `nomic-embed-text-v2-moe` (+ its
+`nomic-bert-2048` companion) and the MiniLM baseline, ~2.3 GB total. Set
+`HF_HOME=$PWD/.hf_cache` when running training so downloads land here rather than
+`~/.cache/huggingface`.
+
+`bge-m3` and `jina-v3` were **removed on 2026-08-24** (5.4 GB). Both are `tested`-status
+experiment backends that lost to nomic-v2 on AK accuracy (55% / 58% vs 71%). They remain
+fully usable — selecting either backend just re-downloads it first.
 
 ## Project Overview
 

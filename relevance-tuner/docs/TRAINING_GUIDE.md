@@ -27,19 +27,32 @@ The model file is a single `.pkl` file (~14 MB) containing all three classifiers
 ```bash
 cd /home/kamienc/claude.ai/ligahessen/relevance-tuner
 
-# Create venv if it doesn't exist
-python3 -m venv venv
+# Create venv if it doesn't exist (uv, so packages are shared - see note below)
+uv venv --python /usr/bin/python3.13
 source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
+
+The venv is managed with `uv`, not plain `pip`. Package files are **hardlinked** from the
+shared store at `/var/cache/uv`, so the ~7 GB of torch/CUDA costs no extra disk when other
+projects on the host use the same versions. `du` still reports the full size — that is
+expected, the bytes are shared.
+
+Two consequences:
+
+- `uv venv` does **not** install `pip`. It is added back here because this guide and
+  `scripts/*.sh` use it; if you recreate the venv from scratch, run `uv pip install pip`.
+- Never edit files under `venv/lib/.../site-packages` — they are hardlinks, so a change
+  would corrupt every other venv sharing them.
 
 ### Required Python Packages
 
 The training script needs: `scikit-learn`, `numpy`, `sentence-transformers`, `torch`, `tqdm`
 
-These are all in `requirements.txt`.
+These are all in `requirements.txt` (112 pinned packages, generated from the working
+environment: torch 2.10.0+cu128, CUDA verified on the RTX 3090).
 
 ### Hardware Requirements
 
