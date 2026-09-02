@@ -219,9 +219,39 @@ Browser-based scraping using Playwright.
 ```
 
 **Notes**:
-- Requires exported cookies from authenticated session
+- Requires exported cookies from an authenticated X session (see below)
 - ~36 seconds per fetch due to browser overhead
-- Low concurrency limit (2)
+- Low concurrency limit (2); uses the HTTPS proxy pool when `use_proxy` is set
+- `playwright_stealth` is deliberately **not** applied: its navigator patches make
+  X's JS bundle abort (`/i/script-load-failure`, "Something went wrong") so no
+  tweets ever render. Plain Playwright with a real auth session works.
+
+**Auth cookies** — `backend/data/x_cookies.json` (prod: volume `liga-news-data`,
+mounted at `/app/data`). Playwright `context.cookies()` format; must contain
+`auth_token` (httpOnly) and `ct0`. Without the file every fetch hits the login
+wall and returns zero tweets; the scraper logs a WARNING once per process.
+
+Two ways to (re)create it:
+
+1. `python backend/scripts/x_auth.py` — opens a headed browser, log in, cookies
+   are saved automatically.
+2. From an already logged-in Chrome: DevTools → Application → Cookies →
+   `https://x.com`, copy the values of `auth_token` and `ct0` into a text file
+   (`auth_token=…` / `ct0=…`, one per line), then
+   `python backend/scripts/x_cookies_from_values.py values.txt x_cookies.json`.
+
+Install on prod (the file is not in the image):
+
+```bash
+scp x_cookies.json docker-ai:/tmp/ && ssh docker-ai 'docker cp /tmp/x_cookies.json liga-news-backend:/app/data/x_cookies.json \
+  && docker exec -u root liga-news-backend chown appuser:appuser /app/data/x_cookies.json && rm /tmp/x_cookies.json'
+```
+
+Verify with a manual fetch of an active channel (e.g. RegHessen) and look for
+"Injected saved X.com cookies" followed by "Extracted N tweets" in the logs.
+Note that many X accounts Liga follows have gone quiet or left X; "0 new items"
+after "Extracted N tweets" usually means the tweets are older than the 7-day
+pipeline cutoff.
 
 ### Twitter via Nitter (`twitter`)
 
