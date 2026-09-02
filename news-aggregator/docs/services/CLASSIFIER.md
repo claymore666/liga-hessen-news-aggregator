@@ -278,21 +278,37 @@ The classifier worker:
 
 ### Service Unavailability Handling
 
-The classifier depends on embeddings from Ollama on gpu1. When gpu1 is off, the
-embedding endpoint returns 5xx or is unreachable. The classifier worker handles this
-gracefully:
+The classifier depends on embeddings served through the Ollama proxy — local CPU
+embeddings on docker-ai, gpu1's GPU when it is awake. Under load those calls can take
+minutes; when the backend is down they return 5xx or are unreachable. The classifier
+worker handles both cases:
 
-- **Detection**: 5xx HTTP status or connection errors on the first item in a batch
-  trigger `ServiceUnavailableError`, aborting the batch immediately
-- **Backoff**: 300s (5 min) fixed interval — no exponential ramp, no per-item error counting
-- **Logging**: Logs once on transition to unavailable, then `DEBUG` level on retries
-- **Recovery**: Auto-clears `service_available=false` and `stopped_due_to_errors` when
-  the next batch succeeds. After 10+ consecutive non-service errors, enters error state
-  (retries every 5 min). User can also resume via System page or API
+- **Detection**: a 5xx status or a connection/timeout error stops the worker consuming
+  the rest of the batch
+- **Partial progress is kept**: items already classified in that batch are still
+  committed. Only a batch that got *zero* items through raises
+  `ServiceUnavailableError` and is treated as an outage; a batch that made partial
+  progress logs a warning and stays in the normal loop, retrying the remainder next
+  iteration
+- **Backoff**: 300s (5 min) fixed interval on a real outage — no exponential ramp, no
+  per-item error counting
+- **Logging**: warns on transition to unavailable, then re-warns every 30 min while the
+  outage continues (`_UNAVAILABLE_RELOG_INTERVAL`)
+- **Recovery**: auto-clears `service_available=false` and `stopped_due_to_errors` when
+  the next batch succeeds; `start()` also clears them, since worker state is a Redis
+  hash and a stale flag would otherwise outlive a restart. After 10+ consecutive
+  non-service errors the worker enters error state (retries every 5 min). Note that
+  the `resume` endpoint only *unpauses* — clearing the error latch needs a successful
+  batch or a stop/start cycle
 - **Status**: `service_available` field in `/api/admin/stats` → `classifier_worker`
 
 This prevents error counter inflation (previously thousands of errors when gpu1 was
 asleep) while still retrying often enough to catch gpu1 uptime windows.
+
+> Regression guard: before 2026-09-02 *any* request error aborted the whole batch and
+> discarded every item classified in it, so a single slow embed call could freeze the
+> worker indefinitely while logging only at DEBUG. Covered by
+> `tests/test_classifier_worker.py::TestPartialBatchOnServiceFailure`.
 
 ## Training
 
@@ -313,6 +329,7 @@ docker compose restart classifier
 ```bash
 CLASSIFIER_API_URL=http://localhost:8082
 CLASSIFIER_ENABLED=true
+CLASSIFIER_TIMEOUT=120               # per-request timeout for /classify, seconds
 
 # Embed-concurrency policy (consumed by the classifier API container)
 OLLAMA_EMBED_CONCURRENCY=3           # fallback if /api/limits is unreachable

@@ -54,35 +54,6 @@ This includes the classifier API (lightweight, embeddings via Ollama). To rebuil
 docker compose up -d --build classifier
 ```
 
-### Local Deployment (gpu1 and docker-ai)
-
-Two components ensure ChromaDB data is flushed before the host powers off. Install on whichever host runs the classifier container.
-
-**1. Shutdown flush service** (`scripts/classifier-flush.service`)
-Gracefully stops the classifier on shutdown/reboot/halt:
-
-```bash
-# Install/update (on gpu1 or docker-ai)
-sudo cp scripts/classifier-flush.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now classifier-flush.service
-
-# Verify after shutdown
-journalctl -u classifier-flush.service
-```
-
-**2. Sleep handler** (`scripts/docker-sleep-handler`)
-Stops/starts the classifier around suspend/resume (gpu1 only — docker-ai doesn't sleep):
-
-```bash
-# Install/update
-sudo cp scripts/docker-sleep-handler /usr/lib/systemd/system-sleep/
-sudo chmod 755 /usr/lib/systemd/system-sleep/docker-sleep-handler
-
-# Verify after sleep/wake
-journalctl -t docker-sleep-handler --since "1 hour ago"
-```
-
 ### Quick Commands
 
 ```bash
@@ -135,7 +106,7 @@ ligahessen/
 ### Data Flow
 1. **Fetch**: Scheduler triggers connectors to fetch from sources
 2. **Process**: Pipeline deduplicates, classifies, and enriches items
-3. **Store**: Items saved to PostgreSQL with embeddings in ChromaDB
+3. **Store**: Items saved to PostgreSQL, with embeddings in pgvector tables in the same database
 4. **Display**: Frontend shows filtered, prioritized news feed
 
 ### Ports
