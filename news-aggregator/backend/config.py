@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     classifier_enabled: bool = True
     classifier_use_priority: bool = False  # Use classifier priority instead of LLM
     classifier_use_ak: bool = False  # Use classifier AK instead of LLM
+    # Per-request timeout for /classify. The classifier embeds on each call, so
+    # this must tolerate a loaded CPU embedding backend — 30s was routinely
+    # exceeded and aborted whole batches.
+    classifier_timeout: int = 120
 
     # Title Pre-filter (small LLM for quick title-based relevance check)
     # Disabled: title-only checks can't achieve 0 false negatives.

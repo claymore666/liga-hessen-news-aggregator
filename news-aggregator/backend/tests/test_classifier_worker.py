@@ -1,6 +1,7 @@
 """Tests for classifier background worker."""
 
 import asyncio
+import httpx
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from models import Priority
 from services.classifier_worker import (
     ClassifierWorker,
+    ServiceUnavailableError,
     CONFIDENCE_HIGH,
     CONFIDENCE_EDGE,
     get_classifier_worker,
@@ -262,6 +264,94 @@ class TestProcessUnclassifiedItems:
 
         assert result == 1
         assert worker._stats["processed"] == 1
+
+
+class TestPartialBatchOnServiceFailure:
+    """A mid-batch classifier outage must not discard already-classified items."""
+
+    def _mock_item(self, item_id):
+        item = MagicMock()
+        item.id = item_id
+        item.title = f"Article {item_id}"
+        item.content = "content"
+        item.channel = MagicMock()
+        item.channel.source = MagicMock()
+        item.channel.source.name = "Test Source"
+        item.priority = Priority.NONE
+        item.metadata_ = {}
+        return item
+
+    async def _run_batch(self, worker, classify_side_effect, item_count=3):
+        worker._running = True
+
+        mock_db_read = AsyncMock()
+        mock_result_read = MagicMock()
+        mock_result_read.scalars.return_value.all.return_value = [
+            self._mock_item(i) for i in range(1, item_count + 1)
+        ]
+        mock_db_read.execute = AsyncMock(return_value=mock_result_read)
+
+        mock_db_write = AsyncMock()
+        mock_db_write.execute = AsyncMock()
+        mock_db_write.commit = AsyncMock()
+
+        mock_classifier = MagicMock()
+        mock_classifier.classify = AsyncMock(side_effect=classify_side_effect)
+
+        call_count = [0]
+
+        async def mock_context_manager(*args, **kwargs):
+            call_count[0] += 1
+            return mock_db_read if call_count[0] == 1 else mock_db_write
+
+        with patch.object(worker, "_get_classifier", return_value=mock_classifier):
+            with patch("services.classifier_worker.async_session_maker") as mock_session:
+                mock_cm = AsyncMock()
+                mock_cm.__aenter__ = mock_context_manager
+                mock_cm.__aexit__ = AsyncMock(return_value=None)
+                mock_session.return_value = mock_cm
+                with patch("services.item_events.record_event", new_callable=AsyncMock):
+                    result = await worker._process_unclassified_items()
+
+        return result, mock_db_write
+
+    @staticmethod
+    def _ok(confidence=0.7):
+        return {
+            "relevance_confidence": confidence,
+            "ak": "Test AK",
+            "ak_confidence": 0.8,
+            "priority": "medium",
+            "priority_confidence": 0.6,
+        }
+
+    async def test_timeout_midbatch_commits_earlier_items(self, worker):
+        """A read timeout partway through must still commit what succeeded."""
+        side_effect = [self._ok(), self._ok(), httpx.ReadTimeout("")]
+
+        result, mock_db_write = await self._run_batch(worker, side_effect)
+
+        # Two items classified before the outage — both persisted, not discarded.
+        assert result == 2
+        assert worker._stats["processed"] == 2
+        mock_db_write.commit.assert_awaited()
+
+    async def test_timeout_midbatch_does_not_raise(self, worker):
+        """Partial progress keeps the worker in its normal loop, not the outage backoff."""
+        side_effect = [self._ok(), httpx.ReadTimeout("")]
+
+        # Must not raise ServiceUnavailableError — that would latch the worker.
+        result, _ = await self._run_batch(worker, side_effect, item_count=2)
+        assert result == 1
+
+    async def test_timeout_on_first_item_signals_outage(self, worker):
+        """Zero progress means the backend really is down — surface it."""
+        side_effect = httpx.ReadTimeout("")
+
+        with pytest.raises(ServiceUnavailableError):
+            await self._run_batch(worker, side_effect)
+
+        assert worker._stats["processed"] == 0
 
 
 class TestModuleFunctions:

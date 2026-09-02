@@ -20,7 +20,7 @@ class RelevanceFilter:
     Uses a singleton httpx.AsyncClient for connection pooling and efficiency.
     """
 
-    def __init__(self, base_url: str, threshold: float = 0.75, timeout: int = 30):
+    def __init__(self, base_url: str, threshold: float = 0.75, timeout: int = 120):
         """
         Initialize the relevance filter.
 
@@ -387,6 +387,7 @@ async def create_relevance_filter() -> RelevanceFilter | None:
     filter_instance = RelevanceFilter(
         base_url=settings.classifier_url,
         threshold=settings.classifier_threshold,
+        timeout=settings.classifier_timeout,
     )
 
     # Check availability

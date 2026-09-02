@@ -14,6 +14,7 @@ the independent DedupWorker (services/dedup_worker.py).
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -24,6 +25,10 @@ from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
 
 logger = logging.getLogger(__name__)
+
+
+# How often to re-log an ongoing classifier outage, in seconds.
+_UNAVAILABLE_RELOG_INTERVAL = 1800.0
 
 
 class ServiceUnavailableError(Exception):
@@ -80,6 +85,8 @@ class ClassifierWorker:
         self._stopped_due_to_errors = False
         self._consecutive_errors = 0
         self._service_unavailable = False  # Track if embedding service is down
+        self._service_unavailable_since: float | None = None
+        self._service_unavailable_logged_at: float = 0.0
 
     async def start(self):
         """Start the worker background task."""
@@ -158,6 +165,8 @@ class ClassifierWorker:
         if self._stopped_due_to_errors or self._service_unavailable:
             self._stopped_due_to_errors = False
             self._service_unavailable = False
+            self._service_unavailable_since = None
+            self._service_unavailable_logged_at = 0.0
             logger.info("Classifier worker recovered — service available again")
             from services.worker_status import write_state
             await write_state("classifier", running=True, service_available=True)
@@ -207,8 +216,11 @@ class ClassifierWorker:
             except ServiceUnavailableError as e:
                 # Embedding service / classifier backend is down.
                 # Back off to 5 min immediately — don't inflate error counter.
+                now = time.monotonic()
                 if not self._service_unavailable:
                     self._service_unavailable = True
+                    self._service_unavailable_since = now
+                    self._service_unavailable_logged_at = now
                     logger.warning(
                         f"Classifier service unavailable: {e}. "
                         f"Retrying every {service_unavailable_backoff:.0f}s."
@@ -217,6 +229,15 @@ class ClassifierWorker:
                     await write_state(
                         "classifier", running=True,
                         service_available=False,
+                    )
+                elif (now - self._service_unavailable_logged_at) >= _UNAVAILABLE_RELOG_INTERVAL:
+                    # Re-surface the outage periodically. Logging this only at
+                    # DEBUG once hid a 25h stuck loop in production.
+                    self._service_unavailable_logged_at = now
+                    down_for = now - (self._service_unavailable_since or now)
+                    logger.warning(
+                        f"Classifier still unavailable after {down_for / 60:.0f} min "
+                        f"and making no progress: {e}"
                     )
                 else:
                     logger.debug(f"Classifier still unavailable: {e}")
@@ -341,6 +362,7 @@ class ClassifierWorker:
         updates = []
         processed = 0
         priority_changed = 0
+        service_error: ServiceUnavailableError | None = None
 
         for item_data in items_to_classify:
             if self._paused or not self._running:
@@ -405,19 +427,22 @@ class ClassifierWorker:
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500:
-                    # Service-level failure (e.g. embedding backend down)
-                    # Abort batch early — no point retrying remaining items
-                    raise ServiceUnavailableError(
+                    # Service-level failure (e.g. embedding backend down).
+                    # Stop consuming the batch, but fall through so the items
+                    # already classified still get committed below.
+                    service_error = ServiceUnavailableError(
                         f"Classifier returned {e.response.status_code}"
-                    ) from e
+                    )
+                    break
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
                 async with self._stats_lock:
                     self._stats["errors"] += 1
             except httpx.RequestError as e:
                 # Connection refused, timeout, DNS failure, etc.
-                raise ServiceUnavailableError(
-                    f"Classifier unreachable: {e}"
-                ) from e
+                service_error = ServiceUnavailableError(
+                    f"Classifier unreachable: {e!r}"
+                )
+                break
             except Exception as e:
                 logger.warning(f"Failed to classify item {item_data['id']}: {e}")
                 async with self._stats_lock:
@@ -483,6 +508,18 @@ class ClassifierWorker:
 
         if processed > 0:
             logger.info(f"Classified {processed} items ({priority_changed} priority changes)")
+
+        if service_error is not None:
+            if processed == 0:
+                # Nothing got through — the backend really is unavailable.
+                raise service_error
+            # Partial progress: the committed items count as forward motion, so
+            # keep the worker in its normal loop rather than latching it into
+            # the 5-minute outage backoff. The rest of the batch is retried on
+            # the next iteration.
+            logger.warning(
+                f"Classifier degraded mid-batch after {processed} items: {service_error}"
+            )
 
         return processed
 
