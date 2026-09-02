@@ -1,6 +1,6 @@
 """Instagram scraper connector using Playwright.
 
-Direct scraping of instagram.com with stealth mode.
+Direct scraping of public instagram.com profiles with Playwright.
 Works for public profiles without authentication.
 """
 
@@ -10,7 +10,6 @@ import re
 from datetime import datetime, UTC
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout
-from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
@@ -127,8 +126,9 @@ class InstagramScraperConnector(BaseConnector):
                 context = await browser.new_context(**context_args)
                 page = await context.new_page()
 
-                # Apply stealth mode
-                await stealth_async(page)
+                # NOTE: playwright_stealth is deliberately not applied — its
+                # navigator patches make Instagram render a blank page (0 posts).
+                # Plain Playwright loads public profiles fine (verified 2026-09-02).
 
                 # Navigate to profile
                 url = f"https://www.instagram.com/{config.username}/"
@@ -331,7 +331,6 @@ class InstagramScraperConnector(BaseConnector):
                 try:
                     page = await context.new_page()
 
-                    await stealth_async(page)
 
                     url = f"https://www.instagram.com/{config.username}/"
                     await page.goto(url, timeout=20000)
