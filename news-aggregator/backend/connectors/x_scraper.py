@@ -131,12 +131,18 @@ class XScraperConnector(BaseConnector):
 
         # Try with proxy first, fallback to direct if proxy fails
         try:
-            return await self._fetch_with_browser(config, proxy_server)
+            items = await self._fetch_with_browser(config, proxy_server)
         except Exception as e:
             if proxy_server:
                 logger.warning(f"Proxy failed: {e}. Retrying without proxy...")
+                # Tell the pool: a proxy that fails a real fetch keeps getting
+                # handed out first until the next health check notices.
+                await self._report_proxy_result(proxy, success=False)
                 return await self._fetch_with_browser(config, None)
             raise
+        else:
+            await self._report_proxy_result(proxy, success=True)
+            return items
         finally:
             # Always release the proxy back to the pool
             if proxy:
@@ -146,6 +152,16 @@ class XScraperConnector(BaseConnector):
                     logger.debug(f"Released proxy {proxy} for {self.connector_type}")
                 except Exception as e:
                     logger.warning(f"Failed to checkin proxy: {e}")
+
+    async def _report_proxy_result(self, proxy: str | None, success: bool) -> None:
+        """Feed the outcome of a real fetch back to the proxy pool."""
+        if not proxy:
+            return
+        try:
+            from services.proxy_manager import proxy_manager
+            await proxy_manager.report_result(proxy, success=success, is_https=True)
+        except Exception as e:
+            logger.warning(f"Failed to report proxy result for {proxy}: {e}")
 
     async def _fetch_with_browser(
         self, config: XScraperConfig, proxy_server: str | None

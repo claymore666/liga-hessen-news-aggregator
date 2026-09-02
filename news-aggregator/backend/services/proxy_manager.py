@@ -274,8 +274,13 @@ class ProxyManager:
         Selection reads position, not the latency field, so every write to a
         pool has to go through here — otherwise "fastest" silently means
         "whatever was appended first".
+
+        Recent failures outrank speed. A proxy that just failed a real fetch is
+        worse evidence-wise than a slow one that works, and leaving it at the
+        head of the list means every caller picks it first and eats a full
+        page-load timeout before falling back.
         """
-        pool.sort(key=lambda x: x["latency"])
+        pool.sort(key=lambda x: (x.get("failures", 0), x["latency"]))
         if pool is self.http_proxies:
             self.http_index = 0
 
@@ -926,6 +931,45 @@ class ProxyManager:
             else:
                 self._reserved_http[connector_type].discard(proxy)
             logger.debug(f"Checked in proxy {proxy} for {connector_type}")
+
+    async def report_result(self, proxy: str, success: bool, is_https: bool = False) -> None:
+        """Record how a proxy behaved on a real fetch.
+
+        The probes only prove a proxy answered a moment ago; a third of the
+        proxies handed to the X scraper were dead or blocked by the time it used
+        them (measured 2026-09-02, 8 failures in 25 checkouts over 30 minutes).
+        Waiting for the 10-minute health check to notice left them sorted first,
+        so every caller paid a page-load timeout on the way to the fallback.
+
+        A single failure only demotes: an error against x.com can be that site
+        blocking the exit IP rather than the proxy being dead, and evicting on
+        first strike would have emptied a 12-proxy pool inside half an hour.
+        Eviction needs MAX_FAILURES in a row, and any success resets the count.
+        """
+        async with self._lock:
+            pool = self.https_proxies if is_https else self.http_proxies
+            entry = next((p for p in pool if p["proxy"] == proxy), None)
+            if entry is None:
+                return
+
+            if success:
+                entry["failures"] = 0
+                self._record_proxy_success(proxy, entry["latency"], is_https)
+                self._sort_pool(pool)
+                return
+
+            failures = entry.get("failures", 0) + 1
+            entry["failures"] = failures
+            if failures >= self.MAX_FAILURES:
+                pool.remove(entry)
+                self._record_proxy_failure(proxy)
+                logger.info(
+                    f"✗ Dropped {'HTTPS' if is_https else 'HTTP'} proxy {proxy} "
+                    f"after {failures} failed fetches"
+                )
+            else:
+                logger.debug(f"Demoted proxy {proxy} ({failures} failed fetches)")
+            self._sort_pool(pool)
 
     def available_count(self, connector_type: str, https: bool = False) -> int:
         """Get count of proxies available for a connector type."""

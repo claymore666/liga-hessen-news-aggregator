@@ -108,6 +108,9 @@ async def reset_circuit_breakers() -> None:
 
 # Connector types that use proxy reservation
 PROXY_USING_CONNECTORS = {"x_scraper", "instagram_scraper", "linkedin"}
+# x.com is HTTPS-only, so the X scraper draws from the CONNECT-capable pool.
+# Counting the HTTP pool here capped X concurrency on a pool no connector uses.
+HTTPS_PROXY_CONNECTORS = {"x_scraper"}
 
 
 def get_effective_limit(source_type: str) -> int:
@@ -127,7 +130,9 @@ def get_effective_limit(source_type: str) -> int:
     if source_type in PROXY_USING_CONNECTORS:
         try:
             from services.proxy_manager import proxy_manager
-            available = proxy_manager.available_count(source_type)
+            available = proxy_manager.available_count(
+                source_type, https=source_type in HTTPS_PROXY_CONNECTORS
+            )
             # Cap at available proxies, but always allow at least 1 (direct connection)
             effective = max(1, min(base_limit, available)) if available > 0 else 1
             if effective < base_limit:

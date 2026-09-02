@@ -71,6 +71,39 @@ the HTTP probe. Tunnels of 5-12s do get accepted — they sort last and are used
 only once the faster ones are busy, which still beats falling back to a direct
 connection.
 
+## Feedback from real fetches
+
+Probes only prove a proxy answered a moment ago. Measured 2026-09-02, **a third
+of the proxies handed to the X scraper were dead or blocked by the time it used
+them** — 8 failures in 25 checkouts over 30 minutes, mostly
+`ERR_TUNNEL_CONNECTION_FAILED`. Until the next health check noticed, the bad
+proxy stayed sorted first, so every caller paid a full page-load timeout before
+falling back to a direct connection.
+
+Connectors now report the outcome back via `report_result()`:
+
+- **A failure demotes, it does not evict.** An error against x.com can be that
+  site blocking the exit IP rather than the proxy being dead, and evicting on
+  first strike would have emptied a 12-proxy pool inside half an hour.
+- **Eviction needs `MAX_FAILURES` in a row**; any success resets the count.
+- Pools sort by `(failures, latency)`, so a demoted proxy falls behind slower
+  proxies that still work, without faking its measured speed.
+
+## Consumers
+
+| Connector | Pool | Notes |
+|-----------|------|-------|
+| `x_scraper` | HTTPS | 67 enabled channels, all `use_proxy: true` |
+| `instagram_scraper` | HTTP | `use_proxy` unset on all channels — currently direct |
+| `linkedin` | HTTP | all channels disabled |
+
+The scheduler caps per-connector concurrency by available proxies
+(`get_effective_limit`), counting the HTTPS pool for `x_scraper` and the HTTP
+pool for the rest. An empty pool still permits one fetch, which goes direct.
+
+Note that **no connector currently draws from the HTTP pool**, so it is
+maintained only for `/api/proxies/next`. Worth revisiting if that stays true.
+
 ## Choosing sources
 
 **A list being named `https.txt` predicts nothing.** Measured 2026-09-02 by

@@ -275,3 +275,33 @@ class TestFetchDueSources:
         """Test that fetch_due_sources is an alias to fetch_due_channels."""
         from services.scheduler import fetch_due_sources, fetch_due_channels
         assert fetch_due_sources is fetch_due_channels
+
+
+class TestEffectiveLimitPool:
+    """Proxy-capped concurrency must count the pool the connector actually uses."""
+
+    def test_x_scraper_is_capped_by_the_https_pool(self):
+        """x.com is HTTPS-only, so the HTTP pool says nothing about X capacity."""
+        from services.scheduler import get_effective_limit
+
+        with patch("services.proxy_manager.proxy_manager") as pm:
+            pm.available_count.return_value = 0
+            get_effective_limit("x_scraper")
+
+        pm.available_count.assert_called_once_with("x_scraper", https=True)
+
+    def test_instagram_is_capped_by_the_http_pool(self):
+        from services.scheduler import get_effective_limit
+
+        with patch("services.proxy_manager.proxy_manager") as pm:
+            pm.available_count.return_value = 0
+            get_effective_limit("instagram_scraper")
+
+        pm.available_count.assert_called_once_with("instagram_scraper", https=False)
+
+    def test_empty_pool_still_allows_one_direct_fetch(self):
+        from services.scheduler import get_effective_limit
+
+        with patch("services.proxy_manager.proxy_manager") as pm:
+            pm.available_count.return_value = 0
+            assert get_effective_limit("x_scraper") == 1

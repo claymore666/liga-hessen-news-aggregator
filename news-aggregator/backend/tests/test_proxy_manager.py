@@ -697,6 +697,62 @@ class TestFastestFirstSelection:
         assert manager.get_next_proxy() == "faster:80"
 
 
+class TestRealUseFeedback:
+    """A proxy that fails an actual fetch must stop being handed out first."""
+
+    @pytest.mark.asyncio
+    async def test_failure_demotes_below_slower_working_proxies(self, manager):
+        manager.https_proxies = [
+            {"proxy": "fast:80", "latency": 100, "failures": 0},
+            {"proxy": "slow:80", "latency": 3000, "failures": 0},
+        ]
+        manager._sort_pool(manager.https_proxies)
+        assert await manager.checkout_proxy("x_scraper", prefer_https=True) == "fast:80"
+        await manager.checkin_proxy("x_scraper", "fast:80", is_https=True)
+
+        await manager.report_result("fast:80", success=False, is_https=True)
+
+        assert [p["proxy"] for p in manager.https_proxies] == ["slow:80", "fast:80"]
+        assert await manager.checkout_proxy("x_scraper", prefer_https=True) == "slow:80"
+
+    @pytest.mark.asyncio
+    async def test_one_failure_does_not_evict(self, manager):
+        """A single error may be the target blocking the exit IP, not a dead proxy."""
+        manager.https_proxies = [{"proxy": "a:80", "latency": 100, "failures": 0}]
+
+        await manager.report_result("a:80", success=False, is_https=True)
+
+        assert [p["proxy"] for p in manager.https_proxies] == ["a:80"]
+        assert manager.https_proxies[0]["failures"] == 1
+
+    @pytest.mark.asyncio
+    async def test_evicted_after_max_consecutive_failures(self, manager):
+        manager.https_proxies = [{"proxy": "a:80", "latency": 100, "failures": 0}]
+
+        for _ in range(manager.MAX_FAILURES):
+            await manager.report_result("a:80", success=False, is_https=True)
+
+        assert manager.https_proxies == []
+
+    @pytest.mark.asyncio
+    async def test_success_resets_the_failure_count(self, manager):
+        manager.https_proxies = [{"proxy": "a:80", "latency": 100, "failures": 0}]
+
+        await manager.report_result("a:80", success=False, is_https=True)
+        await manager.report_result("a:80", success=True, is_https=True)
+        await manager.report_result("a:80", success=False, is_https=True)
+        await manager.report_result("a:80", success=False, is_https=True)
+
+        # Three failures total, but never MAX_FAILURES in a row.
+        assert [p["proxy"] for p in manager.https_proxies] == ["a:80"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_proxy_is_ignored(self, manager):
+        manager.https_proxies = [{"proxy": "a:80", "latency": 100, "failures": 0}]
+        await manager.report_result("gone:80", success=False, is_https=True)
+        assert [p["proxy"] for p in manager.https_proxies] == ["a:80"]
+
+
 class TestRevalidateHttpsViaTunnel:
     """The HTTPS pool must be health-checked on the protocol it is used for."""
 
