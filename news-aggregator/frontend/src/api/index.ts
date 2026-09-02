@@ -353,6 +353,7 @@ export interface HealthCheckResponse {
   proxy_https_count: number
   proxy_min_required: number
   proxy_https_min_required: number
+  proxy_https_target: number
   database_ok: boolean
   database_info: {
     type: string

@@ -165,7 +165,18 @@ class Settings(BaseSettings):
     proxy_pool_min: int = 20  # Minimum working proxies to maintain
     proxy_pool_max: int = 25  # Maximum working proxies (buffer)
     proxy_known_max: int = 100  # Maximum known good proxies to store
-    proxy_https_pool_min: int = 0  # HTTPS proxies optional; X scraper falls back to direct connection
+    # HTTPS/CONNECT-capable proxies are far rarer than plain HTTP ones. These two
+    # settings separate what we want from what is realistically findable:
+    #   target - keep collecting up to this many; a cap, not a promise
+    #   floor  - below this the pool is genuinely degraded and we warn
+    # Between floor and target we log at INFO: 3/20 is a normal day, not an
+    # incident. The X scraper falls back to a direct connection when the pool
+    # is empty, so a short pool degrades quality rather than breaking fetches.
+    proxy_https_pool_target: int = 20
+    proxy_https_pool_floor: int = 2
+    # Bounds the CPU cost of chasing a target we may never reach: at most this
+    # many CONNECT+TLS probes per fill cycle (docker-ai is a 2-core VM).
+    proxy_https_probe_budget: int = 60
 
     # Daily Digest
     digest_enabled: bool = False

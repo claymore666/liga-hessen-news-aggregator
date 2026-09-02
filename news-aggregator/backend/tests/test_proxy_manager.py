@@ -441,6 +441,74 @@ class TestSearchBatch:
         mock_fetch.assert_called_once()
 
 
+class TestHttpsIndependentOfHttpProbe:
+    """CONNECT capability must be tested independently of the plain-HTTP probe.
+
+    Before 2026-09-02 only proxies that passed validate_proxy were CONNECT-tested,
+    so a proxy that tunnels but refuses plain HTTP was silently discarded — measured
+    at 4 of every 10 usable HTTPS proxies.
+    """
+
+    @pytest.mark.asyncio
+    async def test_https_only_proxy_is_kept(self, manager):
+        """A proxy that fails the HTTP probe but tunnels lands in the HTTPS pool."""
+        manager._all_proxies = ["9.9.9.9:8080"]
+        manager._tested_proxies = set()
+        manager._https_probes_left = 10
+
+        async def http_always_fails(proxy):
+            return False, 0.0
+
+        async def tunnel_always_works(proxy):
+            return True
+
+        with patch.object(manager, "validate_proxy", side_effect=http_always_fails):
+            with patch.object(manager, "validate_https_tunnel", side_effect=tunnel_always_works):
+                http_found, https_found = await manager._search_batch()
+
+        assert https_found == 1
+        assert [p["proxy"] for p in manager.https_proxies] == ["9.9.9.9:8080"]
+        assert manager.http_proxies == []
+
+    @pytest.mark.asyncio
+    async def test_https_capable_proxy_not_duplicated_into_http_pool(self, manager):
+        """A proxy good at both belongs in the HTTPS pool only."""
+        manager._all_proxies = ["9.9.9.9:8080"]
+        manager._tested_proxies = set()
+        manager._https_probes_left = 10
+
+        with patch.object(manager, "validate_proxy", return_value=(True, 100.0)):
+            with patch.object(manager, "validate_https_tunnel", return_value=True):
+                http_found, https_found = await manager._search_batch()
+
+        assert (http_found, https_found) == (0, 1)
+        assert len(manager.https_proxies) == 1
+        assert manager.http_proxies == []
+
+    @pytest.mark.asyncio
+    async def test_probe_budget_limits_connect_tests(self, manager):
+        """With no budget left, only HTTP-validated proxies are CONNECT-tested."""
+        manager._all_proxies = [f"10.0.0.{i}:8080" for i in range(1, 6)]
+        manager._tested_proxies = set()
+        manager._https_probes_left = 0
+
+        probed = []
+
+        async def record(proxy):
+            probed.append(proxy)
+            return False
+
+        async def http_always_fails(proxy):
+            return False, 0.0
+
+        with patch.object(manager, "validate_proxy", side_effect=http_always_fails):
+            with patch.object(manager, "validate_https_tunnel", side_effect=record):
+                await manager._search_batch()
+
+        # No HTTP survivors and no budget => nothing to CONNECT-test at all.
+        assert probed == []
+
+
 class TestRevalidateExisting:
     """Tests for revalidating existing proxies."""
 

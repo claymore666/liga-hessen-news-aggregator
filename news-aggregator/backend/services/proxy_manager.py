@@ -89,7 +89,7 @@ class ProxyManager:
 
     Maintains two pools:
     - http_proxies: General purpose, filled to min_http_proxies
-    - https_proxies: HTTPS tunnel capable, filled to min_https_proxies
+    - https_proxies: HTTPS tunnel capable, collected up to https_target
     """
 
     # Multiple proxy sources for better coverage.
@@ -108,6 +108,18 @@ class ProxyManager:
         "https://vakhov.github.io/fresh-proxy-list/https.txt",
         "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
         "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
+        # HTTPS/CONNECT-oriented lists. Measured 2026-09-02 by sampling each list
+        # and running the same CONNECT+TLS check used below; the percentage is the
+        # share of sampled entries that completed a real TLS handshake to x.com:
+        #   Zaeem20    409 entries, 12.5%      proxyscrape  198 entries, 12.5%
+        #   zloi-user 1040 entries,  2.5%
+        # For contrast, several popular "https" lists yielded 0% on the same test
+        # (proxifly/https 1208 entries, ErcinDedeoglu/https 2976 entries) and are
+        # deliberately not included; mmpx12, prxchk, monosans/https and
+        # elliottophellia/https all 404 as of that date.
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
+        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&ssl=yes&anonymity=all",
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",
     ]
 
     # Validation settings
@@ -135,9 +147,17 @@ class ProxyManager:
         # Configurable pool sizes from settings
         self.min_http_proxies = settings.proxy_pool_min
         self.max_http_proxies = settings.proxy_pool_max
-        self.min_https_proxies = settings.proxy_https_pool_min
-        self.max_https_proxies = settings.proxy_https_pool_min + 5  # Small buffer
+        # Aspiration vs reality: we want proxy_https_pool_target, but HTTPS-capable
+        # proxies are scarce and a handful is a normal outcome. Only a pool below
+        # the floor counts as degraded.
+        self.https_target = settings.proxy_https_pool_target
+        self.https_floor = settings.proxy_https_pool_floor
+        self.https_probe_budget = settings.proxy_https_probe_budget
+        self.max_https_proxies = self.https_target
         self.max_known_proxies = settings.proxy_known_max
+
+        # CONNECT probes remaining in the current fill cycle (reset by _fill_pools)
+        self._https_probes_left = 0
 
         # Separate pools
         self.http_proxies: list[dict] = []
@@ -453,6 +473,16 @@ class ProxyManager:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._validate_https_tunnel_sync, proxy)
 
+    async def validate_https_tunnel_timed(self, proxy: str) -> tuple[bool, float]:
+        """As validate_https_tunnel, but also report how long the tunnel took (ms).
+
+        Proxies that tunnel but refuse plain HTTP have no HTTP latency to record,
+        so the handshake time stands in for pool ordering and the known-good list.
+        """
+        start = time.monotonic()
+        ok = await self.validate_https_tunnel(proxy)
+        return ok, (time.monotonic() - start) * 1000
+
     def _validate_https_tunnel_sync(self, proxy: str) -> bool:
         """Synchronous HTTPS tunnel validation (run in executor to avoid blocking event loop).
 
@@ -531,70 +561,125 @@ class ProxyManager:
         tasks = [self.validate_proxy(proxy) for proxy in batch]
         results = await asyncio.gather(*tasks)
 
-        # Collect working proxies
-        working_batch = []
         existing_http = {p["proxy"] for p in self.http_proxies}
         existing_https = {p["proxy"] for p in self.https_proxies}
         existing = existing_http | existing_https
 
+        # Proxies that answer plain HTTP, with the latency we measured.
+        http_latency: dict[str, float] = {}
         for proxy, (success, latency) in zip(batch, results):
             if success and proxy not in existing:
-                working_batch.append((proxy, latency))
+                http_latency[proxy] = latency
 
-        if not working_batch:
-            return 0, 0
+        # CONNECT capability is independent of plain-HTTP proxying: a proxy can
+        # refuse plain HTTP and still tunnel fine. Testing only HTTP-validated
+        # proxies discarded usable HTTPS proxies (measured 2026-09-02: 4 of 10
+        # CONNECT-capable proxies failed the HTTP probe). So while the HTTPS pool
+        # is below target, probe the whole batch — bounded by the probe budget,
+        # since each probe is a socket connect plus a TLS handshake.
+        want_https = len(self.https_proxies) < self.max_https_proxies
+        if want_https and self._https_probes_left > 0:
+            candidates = [p for p in batch if p not in existing]
+            candidates = candidates[:self._https_probes_left]
+        else:
+            candidates = [p for p in http_latency if p not in existing]
+        self._https_probes_left -= len(candidates)
 
-        # Test HTTPS capability in parallel
-        https_tasks = [self.validate_https_tunnel(p) for p, _ in working_batch]
-        https_results = await asyncio.gather(*https_tasks)
+        https_capable: dict[str, float] = {}
+        if candidates:
+            probe_results = await asyncio.gather(
+                *[self.validate_https_tunnel_timed(p) for p in candidates]
+            )
+            for proxy, (ok, tunnel_ms) in zip(candidates, probe_results):
+                if ok:
+                    https_capable[proxy] = tunnel_ms
 
         http_found = 0
         https_found = 0
 
-        for (proxy, latency), https_capable in zip(working_batch, https_results):
-            # Only add if we need more in that pool
-            if https_capable and len(self.https_proxies) < self.max_https_proxies:
-                self._add_to_pool(proxy, latency, https_capable=True)
-                https_found += 1
-            elif not https_capable and len(self.http_proxies) < self.max_http_proxies:
-                self._add_to_pool(proxy, latency, https_capable=False)
-                http_found += 1
+        for proxy in https_capable:
+            if len(self.https_proxies) >= self.max_https_proxies:
+                break
+            # Prefer the HTTP latency when we have one; otherwise the tunnel time.
+            latency = http_latency.get(proxy, https_capable[proxy])
+            self._add_to_pool(proxy, latency, https_capable=True)
+            https_found += 1
+
+        for proxy, latency in http_latency.items():
+            if proxy in https_capable:
+                continue  # already placed in the HTTPS pool
+            if len(self.http_proxies) >= self.max_http_proxies:
+                break
+            self._add_to_pool(proxy, latency, https_capable=False)
+            http_found += 1
 
         self.last_refresh = utcnow()
         return http_found, https_found
 
     def _pools_filled(self) -> bool:
-        """Check if both pools meet their minimums."""
+        """Whether a fill cycle still has work to do.
+
+        The HTTP pool has a real minimum we expect to reach. The HTTPS pool has
+        only a target: treating that target as a minimum would mean every cycle
+        ends "unfilled" and re-runs at full effort forever, because on a normal
+        day the internet simply does not offer 20 working CONNECT proxies. The
+        per-cycle probe budget is what bounds the HTTPS search instead.
+        """
         return (len(self.http_proxies) >= self.min_http_proxies and
-                len(self.https_proxies) >= self.min_https_proxies)
+                len(self.https_proxies) >= self.https_target)
 
     async def _fill_pools(self):
-        """Fill both pools until they meet their minimums."""
+        """Search until the HTTP pool meets its minimum and the HTTPS probe
+        budget for this cycle is spent."""
         max_batches = 10  # Limit search to avoid excessive CPU usage
         batches_tried = 0
         empty_batches = 0
+        self._https_probes_left = self.https_probe_budget
 
         while not self._pools_filled() and batches_tried < max_batches:
             http_found, https_found = await self._search_batch()
             batches_tried += 1
 
-            if http_found == 0 and https_found == 0:
+            # A batch is only "empty" if it failed to advance something we still
+            # need. Once the HTTP pool is full, http_found is 0 by construction —
+            # counting that as failure used to abandon the HTTPS search after
+            # three batches exactly when the HTTPS pool was the one starving.
+            http_short = len(self.http_proxies) < self.min_http_proxies
+            https_short = (len(self.https_proxies) < self.max_https_proxies
+                           and self._https_probes_left > 0)
+            made_progress = (http_found > 0 and http_short) or https_found > 0
+
+            if not made_progress and not (http_short or https_short):
+                break  # nothing left worth searching for
+
+            if not made_progress:
                 empty_batches += 1
-                # Give up early if we keep finding nothing
                 if empty_batches >= 3:
                     logger.info("3 consecutive empty batches, stopping search")
                     break
+            else:
+                empty_batches = 0
 
             # Cooldown between batches to avoid CPU spikes
             await asyncio.sleep(self.BATCH_COOLDOWN)
 
             logger.info(f"Pools: HTTP {len(self.http_proxies)}/{self.min_http_proxies}, "
-                       f"HTTPS {len(self.https_proxies)}/{self.min_https_proxies}")
+                       f"HTTPS {len(self.https_proxies)}/{self.https_target}")
 
         if len(self.http_proxies) < self.min_http_proxies:
             logger.warning(f"Could not fill HTTP pool: {len(self.http_proxies)}/{self.min_http_proxies}")
-        if len(self.https_proxies) < self.min_https_proxies:
-            logger.warning(f"Could not fill HTTPS pool: {len(self.https_proxies)}/{self.min_https_proxies}")
+
+        # HTTPS is best-effort: warn only when genuinely degraded, otherwise
+        # report at INFO. A handful out of the target is an ordinary result.
+        n_https = len(self.https_proxies)
+        if n_https < self.https_floor:
+            logger.warning(
+                f"HTTPS pool below floor: {n_https}/{self.https_floor} "
+                f"(target {self.https_target}) — X/Twitter fetches will mostly "
+                "fall back to direct connections"
+            )
+        elif n_https < self.https_target:
+            logger.info(f"HTTPS pool {n_https}/{self.https_target} (floor {self.https_floor}) — best effort")
 
     async def _revalidate_pool(self, pool: list[dict], pool_name: str) -> int:
         """Revalidate a pool and remove dead proxies. Returns removed count."""
@@ -782,7 +867,8 @@ class ProxyManager:
             "http_count": len(self.http_proxies),
             "https_count": len(self.https_proxies),
             "http_min_required": self.min_http_proxies,
-            "https_min_required": self.min_https_proxies,
+            "https_min_required": self.https_floor,
+            "https_target": self.https_target,
             "background_running": self._running,
             "initial_fill_complete": self._initial_fill_complete,
         }
@@ -808,7 +894,8 @@ class ProxyManager:
             "http_count": len(self.http_proxies),
             "https_count": len(self.https_proxies),
             "http_min_required": self.min_http_proxies,
-            "https_min_required": self.min_https_proxies,
+            "https_min_required": self.https_floor,
+            "https_target": self.https_target,
             "http_max": self.max_http_proxies,
             "https_max": self.max_https_proxies,
             "max_latency_ms": self.MAX_LATENCY_MS,
@@ -825,7 +912,7 @@ class ProxyManager:
             # Legacy fields for backward compatibility
             "working_count": len(self.http_proxies) + len(self.https_proxies),
             "min_required": self.min_http_proxies,
-            "min_https_required": self.min_https_proxies,
+            "min_https_required": self.https_floor,
         }
 
 

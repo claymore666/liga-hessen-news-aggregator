@@ -40,7 +40,8 @@ class HealthCheckResponse(BaseModel):
     proxy_working: int
     proxy_https_count: int
     proxy_min_required: int
-    proxy_https_min_required: int
+    proxy_https_min_required: int   # floor: below this the pool is degraded
+    proxy_https_target: int         # aspiration: keep collecting up to this
     database_ok: bool
     database_info: DatabaseInfo
     redis_available: bool
@@ -106,7 +107,8 @@ async def get_system_health(
     proxy_working = proxy_count
     proxy_https_count = proxy_status.get("https_count", 0)
     proxy_min_required = proxy_status.get("http_min_required", 20)
-    proxy_https_min_required = proxy_status.get("https_min_required", 5)
+    proxy_https_min_required = proxy_status.get("https_min_required", 2)
+    proxy_https_target = proxy_status.get("https_target", 20)
 
     # Database status
     database_ok = True
@@ -141,6 +143,7 @@ async def get_system_health(
         proxy_https_count=proxy_https_count,
         proxy_min_required=proxy_min_required,
         proxy_https_min_required=proxy_https_min_required,
+        proxy_https_target=proxy_https_target,
         database_ok=database_ok,
         database_info=DatabaseInfo(**db_info),
         redis_available=is_redis_available(),

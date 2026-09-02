@@ -55,6 +55,12 @@ const logsSearch = ref('')
 // Active tab
 const activeTab = ref<'status' | 'logs'>('status')
 
+// HTTPS-capable proxies are rare, so health is judged against the floor rather
+// than the target: sitting at 4/20 is an ordinary day, 1/20 is degraded.
+const httpsProxyOk = computed(
+  () => (health.value?.proxy_https_count ?? 0) >= (health.value?.proxy_https_min_required ?? 2)
+)
+
 // Force process state
 const forceProcessing = ref(false)
 const forceProcessMessage = ref('')
@@ -463,14 +469,17 @@ onUnmounted(() => {
                     {{ health?.proxy_count ?? 0 }}/{{ health?.proxy_min_required ?? 20 }} HTTP
                   </span>
                 </div>
+                <!-- HTTPS proxies are scarce: show progress toward the target,
+                     but judge health against the floor. A few out of 20 is normal. -->
                 <div class="flex items-center gap-1">
                   <component
-                    :is="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? CheckCircleIcon : ExclamationTriangleIcon"
+                    :is="httpsProxyOk ? CheckCircleIcon : ExclamationTriangleIcon"
                     class="h-4 w-4"
-                    :class="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? 'text-green-500' : 'text-yellow-500'"
+                    :class="httpsProxyOk ? 'text-green-500' : 'text-yellow-500'"
                   />
-                  <span class="text-sm" :class="(health?.proxy_https_count ?? 0) >= (health?.proxy_https_min_required ?? 5) ? 'text-green-600' : 'text-yellow-600'">
-                    {{ health?.proxy_https_count ?? 0 }}/{{ health?.proxy_https_min_required ?? 5 }} HTTPS
+                  <span class="text-sm" :class="httpsProxyOk ? 'text-green-600' : 'text-yellow-600'"
+                        :title="`Ziel ${health?.proxy_https_target ?? 20}, Mindestbestand ${health?.proxy_https_min_required ?? 2}`">
+                    {{ health?.proxy_https_count ?? 0 }}/{{ health?.proxy_https_target ?? 20 }} HTTPS
                   </span>
                 </div>
               </div>

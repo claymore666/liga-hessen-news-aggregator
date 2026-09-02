@@ -23,6 +23,7 @@ class ProxyStatus(BaseModel):
     https_count: int
     http_min_required: int
     https_min_required: int
+    https_target: int
     http_max: int
     https_max: int
     max_latency_ms: int
