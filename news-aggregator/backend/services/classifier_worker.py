@@ -97,13 +97,20 @@ class ClassifierWorker:
         self._running = True
         self._stopped_due_to_errors = False
         self._consecutive_errors = 0
+        self._service_unavailable = False
+        self._service_unavailable_since = None
+        self._service_unavailable_logged_at = 0.0
         self._stats["started_at"] = utcnow().isoformat()
         self._task = asyncio.create_task(self._run())
         self._poll_task = asyncio.create_task(self._poll_commands())
         self._sync_task = asyncio.create_task(self._sync_stats())
 
+        # Persisted state is a Redis hash, so keys we omit here survive from
+        # the previous run. Clear service_available explicitly or a stale
+        # "unavailable" from an earlier outage outlives the restart and the
+        # dashboard reports a healthy worker as down.
         from services.worker_status import write_state
-        await write_state("classifier", running=True)
+        await write_state("classifier", running=True, service_available=True)
         logger.info("Classifier worker started")
 
     async def stop(self):
