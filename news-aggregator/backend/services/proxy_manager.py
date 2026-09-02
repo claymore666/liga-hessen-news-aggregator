@@ -968,7 +968,10 @@ class ProxyManager:
                     f"after {failures} failed fetches"
                 )
             else:
-                logger.debug(f"Demoted proxy {proxy} ({failures} failed fetches)")
+                logger.info(
+                    f"↓ Demoted {'HTTPS' if is_https else 'HTTP'} proxy {proxy} "
+                    f"({failures}/{self.MAX_FAILURES} failed fetches)"
+                )
             self._sort_pool(pool)
 
     def available_count(self, connector_type: str, https: bool = False) -> int:
