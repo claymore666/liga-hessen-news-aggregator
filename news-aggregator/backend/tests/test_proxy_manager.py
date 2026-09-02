@@ -529,22 +529,20 @@ class TestKnownHttpsRetention:
             "3.3.3.3:80": {"latency": 30, "failures": 0, "https_capable": False},
             "9.9.9.9:443": {"latency": 2000, "failures": 0, "https_capable": True},
         }
-        tried = []
+        tunnelled = []
 
         async def http_probe(proxy):
-            tried.append(proxy)
             return True, 50.0
 
-        async def tunnels_only_for_the_https_one(proxy):
+        async def tunnel_probe(proxy):
+            tunnelled.append(proxy)
             return proxy == "9.9.9.9:443"
 
         with patch.object(manager, "validate_proxy", side_effect=http_probe):
-            with patch.object(
-                manager, "validate_https_tunnel", side_effect=tunnels_only_for_the_https_one
-            ):
+            with patch.object(manager, "validate_https_tunnel", side_effect=tunnel_probe):
                 await manager._try_known_proxies_first()
 
-        assert "9.9.9.9:443" in tried
+        assert "9.9.9.9:443" in tunnelled
         assert [p["proxy"] for p in manager.https_proxies] == ["9.9.9.9:443"]
 
     @pytest.mark.asyncio
@@ -628,6 +626,105 @@ class TestFillCycleBudget:
             await manager._fill_pools()
 
         assert called is False
+
+
+class TestFastestFirstSelection:
+    """Proxies are handed out fastest-first, not at random."""
+
+    @pytest.mark.asyncio
+    async def test_checkout_returns_fastest_available(self, manager):
+        manager.https_proxies = [
+            {"proxy": "slow:80", "latency": 3000},
+            {"proxy": "fast:80", "latency": 100},
+            {"proxy": "mid:80", "latency": 900},
+        ]
+        manager._sort_pool(manager.https_proxies)
+
+        picked = await manager.checkout_proxy("x_scraper", prefer_https=True)
+        assert picked == "fast:80"
+
+    @pytest.mark.asyncio
+    async def test_checkout_walks_down_as_faster_ones_are_reserved(self, manager):
+        """Concurrent callers spread down the list instead of contending."""
+        manager.http_proxies = [
+            {"proxy": "slow:80", "latency": 3000},
+            {"proxy": "fast:80", "latency": 100},
+            {"proxy": "mid:80", "latency": 900},
+        ]
+        manager._sort_pool(manager.http_proxies)
+
+        picks = [await manager.checkout_proxy("linkedin") for _ in range(3)]
+        assert picks == ["fast:80", "mid:80", "slow:80"]
+        assert await manager.checkout_proxy("linkedin") is None
+
+    @pytest.mark.asyncio
+    async def test_checkin_frees_the_fastest_again(self, manager):
+        manager.http_proxies = [
+            {"proxy": "fast:80", "latency": 100},
+            {"proxy": "mid:80", "latency": 900},
+            {"proxy": "slow:80", "latency": 3000},
+            {"proxy": "slowest:80", "latency": 9000},
+        ]
+        for _ in range(5):
+            assert await manager.checkout_proxy("linkedin") == "fast:80"
+            await manager.checkin_proxy("linkedin", "fast:80")
+
+    def test_rotation_walks_fastest_to_slowest(self, manager):
+        """The unreserved path spreads load, but in speed order."""
+        manager.http_proxies = [
+            {"proxy": "slow:80", "latency": 3000},
+            {"proxy": "fast:80", "latency": 100},
+            {"proxy": "mid:80", "latency": 900},
+        ]
+        manager._sort_pool(manager.http_proxies)
+
+        assert [manager.get_next_proxy() for _ in range(4)] == [
+            "fast:80", "mid:80", "slow:80", "fast:80",
+        ]
+
+    def test_adding_a_proxy_restarts_the_rotation(self, manager):
+        """A stale index must not leave the rotation stuck in the slow tail."""
+        manager.http_proxies = [
+            {"proxy": "fast:80", "latency": 100},
+            {"proxy": "mid:80", "latency": 900},
+        ]
+        manager.get_next_proxy()
+        manager.get_next_proxy()
+        assert manager.http_index == 2
+
+        manager._add_to_pool("faster:80", 10.0, https_capable=False)
+        assert manager.http_index == 0
+        assert manager.get_next_proxy() == "faster:80"
+
+
+class TestRevalidateHttpsViaTunnel:
+    """The HTTPS pool must be health-checked on the protocol it is used for."""
+
+    @pytest.mark.asyncio
+    async def test_tunnel_only_proxy_survives_health_check(self, manager):
+        # failures==2 with MAX_FAILURES==3: one more counted failure evicts it.
+        manager.https_proxies = [{"proxy": "9.9.9.9:443", "latency": 500, "failures": 2}]
+
+        async def http_always_fails(proxy):
+            return False, 0.0
+
+        with patch.object(manager, "validate_proxy", side_effect=http_always_fails):
+            with patch.object(manager, "validate_https_tunnel", return_value=True):
+                removed = await manager._revalidate_pool(manager.https_proxies, "HTTPS")
+
+        assert removed == 0
+        assert [p["proxy"] for p in manager.https_proxies] == ["9.9.9.9:443"]
+
+    @pytest.mark.asyncio
+    async def test_dead_tunnel_still_counts_as_a_failure(self, manager):
+        manager.https_proxies = [{"proxy": "9.9.9.9:443", "latency": 500, "failures": 2}]
+
+        with patch.object(manager, "validate_proxy", return_value=(True, 10.0)):
+            with patch.object(manager, "validate_https_tunnel", return_value=False):
+                removed = await manager._revalidate_pool(manager.https_proxies, "HTTPS")
+
+        assert removed == 1
+        assert manager.https_proxies == []
 
 
 class TestRevalidateExisting:

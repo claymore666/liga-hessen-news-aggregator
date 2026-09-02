@@ -268,6 +268,17 @@ class ProxyManager:
         else:
             self._add_known_proxy(proxy, latency, https_capable)
 
+    def _sort_pool(self, pool: list[dict]) -> None:
+        """Keep a pool ordered fastest-first, and restart the HTTP rotation.
+
+        Selection reads position, not the latency field, so every write to a
+        pool has to go through here — otherwise "fastest" silently means
+        "whatever was appended first".
+        """
+        pool.sort(key=lambda x: x["latency"])
+        if pool is self.http_proxies:
+            self.http_index = 0
+
     def _add_to_pool(self, proxy: str, latency: float, https_capable: bool) -> None:
         """Add proxy to the appropriate pool."""
         proxy_info = {
@@ -282,14 +293,14 @@ class ProxyManager:
             existing = {p["proxy"] for p in self.https_proxies}
             if proxy not in existing and len(self.https_proxies) < self.max_https_proxies:
                 self.https_proxies.append(proxy_info)
-                self.https_proxies.sort(key=lambda x: x["latency"])
+                self._sort_pool(self.https_proxies)
                 logger.info(f"✓ Found HTTPS proxy: {proxy} ({latency:.0f}ms)")
         else:
             # Check if already in HTTP pool
             existing = {p["proxy"] for p in self.http_proxies}
             if proxy not in existing and len(self.http_proxies) < self.max_http_proxies:
                 self.http_proxies.append(proxy_info)
-                self.http_proxies.sort(key=lambda x: x["latency"])
+                self._sort_pool(self.http_proxies)
                 logger.info(f"✓ Found HTTP proxy: {proxy} ({latency:.0f}ms)")
 
         self._record_proxy_success(proxy, latency, https_capable)
@@ -324,22 +335,21 @@ class ProxyManager:
         https_found = 0
 
         for proxy, info in sorted_known:
-            success, latency = await self.validate_proxy(proxy)
-            was_https = bool(info.get("https_capable"))
-
-            if success:
-                # Use stored https_capable or re-test if unknown
-                https_capable = was_https
-                if not https_capable:
-                    https_capable = await self.validate_https_tunnel(proxy)
-            elif was_https:
-                # A proxy that tunnels but refuses plain HTTP is still a good
-                # HTTPS proxy. Failing it on the HTTP probe alone threw away the
-                # scarcest thing we have, and three restarts later evicted it.
+            if info.get("https_capable"):
+                # Re-check it on the protocol it is actually used for. That keeps
+                # a tunnel-only proxy alive — failing it on the HTTP probe threw
+                # away the scarcest thing we have, and evicted it three restarts
+                # later — and gives the HTTPS pool a latency measured the same
+                # way for every entry, so sorting it by speed means something.
                 https_capable, latency = await self.validate_https_tunnel_timed(proxy)
                 success = https_capable
             else:
+                success, latency = await self.validate_proxy(proxy)
                 https_capable = False
+                if success:
+                    https_capable, tunnel_ms = await self.validate_https_tunnel_timed(proxy)
+                    if https_capable:
+                        latency = tunnel_ms
 
             if success:
                 self._add_to_pool(proxy, latency, https_capable)
@@ -632,9 +642,10 @@ class ProxyManager:
         for proxy in https_capable:
             if len(self.https_proxies) >= self.max_https_proxies:
                 break
-            # Prefer the HTTP latency when we have one; otherwise the tunnel time.
-            latency = http_latency.get(proxy, https_capable[proxy])
-            self._add_to_pool(proxy, latency, https_capable=True)
+            # Always the tunnel time, never the HTTP latency: the HTTPS pool is
+            # sorted fastest-first and handed out in that order, so every entry
+            # has to be measured on the same protocol to be comparable.
+            self._add_to_pool(proxy, https_capable[proxy], https_capable=True)
             https_found += 1
 
         for proxy, latency in http_latency.items():
@@ -728,16 +739,28 @@ class ProxyManager:
             logger.info(f"HTTPS pool {n_https}/{self.https_target} (floor {self.https_floor}) — best effort")
 
     async def _revalidate_pool(self, pool: list[dict], pool_name: str) -> int:
-        """Revalidate a pool and remove dead proxies. Returns removed count."""
+        """Revalidate a pool and remove dead proxies. Returns removed count.
+
+        The HTTPS pool is re-checked through a CONNECT tunnel, not a plain-HTTP
+        fetch. Using the HTTP probe here evicted tunnel-only proxies after three
+        health checks — about half an hour — which quietly undid the work of
+        finding them, and it also overwrote their latency with a number measured
+        on a protocol they are not used for, so the pool sorted on the wrong
+        figure.
+        """
         if not pool:
             return 0
 
+        is_https = pool is self.https_proxies
         still_working = []
         removed = 0
 
         for proxy_info in pool:
             proxy = proxy_info["proxy"]
-            success, latency = await self.validate_proxy(proxy)
+            if is_https:
+                success, latency = await self.validate_https_tunnel_timed(proxy)
+            else:
+                success, latency = await self.validate_proxy(proxy)
             if success:
                 proxy_info["latency"] = round(latency, 2)
                 proxy_info["last_checked"] = utcnow().isoformat()
@@ -755,7 +778,7 @@ class ProxyManager:
 
         pool.clear()
         pool.extend(still_working)
-        pool.sort(key=lambda x: x["latency"])
+        self._sort_pool(pool)
 
         return removed
 
@@ -838,7 +861,17 @@ class ProxyManager:
             return len(self.http_proxies) + len(self.https_proxies)
 
     def get_next_proxy(self) -> str | None:
-        """Get next HTTP proxy from round-robin rotation."""
+        """Get the next HTTP proxy, walking the pool fastest to slowest.
+
+        These callers hold no reservation, so handing every one of them the
+        single fastest proxy would pile all traffic onto it and get it banned —
+        the point of a pool is to spread load. Rotating over a latency-sorted
+        pool gives both: each pass starts at the fastest and works down.
+
+        The rotation restarts whenever the pool is re-sorted (a proxy added, or
+        latencies refreshed by a health check), so a stale index cannot leave us
+        stuck in the slow tail.
+        """
         if not self.http_proxies:
             return None
 
@@ -874,7 +907,11 @@ class ProxyManager:
                            f"(pool={len(pool)}, reserved={len(reserved)})")
                 return None
 
-            proxy = random.choice(available)
+            # Pools are kept sorted fastest-first, and `available` preserves that
+            # order, so this hands out the quickest proxy not already in use.
+            # Reservations spread concurrent callers down the list rather than
+            # piling onto one proxy.
+            proxy = available[0]
             reserved.add(proxy)
 
             logger.debug(f"Checked out {pool_name} proxy {proxy} for {connector_type} "

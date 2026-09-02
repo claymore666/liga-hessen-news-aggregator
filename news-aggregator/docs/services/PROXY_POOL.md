@@ -42,9 +42,34 @@ A proxy is only accepted if it demonstrably carries traffic:
 The two are **independent**. A proxy that tunnels fine can refuse plain HTTP, so
 CONNECT capability is probed across the whole batch, not just HTTP survivors —
 measured 2026-09-02, 4 of every 10 usable HTTPS proxies fail the HTTP probe.
-The same applies to the known-good list on restart: an HTTPS proxy is re-probed
-via CONNECT before being counted as failed, because retention beats discovery
-when hits are this rare.
+The same applies everywhere an HTTPS proxy is re-checked — the known-good list
+on restart, and the 10-minute health check — because retention beats discovery
+when hits are this rare. Health-checking the HTTPS pool with the HTTP probe used
+to evict tunnel-only proxies within about half an hour.
+
+## Selection order
+
+Both pools are kept sorted **fastest first**, and that order is what selection
+reads — so every write to a pool goes through `_sort_pool()`.
+
+- `checkout_proxy()` (X scraper) takes the fastest proxy not already reserved.
+  Reservations make concurrent callers walk *down* the list rather than contend
+  for one entry, so the ordering spreads load instead of concentrating it.
+- `get_next_proxy()` (Instagram, LinkedIn) holds no reservation, so handing
+  every caller the single fastest proxy would pile all traffic onto it and get
+  it banned — the point of a pool is to spread load. It rotates over the sorted
+  pool instead: each pass starts at the fastest and works down. The rotation
+  restarts whenever the pool is re-sorted, so a stale index cannot leave it
+  stuck in the slow tail.
+
+The HTTPS pool's latency is always the **CONNECT + TLS handshake time**, never a
+plain-HTTP latency, because that is the protocol those proxies are used for.
+Mixing the two measurements would make the sort compare unlike numbers.
+
+Note that tunnel times are not capped: `MAX_LATENCY_MS` (2500) applies only to
+the HTTP probe. Tunnels of 5-12s do get accepted — they sort last and are used
+only once the faster ones are busy, which still beats falling back to a direct
+connection.
 
 ## Choosing sources
 
