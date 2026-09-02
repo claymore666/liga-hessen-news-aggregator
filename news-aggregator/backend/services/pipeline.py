@@ -236,7 +236,7 @@ class Pipeline:
             item_logger = self.processing_logger.new_item_run() if self.processing_logger else None
             # 1. Skip old items (older than MAX_AGE_DAYS) - disabled in training_mode
             # Normalize published_at to naive UTC for comparison
-            pub_dt = raw.published_at
+            pub_dt = raw.published_at or utcnow()  # undated entries count as new
             if pub_dt.tzinfo is not None:
                 pub_dt = pub_dt.astimezone(UTC).replace(tzinfo=None)
             if not self.training_mode and pub_dt < self.cutoff_date:

@@ -210,7 +210,8 @@ class RSSConnector(BaseConnector):
                     content=content,
                     url=link,
                     author=author,
-                    published_at=published,
+                    # Feeds may omit dates (e.g. ifo.de); treat as new.
+                    published_at=published or datetime.utcnow(),
                     metadata=item_metadata,
                 )
             )
