@@ -509,6 +509,127 @@ class TestHttpsIndependentOfHttpProbe:
         assert probed == []
 
 
+class TestKnownHttpsRetention:
+    """Known HTTPS proxies must survive a restart.
+
+    They are the scarcest thing the pool holds — roughly one hit per 50 CONNECT
+    probes — so losing one costs far more than re-probing it. Two bugs threw
+    them away: sorting the known list by latency (a tunnel handshake is slower
+    than an HTTP fetch, so they sank below the try-first cut and were never
+    retried), and failing them on the plain-HTTP probe alone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_https_proxy_is_always_retried(self, manager):
+        """A slow HTTPS proxy is tried even when faster HTTP ones crowd it out."""
+        manager.KNOWN_PROXIES_TO_TRY_FIRST = 2
+        manager._known_proxies = {
+            "1.1.1.1:80": {"latency": 10, "failures": 0, "https_capable": False},
+            "2.2.2.2:80": {"latency": 20, "failures": 0, "https_capable": False},
+            "3.3.3.3:80": {"latency": 30, "failures": 0, "https_capable": False},
+            "9.9.9.9:443": {"latency": 2000, "failures": 0, "https_capable": True},
+        }
+        tried = []
+
+        async def http_probe(proxy):
+            tried.append(proxy)
+            return True, 50.0
+
+        async def tunnels_only_for_the_https_one(proxy):
+            return proxy == "9.9.9.9:443"
+
+        with patch.object(manager, "validate_proxy", side_effect=http_probe):
+            with patch.object(
+                manager, "validate_https_tunnel", side_effect=tunnels_only_for_the_https_one
+            ):
+                await manager._try_known_proxies_first()
+
+        assert "9.9.9.9:443" in tried
+        assert [p["proxy"] for p in manager.https_proxies] == ["9.9.9.9:443"]
+
+    @pytest.mark.asyncio
+    async def test_known_https_proxy_survives_failed_http_probe(self, manager):
+        """Refusing plain HTTP must not evict a proxy that still tunnels."""
+        manager._known_proxies = {
+            "9.9.9.9:443": {"latency": 2000, "failures": 2, "https_capable": True},
+        }
+
+        async def http_always_fails(proxy):
+            return False, 0.0
+
+        with patch.object(manager, "validate_proxy", side_effect=http_always_fails):
+            with patch.object(manager, "validate_https_tunnel", return_value=True):
+                http_found, https_found = await manager._try_known_proxies_first()
+
+        assert (http_found, https_found) == (0, 1)
+        assert [p["proxy"] for p in manager.https_proxies] == ["9.9.9.9:443"]
+        # failures==2 with MAX_FAILURES==3: a recorded failure would have
+        # deleted it outright.
+        assert "9.9.9.9:443" in manager._known_proxies
+
+    @pytest.mark.asyncio
+    async def test_dead_known_https_proxy_still_fails(self, manager):
+        """A proxy that neither proxies nor tunnels is still recorded as failed."""
+        manager._known_proxies = {
+            "9.9.9.9:443": {"latency": 2000, "failures": 0, "https_capable": True},
+        }
+
+        async def http_always_fails(proxy):
+            return False, 0.0
+
+        with patch.object(manager, "validate_proxy", side_effect=http_always_fails):
+            with patch.object(manager, "validate_https_tunnel", return_value=False):
+                http_found, https_found = await manager._try_known_proxies_first()
+
+        assert (http_found, https_found) == (0, 0)
+        assert manager.https_proxies == []
+        assert manager._known_proxies["9.9.9.9:443"]["failures"] == 1
+
+
+class TestFillCycleBudget:
+    """A fill cycle must end when the HTTPS budget is spent, not grind on."""
+
+    @pytest.mark.asyncio
+    async def test_barren_https_batches_do_not_end_the_sweep(self, manager):
+        """Three yield-free batches must not abort a sweep that still has budget."""
+        manager.http_proxies = [
+            {"proxy": f"1.2.3.{i}:80", "latency": 10} for i in range(manager.min_http_proxies)
+        ]
+        manager.https_probe_budget = 100
+        batches = 0
+
+        async def barren_batch():
+            nonlocal batches
+            batches += 1
+            manager._https_probes_left -= 25
+            return 0, 0
+
+        with patch.object(manager, "_search_batch", side_effect=barren_batch):
+            with patch("asyncio.sleep", return_value=None):
+                await manager._fill_pools()
+
+        assert batches == 4  # budget 100 / 25 per batch, not stopped at 3
+
+    @pytest.mark.asyncio
+    async def test_cycle_stops_once_budget_is_spent(self, manager):
+        """With HTTP full and no budget, no batch runs at all."""
+        manager.http_proxies = [
+            {"proxy": f"1.2.3.{i}:80", "latency": 10} for i in range(manager.min_http_proxies)
+        ]
+        manager.https_probe_budget = 0
+        called = False
+
+        async def never():
+            nonlocal called
+            called = True
+            return 0, 0
+
+        with patch.object(manager, "_search_batch", side_effect=never):
+            await manager._fill_pools()
+
+        assert called is False
+
+
 class TestRevalidateExisting:
     """Tests for revalidating existing proxies."""
 

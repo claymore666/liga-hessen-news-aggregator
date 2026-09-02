@@ -95,31 +95,42 @@ class ProxyManager:
     # Multiple proxy sources for better coverage.
     # Line formats differ per source (bare ip:port, scheme-prefixed, ip:port:country,
     # comment lines) — everything goes through parse_proxy_line.
+    # Measured 2026-09-02: each list sampled at 40 entries and run through the
+    # same two checks the pools use — a plain-HTTP fetch, and a CONNECT plus a
+    # real TLS handshake to x.com. Hits per 40 sampled, as https/http:
+    #
+    #   monosans        687   14/4     vakhov http     524    0/16
+    #   KangProxy      1523   11/7     proxifly        631    1/12
+    #   elliottophellia 1045  10/12    sunny9577      1615    1/7
+    #   proxyscrape v2  138    9/9     TheSpeedX      2925    1/4
+    #   proxyscrape v4  551    5/7     ShiftyTR         40    1/0
+    #   Zaeem20         409    4/1
+    #
+    # Dropped on the same measurement, and why size matters as much as rate:
+    # MuRongPIG/Proxy-Master scored 0/3 yet held 20,000 entries — 73% of the
+    # whole candidate pool — so almost every random batch was drawn from a list
+    # that yields nothing, which is the actual reason the HTTPS pool sat at one
+    # proxy. Also dropped for scoring 0 on both checks: jetkai (1801),
+    # clarketm (400), vakhov/https (6), roosterkid/HTTPS_RAW (64, 0/2) and
+    # zloi-user/hideip.me (1080, 0/1). Removing them cut the pool from 27,400 to
+    # ~10,100 candidates and raised the expected hit rate from ~2% to ~12%
+    # (HTTPS) and ~10% to ~17% (HTTP).
+    #
+    # Note the shape of the result: a list being *named* https predicts nothing.
+    # The three best CONNECT sources are general http lists that happen to be
+    # freshly checked. Re-run the measurement before adding or trusting a source.
     PROXY_SOURCES = [
-        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
-        "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
-        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
-        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
-        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
         "https://raw.githubusercontent.com/officialputuid/KangProxy/main/http/http.txt",
-        "https://vakhov.github.io/fresh-proxy-list/http.txt",
-        "https://vakhov.github.io/fresh-proxy-list/https.txt",
-        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
-        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
-        # HTTPS/CONNECT-oriented lists. Measured 2026-09-02 by sampling each list
-        # and running the same CONNECT+TLS check used below; the percentage is the
-        # share of sampled entries that completed a real TLS handshake to x.com:
-        #   Zaeem20    409 entries, 12.5%      proxyscrape  198 entries, 12.5%
-        #   zloi-user 1040 entries,  2.5%
-        # For contrast, several popular "https" lists yielded 0% on the same test
-        # (proxifly/https 1208 entries, ErcinDedeoglu/https 2976 entries) and are
-        # deliberately not included; mmpx12, prxchk, monosans/https and
-        # elliottophellia/https all 404 as of that date.
-        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
+        "https://raw.githubusercontent.com/elliottophellia/proxylist/master/results/http/global/http_checked.txt",
         "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&ssl=yes&anonymity=all",
-        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text",
+        "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
+        "https://vakhov.github.io/fresh-proxy-list/http.txt",
+        "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
     ]
 
     # Validation settings
@@ -289,11 +300,21 @@ class ProxyManager:
             logger.info("No known proxies to try")
             return 0, 0
 
-        # Sort by lowest latency and take first N
-        sorted_known = sorted(
-            self._known_proxies.items(),
-            key=lambda x: x[1]["latency"]
-        )[:self.KNOWN_PROXIES_TO_TRY_FIRST]
+        # HTTPS-capable proxies are rare enough that retention beats discovery:
+        # always retry every one we know, then fill up with the fastest others.
+        # Sorting purely by latency hid them — a tunnel handshake is slower than
+        # an HTTP fetch, so they sank below the cut every time and were never
+        # retried, then aged out of the known list entirely.
+        known_https = [
+            item for item in self._known_proxies.items()
+            if item[1].get("https_capable")
+        ]
+        others = sorted(
+            (item for item in self._known_proxies.items() if not item[1].get("https_capable")),
+            key=lambda x: x[1]["latency"],
+        )
+        slots = max(0, self.KNOWN_PROXIES_TO_TRY_FIRST - len(known_https))
+        sorted_known = known_https + others[:slots]
 
         if not sorted_known:
             return 0, 0
@@ -304,12 +325,23 @@ class ProxyManager:
 
         for proxy, info in sorted_known:
             success, latency = await self.validate_proxy(proxy)
+            was_https = bool(info.get("https_capable"))
+
             if success:
                 # Use stored https_capable or re-test if unknown
-                https_capable = info.get("https_capable", False)
+                https_capable = was_https
                 if not https_capable:
                     https_capable = await self.validate_https_tunnel(proxy)
+            elif was_https:
+                # A proxy that tunnels but refuses plain HTTP is still a good
+                # HTTPS proxy. Failing it on the HTTP probe alone threw away the
+                # scarcest thing we have, and three restarts later evicted it.
+                https_capable, latency = await self.validate_https_tunnel_timed(proxy)
+                success = https_capable
+            else:
+                https_capable = False
 
+            if success:
                 self._add_to_pool(proxy, latency, https_capable)
                 if https_capable:
                     https_found += 1
@@ -628,6 +660,16 @@ class ProxyManager:
         return (len(self.http_proxies) >= self.min_http_proxies and
                 len(self.https_proxies) >= self.https_target)
 
+    def _needs_more_search(self) -> bool:
+        """Whether another batch in this fill cycle is still worth running."""
+        if len(self.http_proxies) < self.min_http_proxies:
+            return True
+        # HTTPS keeps searching only while this cycle's probe budget lasts.
+        # Without that bound the cycle would run its full batch allowance every
+        # 10 minutes forever, because the target is one we rarely reach.
+        return (len(self.https_proxies) < self.https_target
+                and self._https_probes_left > 0)
+
     async def _fill_pools(self):
         """Search until the HTTP pool meets its minimum and the HTTPS probe
         budget for this cycle is spent."""
@@ -636,7 +678,7 @@ class ProxyManager:
         empty_batches = 0
         self._https_probes_left = self.https_probe_budget
 
-        while not self._pools_filled() and batches_tried < max_batches:
+        while self._needs_more_search() and batches_tried < max_batches:
             http_found, https_found = await self._search_batch()
             batches_tried += 1
 
@@ -645,20 +687,24 @@ class ProxyManager:
             # counting that as failure used to abandon the HTTPS search after
             # three batches exactly when the HTTPS pool was the one starving.
             http_short = len(self.http_proxies) < self.min_http_proxies
-            https_short = (len(self.https_proxies) < self.max_https_proxies
-                           and self._https_probes_left > 0)
+            # The HTTPS sweep is bounded by the probe budget, not by yield. At
+            # roughly one hit per 50 probes, three barren batches is the normal
+            # case, so the empty-batch rule must not end it — that would throw
+            # the rest of the budget away on every single cycle.
+            https_probing = (len(self.https_proxies) < self.https_target
+                             and self._https_probes_left > 0)
             made_progress = (http_found > 0 and http_short) or https_found > 0
 
-            if not made_progress and not (http_short or https_short):
+            if not made_progress and not (http_short or https_probing):
                 break  # nothing left worth searching for
 
-            if not made_progress:
+            if made_progress:
+                empty_batches = 0
+            elif not https_probing:
                 empty_batches += 1
                 if empty_batches >= 3:
                     logger.info("3 consecutive empty batches, stopping search")
                     break
-            else:
-                empty_batches = 0
 
             # Cooldown between batches to avoid CPU spikes
             await asyncio.sleep(self.BATCH_COOLDOWN)

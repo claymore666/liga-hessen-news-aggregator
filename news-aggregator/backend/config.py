@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     proxy_https_pool_floor: int = 2
     # Bounds the CPU cost of chasing a target we may never reach: at most this
     # many CONNECT+TLS probes per fill cycle (docker-ai is a 2-core VM).
-    proxy_https_probe_budget: int = 60
+    proxy_https_probe_budget: int = 100
 
     # Daily Digest
     digest_enabled: bool = False
