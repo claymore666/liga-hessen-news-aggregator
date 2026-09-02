@@ -293,6 +293,14 @@ Browser-based scraping.
 }
 ```
 
+**Notes** (DOM as of 2026-09):
+- Works anonymously (no login/cookies). Profile grid links are
+  `/<username>/p/<code>/` or `/<username>/reel/<code>/`; anonymous views mix in
+  suggested posts from other accounts, which are filtered by username prefix.
+- Caption, image and video flag come from the post page's `og:description`,
+  `og:image` and `og:video` meta tags — the visible DOM changes too often.
+- `playwright_stealth` is deliberately **not** applied: it renders a blank page.
+
 **Notes**:
 - Requires exported cookies
 - Browser-based, slow

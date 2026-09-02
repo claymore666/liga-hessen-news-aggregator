@@ -54,6 +54,10 @@ class InstagramScraperConnector(BaseConnector):
     config_schema = InstagramScraperConfig
 
     # User-Agent rotation pool
+    # Grid links on a profile page (post or reel). Instagram dropped the
+    # <article> wrapper in 2026, so scope to <main>.
+    POST_LINK_SELECTOR = "main a[href*='/p/'], main a[href*='/reel/']"
+
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -149,10 +153,12 @@ class InstagramScraperConnector(BaseConnector):
                     logger.warning(f"Instagram profile is private: @{config.username}")
                     return []
 
-                # Wait for posts to load
+                # Wait for posts to load. Instagram dropped the <article> wrapper
+                # in 2026; grid links now look like /<username>/p/<code>/ or
+                # /<username>/reel/<code>/ and anonymous views also mix in
+                # suggested posts from other accounts.
                 try:
-                    # Instagram uses article elements for posts
-                    await page.wait_for_selector("article a[href*='/p/']", timeout=15000)
+                    await page.wait_for_selector(self.POST_LINK_SELECTOR, timeout=15000)
                 except PlaywrightTimeout:
                     logger.warning(f"No posts found for @{config.username}")
                     return []
@@ -181,20 +187,23 @@ class InstagramScraperConnector(BaseConnector):
         """Extract posts from Instagram profile page, including full captions."""
         items = []
 
-        # Find all post links (Instagram uses /p/SHORTCODE/ format)
-        post_links = await page.query_selector_all("article a[href*='/p/']")
+        # Find this account's own post links (skip suggested posts by others)
+        post_links = await page.query_selector_all(self.POST_LINK_SELECTOR)
+        own_prefixes = (f"/{config.username.lower()}/", "/p/", "/reel/")
 
         seen_shortcodes = set()
         shortcodes_to_fetch = []
 
         # First pass: collect unique shortcodes
-        for link in post_links[:config.max_posts * 2]:
+        # Iterate the whole grid: the first links are often suggested posts
+        # from other accounts, which are skipped below.
+        for link in post_links:
             try:
                 href = await link.get_attribute("href")
-                if not href:
+                if not href or not href.lower().startswith(own_prefixes):
                     continue
 
-                match = re.search(r"/p/([A-Za-z0-9_-]+)", href)
+                match = re.search(r"/(?:p|reel)/([A-Za-z0-9_-]+)", href)
                 if not match:
                     continue
 
@@ -221,19 +230,20 @@ class InstagramScraperConnector(BaseConnector):
                 # Extract full caption from post page
                 caption = await self._extract_caption(page)
 
-                # Get image URL
-                image_url = ""
-                img = await page.query_selector("article img[src*='instagram']")
-                if img:
-                    image_url = await img.get_attribute("src") or ""
+                # Image / video: og: meta tags are stable and present anonymously
+                image_url = await self._meta_content(page, "og:image")
 
-                # Get alt text (contains image description)
+                # Alt text of the post image (Instagram's image description)
                 alt_text = ""
+                img = await page.query_selector("main img[alt^='Photo by'], main img[alt^='Foto von']")
                 if img:
                     alt_text = await img.get_attribute("alt") or ""
 
                 # Check if video/reel
-                is_video = bool(await page.query_selector("article video"))
+                is_video = bool(
+                    await page.query_selector("meta[property='og:video']")
+                    or await page.query_selector("main video")
+                )
 
                 # Try to get timestamp
                 published_at = datetime.now(UTC)
@@ -282,19 +292,30 @@ class InstagramScraperConnector(BaseConnector):
 
         return items
 
+    @staticmethod
+    async def _meta_content(page, prop: str) -> str:
+        """Return content of <meta property=...> or empty string."""
+        elem = await page.query_selector(f"meta[property='{prop}']")
+        if not elem:
+            return ""
+        return await elem.get_attribute("content") or ""
+
     async def _extract_caption(self, page) -> str:
         """Extract full caption from Instagram post page."""
         caption = ""
 
-        # Try multiple selectors for caption
+        # og:description carries the full caption and is served to anonymous
+        # visitors: '41 likes, 0 comments - user am August 26, 2026: "caption"'
+        og = await self._meta_content(page, "og:description")
+        m = re.search(r':\s*[\u201c"](.*)[\u201d"]\.?\s*$', og, re.DOTALL)
+        if m and len(m.group(1).strip()) > 0:
+            return m.group(1).strip()
+
+        # Fallback: visible caption text (DOM changes often; Instagram dropped
+        # the <article> wrapper in 2026, so scope to <main>)
         selectors = [
-            # Main caption container
-            "article div[role='button'] span:not([class])",
-            "article h1 + div span",
-            # Expanded caption
-            "article span[dir='auto']",
-            # Caption in meta
-            "meta[property='og:description']",
+            "main h1",
+            "main span[dir='auto']",
         ]
 
         for selector in selectors:

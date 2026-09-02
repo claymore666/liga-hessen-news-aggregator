@@ -151,13 +151,16 @@ async_session_maker = async_sessionmaker(
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency for getting database sessions.
 
-    Only commits if the session has pending changes (new/dirty/deleted objects),
-    avoiding unnecessary COMMIT statements on read-only requests.
+    Commits whenever a transaction is open when the request finishes. Checking
+    ``session.new/dirty/deleted`` instead is wrong: an endpoint that calls
+    ``flush()`` (to get IDs or refresh a row) leaves the session clean, so the
+    write was silently rolled back on close and the API returned data that
+    never reached the database.
     """
     async with async_session_maker() as session:
         try:
             yield session
-            if session.new or session.dirty or session.deleted:
+            if session.in_transaction():
                 await session.commit()
         except Exception:
             await session.rollback()
