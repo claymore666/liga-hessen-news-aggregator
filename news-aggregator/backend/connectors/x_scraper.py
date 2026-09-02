@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout
-from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field
 
 from .base import BaseConnector, RawItem
@@ -20,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Path to saved X.com cookies (from scripts/x_auth.py)
 COOKIE_FILE = Path(__file__).parent.parent / "data" / "x_cookies.json"
+_missing_cookies_warned = False
 
 
 class XScraperConfig(BaseModel):
@@ -84,7 +84,15 @@ class XScraperConnector(BaseConnector):
             List of cookie dicts or None if no cookies found
         """
         if not COOKIE_FILE.exists():
-            logger.debug(f"No cookie file found at {COOKIE_FILE}")
+            # Without auth cookies X serves a login wall and every fetch yields
+            # zero tweets, so this must be visible in the logs (once per process).
+            global _missing_cookies_warned
+            if not _missing_cookies_warned:
+                logger.warning(
+                    f"No X.com cookie file at {COOKIE_FILE} — fetches will hit the login "
+                    "wall and return no tweets. Run scripts/x_auth.py to create it."
+                )
+                _missing_cookies_warned = True
             return None
 
         try:
@@ -207,8 +215,11 @@ class XScraperConnector(BaseConnector):
 
                 page = await context.new_page()
 
-                # Apply stealth mode
-                await stealth_async(page)
+                # NOTE: playwright_stealth is deliberately NOT applied here. Its
+                # navigator/window patches make X's JS bundle abort
+                # (X reports /i/script-load-failure and renders "Something went
+                # wrong"), so no tweets ever appear. With a real auth session the
+                # plain Playwright page loads profiles fine (verified 2026-09-02).
 
                 # Navigate to profile
                 url = f"https://x.com/{config.username}"
@@ -695,7 +706,6 @@ Verlinkter Artikel von {article.source_domain}:
                 )
                 try:
                     page = await context.new_page()
-                    await stealth_async(page)
 
                     url = f"https://x.com/{config.username}"
                     response = await page.goto(url, timeout=15000)
