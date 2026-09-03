@@ -10,6 +10,11 @@ from connectors.instagram_scraper import InstagramScraperConfig, InstagramScrape
 
 
 @pytest.fixture(autouse=True)
+def no_redis(monkeypatch):
+    monkeypatch.setattr("connectors.instagram_scraper.get_redis", AsyncMock(return_value=None))
+
+
+@pytest.fixture(autouse=True)
 def reset_pacing_state():
     C._gate = None
     C._last_profile_fetch = 0.0
@@ -76,3 +81,23 @@ async def test_login_wall_sets_backoff():
         items = await C()._fetch_with_browser(InstagramScraperConfig(username="someone"), None)
     assert items == []
     assert C._blocked_until > time.monotonic() + C.LOGIN_WALL_BACKOFF - 5
+
+
+@pytest.mark.asyncio
+async def test_backoff_shared_via_redis(monkeypatch):
+    """Another worker process armed the back-off: honour the Redis TTL."""
+    redis = AsyncMock()
+    redis.ttl = AsyncMock(return_value=1200)
+    monkeypatch.setattr("connectors.instagram_scraper.get_redis", AsyncMock(return_value=redis))
+    with patch.object(C, "_fetch_paced", new=AsyncMock(return_value=["x"])) as fp:
+        assert await C().fetch(InstagramScraperConfig(username="someone")) == []
+    fp.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_arm_backoff_writes_redis(monkeypatch):
+    redis = AsyncMock()
+    monkeypatch.setattr("connectors.instagram_scraper.get_redis", AsyncMock(return_value=redis))
+    await C._arm_backoff()
+    redis.set.assert_awaited_once_with(C.LOGIN_WALL_KEY, "1", ex=C.LOGIN_WALL_BACKOFF)
+    assert C._blocked_until > time.monotonic()

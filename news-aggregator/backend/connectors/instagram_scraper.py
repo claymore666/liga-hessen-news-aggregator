@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
 from services.browser_pool import browser_pool
+from services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,36 @@ class InstagramScraperConnector(BaseConnector):
     MIN_PROFILE_SPACING = 45.0      # seconds between profile loads (process-wide)
     POST_PAGE_DELAY_MS = 5000       # pause between post detail pages
     LOGIN_WALL_BACKOFF = 6 * 3600   # seconds to skip all Instagram fetches after a login wall
+    LOGIN_WALL_KEY = "instagram:login_wall"  # Redis key shared across worker processes
     _gate: asyncio.Lock | None = None
     _last_profile_fetch = 0.0
     _blocked_until = 0.0
+
+    @classmethod
+    async def _backoff_remaining(cls) -> float:
+        """Seconds of login-wall back-off left (process-local or shared via Redis)."""
+        remaining = cls._blocked_until - time.monotonic()
+        if remaining > 0:
+            return remaining
+        try:
+            redis = await get_redis()
+            if redis is not None:
+                ttl = await redis.ttl(cls.LOGIN_WALL_KEY)
+                if ttl and ttl > 0:
+                    return float(ttl)
+        except Exception as e:  # Redis is an optimization only
+            logger.debug(f"Could not read Instagram back-off from Redis: {e}")
+        return 0.0
+
+    @classmethod
+    async def _arm_backoff(cls) -> None:
+        cls._blocked_until = time.monotonic() + cls.LOGIN_WALL_BACKOFF
+        try:
+            redis = await get_redis()
+            if redis is not None:
+                await redis.set(cls.LOGIN_WALL_KEY, "1", ex=cls.LOGIN_WALL_BACKOFF)
+        except Exception as e:
+            logger.debug(f"Could not store Instagram back-off in Redis: {e}")
 
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -99,7 +127,7 @@ class InstagramScraperConnector(BaseConnector):
             List of RawItem objects containing posts
         """
         cls = InstagramScraperConnector
-        remaining = cls._blocked_until - time.monotonic()
+        remaining = await cls._backoff_remaining()
         if remaining > 0:
             logger.warning(
                 f"Skipping @{config.username}: Instagram login-wall back-off active "
@@ -183,9 +211,7 @@ class InstagramScraperConnector(BaseConnector):
                 # profile loads Instagram redirects every request to the login
                 # page. Say so explicitly instead of "No posts found".
                 if "/accounts/login" in page.url:
-                    InstagramScraperConnector._blocked_until = (
-                        time.monotonic() + self.LOGIN_WALL_BACKOFF
-                    )
+                    await self._arm_backoff()
                     logger.warning(
                         f"Instagram login wall for @{config.username} — anonymous "
                         "access from this IP is rate limited; fetches will fail until "
