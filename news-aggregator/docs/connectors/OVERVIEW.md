@@ -300,6 +300,13 @@ Browser-based scraping.
 - Caption, image and video flag come from the post page's `og:description`,
   `og:image` and `og:video` meta tags — the visible DOM changes too often.
 - `playwright_stealth` is deliberately **not** applied: it renders a blank page.
+- **Rate limiting**: anonymous access is limited per IP. On 2026-09-02 about 30
+  profile fetches (each visiting ~10 post pages) within two hours got every
+  further request redirected to the login page for hours. The scraper therefore
+  paces itself: one profile at a time, ≥45 s between profile loads, 5 s between
+  post pages, and a 6 h back-off for all Instagram channels once a login wall is
+  seen (logged as "Instagram login wall"). Keep channels at
+  `fetch_interval_minutes: 1440`; politicians post a few times a week.
 
 **Notes**:
 - Requires exported cookies

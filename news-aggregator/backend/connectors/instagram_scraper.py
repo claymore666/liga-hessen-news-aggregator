@@ -4,9 +4,11 @@ Direct scraping of public instagram.com profiles with Playwright.
 Works for public profiles without authentication.
 """
 
+import asyncio
 import logging
 import random
 import re
+import time
 from datetime import datetime, UTC
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout
@@ -58,6 +60,19 @@ class InstagramScraperConnector(BaseConnector):
     # <article> wrapper in 2026, so scope to <main>.
     POST_LINK_SELECTOR = "main a[href*='/p/'], main a[href*='/reel/']"
 
+    # Anonymous Instagram access is rate limited per IP (observed 2026-09-02:
+    # ~30 profile fetches with ~10 post pages each inside two hours got every
+    # further request redirected to the login page for hours). Stay well
+    # below that: one profile at a time, spaced out, slow post pages, and a
+    # hard back-off once a login wall is seen. Keep the total per channel
+    # under the scheduler's 300 s timeout for this connector.
+    MIN_PROFILE_SPACING = 45.0      # seconds between profile loads (process-wide)
+    POST_PAGE_DELAY_MS = 5000       # pause between post detail pages
+    LOGIN_WALL_BACKOFF = 6 * 3600   # seconds to skip all Instagram fetches after a login wall
+    _gate: asyncio.Lock | None = None
+    _last_profile_fetch = 0.0
+    _blocked_until = 0.0
+
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -83,6 +98,27 @@ class InstagramScraperConnector(BaseConnector):
         Returns:
             List of RawItem objects containing posts
         """
+        cls = InstagramScraperConnector
+        remaining = cls._blocked_until - time.monotonic()
+        if remaining > 0:
+            logger.warning(
+                f"Skipping @{config.username}: Instagram login-wall back-off active "
+                f"for another {remaining / 60:.0f} min"
+            )
+            return []
+
+        if cls._gate is None:
+            cls._gate = asyncio.Lock()
+        async with cls._gate:
+            wait = cls._last_profile_fetch + cls.MIN_PROFILE_SPACING - time.monotonic()
+            if wait > 0:
+                logger.info(f"Pacing Instagram: waiting {wait:.0f}s before @{config.username}")
+                await asyncio.sleep(wait)
+            cls._last_profile_fetch = time.monotonic()
+            return await self._fetch_paced(config)
+
+    async def _fetch_paced(self, config: InstagramScraperConfig) -> list[RawItem]:
+        """Fetch one profile (called with the pacing gate held)."""
         # Get proxy if enabled
         proxy_server = None
         if config.use_proxy:
@@ -142,6 +178,20 @@ class InstagramScraperConnector(BaseConnector):
 
                 # Wait for page to load and check for errors
                 await page.wait_for_timeout(3000)
+
+                # Anonymous access is rate limited per IP: after a few dozen
+                # profile loads Instagram redirects every request to the login
+                # page. Say so explicitly instead of "No posts found".
+                if "/accounts/login" in page.url:
+                    InstagramScraperConnector._blocked_until = (
+                        time.monotonic() + self.LOGIN_WALL_BACKOFF
+                    )
+                    logger.warning(
+                        f"Instagram login wall for @{config.username} — anonymous "
+                        "access from this IP is rate limited; fetches will fail until "
+                        f"the block expires. Skipping Instagram for {self.LOGIN_WALL_BACKOFF // 3600} h."
+                    )
+                    return []
 
                 # Check if profile exists
                 page_content = await page.content()
@@ -225,7 +275,7 @@ class InstagramScraperConnector(BaseConnector):
                 logger.debug(f"Fetching post details: {post_url}")
 
                 await page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(self.POST_PAGE_DELAY_MS)
 
                 # Extract full caption from post page
                 caption = await self._extract_caption(page)

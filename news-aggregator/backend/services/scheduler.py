@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # is dynamically capped by available proxies via get_effective_limit()
 SOURCE_TYPE_LIMITS = {
     "x_scraper": 2,  # Heavy browser + rate limits, reduced to avoid cascade failures
-    "instagram_scraper": 2,  # Heavy browser, reduced to avoid cascade failures
+    "instagram_scraper": 1,  # Anonymous access is rate limited per IP; scraper paces itself
     "instagram": 3,
     "mastodon": 5,
     "twitter": 5,
