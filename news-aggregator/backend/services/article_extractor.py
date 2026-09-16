@@ -568,7 +568,10 @@ async def _fetch_with_playwright(url: str, domain: str) -> ArticleContent | None
     from services.browser_pool import browser_pool, close_quietly
 
     try:
-        async with browser_pool.get_browser() as browser:
+        # Fail fast when both slots are held by the social-media scrapers:
+        # this fallback runs inside a channel's fetch budget and the httpx
+        # result is usually good enough.
+        async with browser_pool.get_browser(slot_timeout=5.0) as browser:
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="de-DE",

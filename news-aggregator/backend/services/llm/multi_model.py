@@ -4,7 +4,7 @@ import logging
 
 import httpx
 
-from .base import BaseLLMProvider, LLMResponse, RateLimitError
+from .base import BaseLLMProvider, LLMResponse, RateLimitError, LLMUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,8 @@ class MultiModelLLMService:
         """
         errors = []
         all_rate_limited = True
+        all_unavailable = True  # every failure was "nobody can serve this model right now"
+        hard_failure = False  # at least one model failed for a non-transient reason
         retry_after = None
 
         for provider, model_prompt, prompt_model, prompt_version in self.model_entries:
@@ -90,14 +92,23 @@ class MultiModelLLMService:
                             retry_after = max(retry_after or 0, float(ra))
                         except ValueError:
                             pass
-                elif status in (403, 404, 500, 502, 503):
-                    # 403: key banned/restricted
-                    # 404: model not found on provider
-                    # 500: upstream internal error
-                    # 502/503: provider unavailable
+                    all_unavailable = False
+                elif status in (404, 502, 503):
+                    # 404: no provider serves the model right now (gpu1 off)
+                    # 502/503: provider offline / unavailable
                     all_rate_limited = False
                 else:
+                    # 403: key banned/restricted, 500: upstream internal error
                     all_rate_limited = False
+                    all_unavailable = False
+                    hard_failure = True
+                continue
+
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                error_msg = f"{provider.model}: {str(e)}"
+                logger.warning(f"Model unreachable: {error_msg}")
+                errors.append(error_msg)
+                all_rate_limited = False
                 continue
 
             except Exception as e:
@@ -105,12 +116,23 @@ class MultiModelLLMService:
                 logger.warning(f"Model failed: {error_msg}")
                 errors.append(error_msg)
                 all_rate_limited = False
+                all_unavailable = False
+                hard_failure = True
                 continue
 
         error_summary = "; ".join(errors)
         if all_rate_limited and errors:
             raise RateLimitError(
                 f"All LLM models rate-limited: {error_summary}",
+                retry_after=retry_after,
+            )
+        if all_unavailable and errors:
+            raise LLMUnavailableError(f"No LLM model available: {error_summary}")
+        if not hard_failure and errors:
+            # Mix of rate-limited and unavailable models: something can serve
+            # us once the limit clears, so treat it as a short backoff.
+            raise RateLimitError(
+                f"All LLM models rate-limited or unavailable: {error_summary}",
                 retry_after=retry_after,
             )
         raise RuntimeError(f"All LLM models failed: {error_summary}")
@@ -129,6 +151,8 @@ class MultiModelLLMService:
         """
         errors = []
         all_rate_limited = True
+        all_unavailable = True  # every failure was "nobody can serve this model right now"
+        hard_failure = False  # at least one model failed for a non-transient reason
         retry_after = None
 
         for provider, _, prompt_model, prompt_version in self.model_entries:
@@ -157,10 +181,20 @@ class MultiModelLLMService:
                             retry_after = max(retry_after or 0, float(ra))
                         except ValueError:
                             pass
-                elif status in (403, 404, 500, 502, 503):
+                    all_unavailable = False
+                elif status in (404, 502, 503):
                     all_rate_limited = False
                 else:
                     all_rate_limited = False
+                    all_unavailable = False
+                    hard_failure = True
+                continue
+
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                error_msg = f"{provider.model}: {str(e)}"
+                logger.warning(f"Model chat unreachable: {error_msg}")
+                errors.append(error_msg)
+                all_rate_limited = False
                 continue
 
             except Exception as e:
@@ -168,12 +202,23 @@ class MultiModelLLMService:
                 logger.warning(f"Model chat failed: {error_msg}")
                 errors.append(error_msg)
                 all_rate_limited = False
+                all_unavailable = False
+                hard_failure = True
                 continue
 
         error_summary = "; ".join(errors)
         if all_rate_limited and errors:
             raise RateLimitError(
                 f"All LLM models rate-limited (chat): {error_summary}",
+                retry_after=retry_after,
+            )
+        if all_unavailable and errors:
+            raise LLMUnavailableError(f"No LLM model available (chat): {error_summary}")
+        if not hard_failure and errors:
+            # Mix of rate-limited and unavailable models: something can serve
+            # us once the limit clears, so treat it as a short backoff.
+            raise RateLimitError(
+                f"All LLM models rate-limited or unavailable (chat): {error_summary}",
                 retry_after=retry_after,
             )
         raise RuntimeError(f"All LLM models failed (chat): {error_summary}")

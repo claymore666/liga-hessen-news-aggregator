@@ -718,7 +718,7 @@ class TestLLMWorkerSelfHealing:
 
         with patch("services.worker_status.write_state", new_callable=AsyncMock) as mock_ws:
             await worker._on_success()
-            mock_ws.assert_called_once_with("llm", running=True)
+            mock_ws.assert_called_once_with("llm", running=True, service_available=True)
 
     @pytest.mark.asyncio
     async def test_resume_clears_error_state(self, worker):
@@ -772,3 +772,160 @@ class TestLLMWorkerSelfHealing:
         worker._stopped_due_to_errors = True
         status = await worker.get_status()
         assert status["stopped_due_to_errors"] is True
+
+
+# ---------------------------------------------------------------------------
+# #184 — "no model available" (gpu1 asleep) is not an error-latch condition
+# ---------------------------------------------------------------------------
+
+def _http_status_error(status: int, headers: dict | None = None):
+    import httpx
+
+    request = httpx.Request("POST", "http://ollamaproxy:11434/api/chat")
+    response = httpx.Response(status, request=request, headers=headers or {})
+    return httpx.HTTPStatusError(f"{status} error", request=request, response=response)
+
+
+def _provider(model: str, exc: Exception):
+    provider = MagicMock()
+    provider.model = model
+    provider.provider_name = "ollama"
+    provider.complete = AsyncMock(side_effect=exc)
+    provider.chat = AsyncMock(side_effect=exc)
+    return provider
+
+
+class TestMultiModelUnavailable:
+    def _service(self, *excs):
+        from services.llm.multi_model import MultiModelLLMService
+
+        entries = [(_provider(f"m{i}", e), "prompt", f"m{i}", 1) for i, e in enumerate(excs)]
+        return MultiModelLLMService(entries)
+
+    @pytest.mark.asyncio
+    async def test_all_404_raises_unavailable(self):
+        from services.llm.base import LLMUnavailableError
+
+        svc = self._service(_http_status_error(404))
+        with pytest.raises(LLMUnavailableError):
+            await svc.complete("hi")
+        with pytest.raises(LLMUnavailableError):
+            await svc.chat([{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_503_and_connect_error_raise_unavailable(self):
+        import httpx
+        from services.llm.base import LLMUnavailableError
+
+        svc = self._service(_http_status_error(503), httpx.ConnectError("refused"))
+        with pytest.raises(LLMUnavailableError):
+            await svc.complete("hi")
+
+    @pytest.mark.asyncio
+    async def test_mixed_with_real_failure_is_runtime_error(self):
+        from services.llm.base import LLMUnavailableError, RateLimitError
+
+        svc = self._service(_http_status_error(404), _http_status_error(500))
+        with pytest.raises(RuntimeError) as exc_info:
+            await svc.complete("hi")
+        assert not isinstance(exc_info.value, (LLMUnavailableError, RateLimitError))
+
+    @pytest.mark.asyncio
+    async def test_all_429_still_rate_limit(self):
+        from services.llm.base import RateLimitError
+
+        svc = self._service(_http_status_error(429, {"retry-after": "30"}))
+        with pytest.raises(RateLimitError) as exc_info:
+            await svc.complete("hi")
+        assert exc_info.value.retry_after == 30.0
+
+    @pytest.mark.asyncio
+    async def test_404_then_429_is_rate_limit_not_unavailable(self):
+        """One provider off, the other rate-limited: the honest verdict is
+        'something can serve us, back off briefly'."""
+        from services.llm.base import RateLimitError
+
+        svc = self._service(_http_status_error(404), _http_status_error(429))
+        with pytest.raises(RateLimitError):
+            await svc.complete("hi")
+
+
+class TestLLMWorkerUnavailable:
+    @pytest.mark.asyncio
+    async def test_on_unavailable_does_not_touch_error_latch(self, worker):
+        from services.llm.base import LLMUnavailableError
+
+        worker._consecutive_errors = 4
+        with patch("services.gpu1_power.get_power_manager", return_value=None), \
+             patch("services.worker_status.write_state", new_callable=AsyncMock) as ws:
+            backoff = await worker._on_unavailable(LLMUnavailableError("404"))
+
+        assert backoff == 300.0
+        assert worker._consecutive_errors == 4  # unchanged
+        assert worker._stopped_due_to_errors is False
+        assert worker._service_available is False
+        assert worker._unavailable_streak == 1
+        assert worker._processor is None
+        ws.assert_awaited_once_with("llm", running=True, service_available=False)
+
+    @pytest.mark.asyncio
+    async def test_on_unavailable_wakes_gpu1_and_retries_soon(self, worker):
+        from services.llm.base import LLMUnavailableError
+
+        pm = MagicMock()
+        pm.ensure_available = AsyncMock(return_value=True)
+        with patch("services.gpu1_power.get_power_manager", return_value=pm), \
+             patch("services.worker_status.write_state", new_callable=AsyncMock):
+            backoff = await worker._on_unavailable(LLMUnavailableError("404"))
+
+        pm.ensure_available.assert_awaited_once()
+        assert backoff == 15.0
+
+    @pytest.mark.asyncio
+    async def test_on_unavailable_writes_state_once(self, worker):
+        from services.llm.base import LLMUnavailableError
+
+        with patch("services.gpu1_power.get_power_manager", return_value=None), \
+             patch("services.worker_status.write_state", new_callable=AsyncMock) as ws:
+            for _ in range(3):
+                await worker._on_unavailable(LLMUnavailableError("404"))
+
+        assert ws.await_count == 1
+        assert worker._unavailable_streak == 3
+
+    @pytest.mark.asyncio
+    async def test_success_restores_service_state(self, worker):
+        worker._service_available = False
+        worker._unavailable_streak = 7
+        with patch("services.worker_status.write_state", new_callable=AsyncMock) as ws:
+            await worker._on_success()
+
+        assert worker._service_available is True
+        assert worker._unavailable_streak == 0
+        ws.assert_awaited_once_with("llm", running=True, service_available=True)
+
+    @pytest.mark.asyncio
+    async def test_process_fresh_reenqueues_on_unavailable(self, worker):
+        from services.llm.base import LLMUnavailableError
+
+        for i in (1, 2, 3):
+            worker._fresh_queue.put_nowait(i)
+        processor = MagicMock()
+        get_proc = patch.object(
+            worker, "_get_processor", new_callable=AsyncMock, return_value=processor
+        )
+        process = patch.object(
+            worker, "_process_items", new_callable=AsyncMock,
+            side_effect=LLMUnavailableError("404"),
+        )
+        with get_proc, process:
+            with pytest.raises(LLMUnavailableError):
+                await worker._process_fresh_items()
+
+        assert worker._fresh_queue.qsize() == 3  # nothing lost
+
+    @pytest.mark.asyncio
+    async def test_status_exposes_service_availability(self, worker):
+        status = await worker.get_status()
+        assert status["service_available"] is True
+        assert status["unavailable_streak"] == 0

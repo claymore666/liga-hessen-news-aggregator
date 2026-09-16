@@ -221,6 +221,27 @@ and tracks whether all provider failures are 429s. If so, it raises
    call, the item is saved with topic="Sonstiges" rather than losing the
    already-completed analysis.
 
+### Service Unavailable (404 / 502 / 503 / connection refused)
+
+Since 2026-09 the prod LLM runs on gpu1 only. When gpu1 is off, the Ollama
+proxy answers `404` (no provider serves the model); `502`/`503` and
+`ConnectError` mean the proxy or provider itself is down. These are not item
+failures, so `LLMService` raises `LLMUnavailableError` when *every* model
+failed that way (a mix of 429 and unavailable is reported as `RateLimitError`).
+
+**Worker behavior on `LLMUnavailableError`** (#184):
+1. Does **not** count towards the consecutive-error latch and does not
+   log a stack trace per item; the first occurrence and every 10th are logged
+   as warnings, the rest at info.
+2. Marks the worker `service_available=false` (visible in
+   `GET /api/admin/stats` → `workers.llm` and in the Redis worker state) until
+   the next successful batch.
+3. Drops the cached processor so the next attempt re-resolves models.
+4. Asks the gpu1 power manager to wake the host (`ensure_available()`); if a
+   wake was sent it retries after 15 s, otherwise (outside active hours, WoL
+   disabled) it sleeps 300 s. Both sleeps are interrupted by the wake event.
+5. Fresh-queue items are re-enqueued so nothing is lost.
+
 ### General Error Handling
 
 Per-item failures are caught individually — one item failing doesn't prevent

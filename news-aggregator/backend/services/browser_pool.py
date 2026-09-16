@@ -334,7 +334,15 @@ class BrowserPool:
         self,
         headless: bool = True,
         args: list[str] | None = None,
+        slot_timeout: float = 120.0,
     ):
+        """Acquire a pool slot and launch a browser.
+
+        ``slot_timeout`` bounds the wait for a free slot. Opportunistic users
+        (the article extractor's SPA fallback inside a 90 s channel budget)
+        pass a few seconds so they fail fast instead of queueing behind the
+        social-media scrapers that hold slots for minutes.
+        """
         if self._shutting_down:
             raise RuntimeError("Browser pool is shutting down")
 
@@ -345,9 +353,11 @@ class BrowserPool:
         # of the new pool.
         semaphore = self._semaphore
         try:
-            await asyncio.wait_for(semaphore.acquire(), timeout=120.0)
+            await asyncio.wait_for(semaphore.acquire(), timeout=slot_timeout)
         except asyncio.TimeoutError:
-            raise RuntimeError("Browser pool: timed out waiting for available slot (120s)")
+            raise RuntimeError(
+                f"Browser pool: timed out waiting for available slot ({slot_timeout:.0f}s)"
+            )
 
         try:
             # Capture generation before we start so we can detect stale errors

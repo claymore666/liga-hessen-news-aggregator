@@ -32,6 +32,10 @@ async with browser_pool.get_browser() as browser:
 - **Max browsers**: 2 concurrent (configurable via `BROWSER_POOL_MAX` env var, default: 2)
 - Uses `asyncio.Semaphore` to limit concurrent browser launches
 - Each `get_browser()` call launches a fresh Chromium instance and closes it on exit
+- `get_browser(slot_timeout=120.0)` waits at most that long for a free slot and
+  raises `RuntimeError` otherwise. Optional callers such as the article
+  extractor's SPA fallback pass a short value (5 s) so a busy pool degrades
+  their result instead of stalling the caller
 - Set to 2 to match docker-ai's 2-core CPU (see [CPU_ASSESSMENT.md](../operations/CPU_ASSESSMENT.md))
 
 ### Error Recovery

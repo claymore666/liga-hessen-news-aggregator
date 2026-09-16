@@ -45,9 +45,13 @@ CHANNEL_FETCH_TIMEOUTS = {
     "html": 120,  # 2 min - may need JS rendering
     "pdf": 120,  # 2 min - large file downloads
     "rss": 180,  # 3 min - heavy feeds (FAZ, RKI) need time for article extraction
-    "bluesky": 20,  # Simple HTTP/RSS fetch
-    "mastodon": 20,  # Simple HTTP/RSS fetch
-    "telegram": 20,  # Simple HTTP scrape
+    # Light HTTP/RSS fetches, but with follow_links they also extract every
+    # linked article (httpx, Wayback, possibly a Playwright fallback that has
+    # to wait for a browser-pool slot). 20 s was never enough for that: the
+    # Mastodon/Bluesky channels timed out on every cycle since 2026-09-14.
+    "bluesky": 90,
+    "mastodon": 90,
+    "telegram": 90,
     "google_alerts": 30,
 }
 DEFAULT_FETCH_TIMEOUT = 120  # 2 min default
@@ -1114,8 +1118,25 @@ async def _sync_scheduler_stats() -> None:
             "jobs": jobs,
             "cycle": get_cycle_stats(),
             "browser_pool": await browser_pool.health_check(),
+            "disk": _disk_usage(),
         },
     )
+
+
+def _disk_usage(path: str = "/") -> dict:
+    """Container root filesystem usage (shares the host's root on docker-ai), #185."""
+    try:
+        import shutil
+
+        usage = shutil.disk_usage(path)
+        return {
+            "path": path,
+            "total_gb": round(usage.total / 1e9, 1),
+            "free_gb": round(usage.free / 1e9, 1),
+            "used_percent": round(100 * (usage.total - usage.free) / usage.total, 1),
+        }
+    except Exception as e:  # pragma: no cover
+        return {"path": path, "error": str(e)}
 
 
 def start_scheduler() -> None:

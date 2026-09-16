@@ -591,3 +591,12 @@ class TestIngestionFreshness:
         body = response.json()
         assert body["status"] == "degraded"
         assert body["ingestion"]["stale"] is True
+
+
+class TestLightConnectorTimeouts:
+    def test_link_following_connectors_have_room_for_article_extraction(self):
+        """Mastodon/Bluesky follow links by default; 20 s timed out every cycle."""
+        from services.scheduler import CHANNEL_FETCH_TIMEOUTS
+
+        for connector in ("mastodon", "bluesky", "telegram"):
+            assert CHANNEL_FETCH_TIMEOUTS[connector] >= 60

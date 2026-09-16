@@ -21,7 +21,9 @@ Configuration via environment:
 """
 
 import asyncio
+import ipaddress
 import logging
+import socket
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -89,6 +91,70 @@ class GPU1PowerManager:
         self._last_activity: float | None = None
         self._last_wol_time: float | None = None  # Timestamp of last WoL packet
         self._force_active = False  # Manual override for active hours
+
+        # SSH host resolution cache (#182): Docker's embedded DNS drops ~25% of
+        # gpu1.fritz.box lookups, so resolve once, cache, and keep the last
+        # known address when a lookup fails.
+        self._resolved_ssh_ip: str | None = None
+        self._resolved_ssh_at: float = 0.0
+        # User-check failure tracking: a single failed `who` should not be
+        # read as "users present" (which postpones auto-shutdown).
+        self._user_check_failures = 0
+        self._last_users_result: bool | None = None
+
+    SSH_RESOLVE_TTL = 600.0  # seconds a resolved SSH address stays cached
+    USER_CHECK_FAILURE_THRESHOLD = 3  # consecutive failures before assuming users
+
+    async def _ssh_target(self) -> str:
+        """Return the address to ssh to, resolving and caching hostnames."""
+        host = self.ssh_host
+        try:
+            ipaddress.ip_address(host)
+            return host  # already an IP
+        except ValueError:
+            pass
+
+        now = time.monotonic()
+        if self._resolved_ssh_ip and (now - self._resolved_ssh_at) < self.SSH_RESOLVE_TTL:
+            return self._resolved_ssh_ip
+
+        try:
+            loop = asyncio.get_running_loop()
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(host, 22, type=socket.SOCK_STREAM), timeout=5.0
+            )
+            ip = infos[0][4][0]
+        except Exception as e:
+            if self._resolved_ssh_ip:
+                logger.debug(f"Lookup of {host} failed ({e}); using cached {self._resolved_ssh_ip}")
+                return self._resolved_ssh_ip
+            logger.debug(f"Lookup of {host} failed ({e}); passing hostname to ssh")
+            return host
+
+        if ip != self._resolved_ssh_ip:
+            logger.info(f"Resolved {host} -> {ip} for SSH")
+        self._resolved_ssh_ip = ip
+        self._resolved_ssh_at = now
+        return ip
+
+    def _users_check_failed(self, reason: str) -> bool:
+        """Decide what has_other_users() returns after a failed check."""
+        self._user_check_failures += 1
+        if (
+            self._user_check_failures < self.USER_CHECK_FAILURE_THRESHOLD
+            and self._last_users_result is not None
+        ):
+            logger.info(
+                f"gpu1 user check failed ({self._user_check_failures}/"
+                f"{self.USER_CHECK_FAILURE_THRESHOLD}): {reason}; "
+                f"using last known result (users={'yes' if self._last_users_result else 'no'})"
+            )
+            return self._last_users_result
+        logger.warning(
+            f"gpu1 user check failed ({self._user_check_failures}x): {reason}; "
+            "assuming users present"
+        )
+        return True
 
     @property
     def was_sleeping(self) -> bool:
@@ -217,7 +283,7 @@ class GPU1PowerManager:
         """Check if gpu1 host is reachable (SSH port open)."""
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ssh_host, 22), timeout=3
+                asyncio.open_connection(await self._ssh_target(), 22), timeout=3
             )
             writer.close()
             await writer.wait_closed()
@@ -375,13 +441,14 @@ class GPU1PowerManager:
             True if command executed successfully, False otherwise
         """
         try:
+            ssh_target = await self._ssh_target()
             cmd = [
                 "ssh",
                 "-i", self.ssh_key_path,
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=10",
                 "-o", "BatchMode=yes",
-                f"{self.ssh_user}@{self.ssh_host}",
+                f"{self.ssh_user}@{ssh_target}",
                 "sudo", "shutdown", "-h", "now",
             ]
 
@@ -426,13 +493,14 @@ class GPU1PowerManager:
             True if other users are logged in, False if only ligahessen or no users
         """
         try:
+            ssh_target = await self._ssh_target()
             cmd = [
                 "ssh",
                 "-i", self.ssh_key_path,
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=10",
                 "-o", "BatchMode=yes",
-                f"{self.ssh_user}@{self.ssh_host}",
+                f"{self.ssh_user}@{ssh_target}",
                 "who",
             ]
 
@@ -445,8 +513,8 @@ class GPU1PowerManager:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
             if proc.returncode != 0:
-                logger.warning(f"Failed to check users on gpu1: {stderr.decode()}")
-                return True  # Assume users present on error (safe default)
+                reason = stderr.decode().strip() or f"exit {proc.returncode}"
+                return self._users_check_failed(reason)
 
             # Parse who output - each line is a logged in user
             # Format: username tty date time (ip)
@@ -461,22 +529,23 @@ class GPU1PowerManager:
                 if username not in ignore_users:
                     other_users.append(username)
 
+            self._user_check_failures = 0
             if other_users:
                 unique_users = list(set(other_users))
                 logger.info(
                     f"Users logged into gpu1: {', '.join(unique_users)} - skipping shutdown"
                 )
+                self._last_users_result = True
                 return True
 
+            self._last_users_result = False
             return False
 
         except asyncio.TimeoutError:
-            logger.warning("Timeout checking gpu1 users, assuming users present")
-            return True
+            return self._users_check_failed("timeout")
 
         except Exception as e:
-            logger.warning(f"Error checking gpu1 users: {e}")
-            return True  # Assume users present on error (safe default)
+            return self._users_check_failed(str(e))
 
     def record_activity(self):
         """Record that LLM processing activity occurred."""

@@ -153,8 +153,22 @@ Errors don't stop the scheduler - other channels continue.
 
 ### Timeouts and Abandoned Tasks
 
-Every channel fetch runs under a per-connector timeout (`CHANNEL_FETCH_TIMEOUTS`,
-e.g. 300 s for `x_scraper`). Since #187 the timeout is enforced with an explicit
+Every channel fetch runs under a per-connector timeout (`CHANNEL_FETCH_TIMEOUTS`):
+
+| Connector | Timeout | Why |
+|-----------|---------|-----|
+| `x_scraper`, `instagram_scraper` | 300 s | Browser-based, follows links |
+| `linkedin` | 180 s | Browser-based |
+| `rss` | 180 s | Heavy feeds extract every article |
+| `html`, `pdf` | 120 s | JS rendering / large downloads |
+| `mastodon`, `bluesky`, `telegram` | 90 s | Light API fetch, but `follow_links` extracts every linked article (httpx → Wayback → Playwright fallback). At 20 s these channels timed out on every cycle from 2026-09-14 on. |
+| `google_alerts`, others | 30 s / default | Plain feeds |
+
+The Playwright fallback of the article extractor only waits 5 s for a
+browser-pool slot (`get_browser(slot_timeout=5.0)`); when the pool is busy with
+x_scrapers it gives up instead of blocking the whole channel fetch.
+
+Since #187 the timeout is enforced with an explicit
 task plus `asyncio.wait`, **not** `asyncio.wait_for()`: `wait_for()` cancels the
 task and then waits for it without any bound, so a cleanup that never finishes
 (a Playwright `page.close()` Chromium never answers) blocked `fetch_due_channels`

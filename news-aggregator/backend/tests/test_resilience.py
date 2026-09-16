@@ -1054,3 +1054,110 @@ class TestBrowserPoolHardReset:
             n = BrowserPool._reap_orphan_chromium()
         assert n == 1
         assert killed == [100]
+
+
+# ---------------------------------------------------------------------------
+# #182 — gpu1 SSH host: cached resolution, failure threshold for user check
+# ---------------------------------------------------------------------------
+
+class TestGPU1SSHResolution:
+    def _make_manager(self, ssh_host="gpu1.fritz.box"):
+        from services.gpu1_power import GPU1PowerManager
+
+        return GPU1PowerManager(
+            mac_address="00:11:22:33:44:55",
+            ollama_url="http://gpu1:11434",
+            ssh_host=ssh_host,
+        )
+
+    @pytest.mark.asyncio
+    async def test_ip_host_is_used_verbatim(self):
+        pm = self._make_manager("192.168.0.141")
+        with patch("asyncio.get_running_loop") as loop:
+            assert await pm._ssh_target() == "192.168.0.141"
+            loop.return_value.getaddrinfo.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hostname_resolved_once_and_cached(self):
+        pm = self._make_manager()
+        fake = AsyncMock(return_value=[(None, None, None, "", ("192.168.0.141", 22))])
+        with patch.object(asyncio.get_running_loop(), "getaddrinfo", fake):
+            assert await pm._ssh_target() == "192.168.0.141"
+            assert await pm._ssh_target() == "192.168.0.141"
+        assert fake.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_falls_back_to_cached_ip(self):
+        pm = self._make_manager()
+        pm._resolved_ssh_ip = "192.168.0.141"
+        pm._resolved_ssh_at = time.monotonic() - pm.SSH_RESOLVE_TTL - 1  # expired
+        failing = AsyncMock(side_effect=OSError("Name or service not known"))
+        with patch.object(asyncio.get_running_loop(), "getaddrinfo", failing):
+            assert await pm._ssh_target() == "192.168.0.141"
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_without_cache_passes_hostname(self):
+        pm = self._make_manager()
+        failing = AsyncMock(side_effect=OSError("Name or service not known"))
+        with patch.object(asyncio.get_running_loop(), "getaddrinfo", failing):
+            assert await pm._ssh_target() == "gpu1.fritz.box"
+
+    def test_user_check_failure_threshold(self):
+        pm = self._make_manager()
+        # No history yet: be conservative
+        assert pm._users_check_failed("dns") is True
+        pm._user_check_failures = 0
+        # With a known "no users" result, the first two failures keep it
+        pm._last_users_result = False
+        assert pm._users_check_failed("dns") is False
+        assert pm._users_check_failed("dns") is False
+        # Third consecutive failure assumes users present
+        assert pm._users_check_failed("dns") is True
+
+    @pytest.mark.asyncio
+    async def test_has_other_users_uses_resolved_target_and_resets_counter(self):
+        pm = self._make_manager()
+        pm._user_check_failures = 2
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"ligahessen pts/0 2026-09-16 10:00\n", b""))
+        target = patch.object(
+            pm, "_ssh_target", new_callable=AsyncMock, return_value="192.168.0.141"
+        )
+        exec_ = patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc)
+        with target, exec_ as cse:
+            assert await pm.has_other_users() is False
+        assert "ligahessen@192.168.0.141" in cse.call_args.args
+        assert pm._user_check_failures == 0
+        assert pm._last_users_result is False
+
+    @pytest.mark.asyncio
+    async def test_has_other_users_ssh_failure_uses_threshold(self):
+        pm = self._make_manager()
+        pm._last_users_result = False
+        proc = MagicMock()
+        proc.returncode = 255
+        proc.communicate = AsyncMock(return_value=(b"", b"ssh: Could not resolve hostname"))
+        target = patch.object(
+            pm, "_ssh_target", new_callable=AsyncMock, return_value="192.168.0.141"
+        )
+        exec_ = patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc)
+        with target, exec_:
+            assert await pm.has_other_users() is False  # 1st failure: last known result
+            assert await pm.has_other_users() is False  # 2nd
+            assert await pm.has_other_users() is True   # 3rd: assume users
+
+
+class TestBrowserPoolSlotTimeout:
+    @pytest.mark.asyncio
+    async def test_slot_timeout_fails_fast_when_pool_is_full(self):
+        from services.browser_pool import BrowserPool
+
+        pool = BrowserPool(max_browsers=1, error_threshold=3)
+        await pool._semaphore.acquire()  # pool fully busy
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        with pytest.raises(RuntimeError, match="available slot"):
+            async with pool.get_browser(slot_timeout=0.1):
+                pass
+        assert loop.time() - t0 < 1.0

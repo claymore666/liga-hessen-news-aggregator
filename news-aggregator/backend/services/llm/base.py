@@ -12,6 +12,17 @@ class RateLimitError(RuntimeError):
     def __init__(self, message: str, retry_after: float | None = None):
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class LLMUnavailableError(RuntimeError):
+    """Raised when every configured model is unreachable rather than failing.
+
+    Covers proxy 404 (no provider currently serves the model, e.g. gpu1 is
+    off), 502/503 (provider offline) and connection errors. Unlike a
+    per-item failure this is an expected condition that the worker should
+    treat as "service unavailable": back off, try to wake gpu1 during
+    active hours, and do not count it towards the error latch (#184).
+    """
 from typing import Any
 
 from pydantic import BaseModel, Field

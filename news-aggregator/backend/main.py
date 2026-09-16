@@ -17,6 +17,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+# httpx logs every request at INFO, including hundreds of failed proxy-pool
+# IP-echo probes per day (500/501 from dead proxies) that drown real errors
+# (#186). proxy_manager reports probe results itself; set HTTPX_LOG_LEVEL=INFO
+# to get the per-request lines back when debugging.
+logging.getLogger("httpx").setLevel(os.environ.get("HTTPX_LOG_LEVEL", "WARNING").upper())
 
 from config import settings
 from database import init_db

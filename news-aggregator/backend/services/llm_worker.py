@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
-from services.llm.base import RateLimitError
+from services.llm.base import LLMUnavailableError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,10 @@ class LLMWorker:
         self._stats_lock = asyncio.Lock()
         self._stopped_due_to_errors = False
         self._consecutive_errors = 0
+        # "Service unavailable" tracking (#184): gpu1 asleep / model not served.
+        # Kept separate from the error latch because it is an expected condition.
+        self._service_available = True
+        self._unavailable_streak = 0
 
     async def start(self):
         """Start the worker background task."""
@@ -169,6 +173,8 @@ class LLMWorker:
             "running": self._running,
             "paused": self._paused,
             "stopped_due_to_errors": self._stopped_due_to_errors,
+            "service_available": self._service_available,
+            "unavailable_streak": self._unavailable_streak,
             "fresh_queue_size": self._fresh_queue.qsize(),
             "stats": stats_copy,
         }
@@ -176,11 +182,59 @@ class LLMWorker:
     async def _on_success(self):
         """Clear error state on successful processing."""
         self._consecutive_errors = 0
-        if self._stopped_due_to_errors:
-            self._stopped_due_to_errors = False
+        recovered_latch = self._stopped_due_to_errors
+        recovered_service = not self._service_available
+        self._stopped_due_to_errors = False
+        self._service_available = True
+        self._unavailable_streak = 0
+        if recovered_latch:
             logger.info("LLM worker recovered from error state")
+        if recovered_service:
+            logger.info("LLM service available again")
+        if recovered_latch or recovered_service:
             from services.worker_status import write_state
-            await write_state("llm", running=True)
+            await write_state("llm", running=True, service_available=True)
+
+    async def _on_unavailable(self, error: Exception) -> float:
+        """Handle "no model can serve us right now" (#184).
+
+        Marks the service unavailable, tries to wake gpu1 when active hours
+        allow it, and returns the backoff to wait before the next attempt.
+        This deliberately does not touch the consecutive-error latch.
+        """
+        self._unavailable_streak += 1
+        # Rebuild the processor next time: model configs may have changed and
+        # the proxy may serve a different provider by then.
+        self._processor = None
+
+        if self._service_available:
+            self._service_available = False
+            logger.warning(f"LLM service unavailable, backing off: {error}")
+            from services.worker_status import write_state
+            try:
+                await write_state("llm", running=True, service_available=False)
+            except Exception as e:
+                logger.debug(f"Failed to write LLM service state: {e}")
+        elif self._unavailable_streak % 10 == 0:
+            logger.warning(
+                f"LLM service still unavailable after {self._unavailable_streak} attempts: {error}"
+            )
+        else:
+            logger.info(f"LLM service still unavailable ({self._unavailable_streak}x): {error}")
+
+        # During active hours ask the power manager to wake gpu1 (it enforces
+        # the wake interval itself); retry sooner if it says gpu1 is up.
+        from services.gpu1_power import get_power_manager
+
+        power_mgr = get_power_manager()
+        if power_mgr is not None:
+            try:
+                if await power_mgr.ensure_available():
+                    logger.info("gpu1 reported available, retrying LLM processing shortly")
+                    return 15.0
+            except Exception as e:
+                logger.debug(f"gpu1 wake attempt failed: {e}")
+        return 300.0
 
     async def _get_processor(self):
         """Get or create the LLM processor, refreshing after TTL expires."""
@@ -246,6 +300,14 @@ class LLMWorker:
                 try:
                     await asyncio.wait_for(self._wake_event.wait(), timeout=backoff)
                     logger.info("Rate-limit backoff interrupted by wake event")
+                except asyncio.TimeoutError:
+                    pass
+            except LLMUnavailableError as e:
+                backoff = await self._on_unavailable(e)
+                self._wake_event.clear()
+                try:
+                    await asyncio.wait_for(self._wake_event.wait(), timeout=backoff)
+                    logger.info("Unavailable backoff interrupted by wake event")
                 except asyncio.TimeoutError:
                     pass
             except Exception as e:
@@ -372,7 +434,7 @@ class LLMWorker:
 
             processed = await self._process_items(item_ids, processor, is_fresh=True)
 
-        except RateLimitError:
+        except (RateLimitError, LLMUnavailableError):
             # Re-enqueue unprocessed items so they aren't lost
             for remaining_id in item_ids[processed:]:
                 try:
@@ -810,6 +872,12 @@ class LLMWorker:
                 async with self._stats_lock:
                     self._stats["errors"] += 1
                 # Don't try more items — all providers are exhausted
+                raise
+
+            except LLMUnavailableError as e:
+                # Not an item failure: nobody can serve the model right now
+                # (gpu1 asleep). Stop the batch; the main loop backs off.
+                logger.info(f"LLM unavailable while processing {item_type} item {item_id}: {e}")
                 raise
 
             except Exception as e:
