@@ -599,4 +599,4 @@ class TestLightConnectorTimeouts:
         from services.scheduler import CHANNEL_FETCH_TIMEOUTS
 
         for connector in ("mastodon", "bluesky", "telegram"):
-            assert CHANNEL_FETCH_TIMEOUTS[connector] >= 60
+            assert CHANNEL_FETCH_TIMEOUTS[connector] >= CHANNEL_FETCH_TIMEOUTS["rss"]
