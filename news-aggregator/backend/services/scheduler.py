@@ -45,13 +45,14 @@ CHANNEL_FETCH_TIMEOUTS = {
     "html": 120,  # 2 min - may need JS rendering
     "pdf": 120,  # 2 min - large file downloads
     "rss": 180,  # 3 min - heavy feeds (FAZ, RKI) need time for article extraction
-    # Light HTTP/RSS fetches, but with follow_links they also extract every
-    # linked article (httpx, Wayback, possibly a Playwright fallback that has
-    # to wait for a browser-pool slot). 20 s was never enough for that: the
-    # Mastodon/Bluesky channels timed out on every cycle since 2026-09-14.
-    "bluesky": 90,
-    "mastodon": 90,
-    "telegram": 90,
+    # Light HTTP/RSS fetches, but with follow_links they extract linked
+    # articles for new posts and then run the same CPU-bound pipeline as RSS.
+    # On the 2-core prod VM a cycle with ~50 due channels pins the backend at
+    # 100 % CPU and the pipeline alone took 70 s for 20 already-known posts;
+    # 20 s (and 90 s) timed out every cycle since 2026-09-14 (#188).
+    "bluesky": 180,
+    "mastodon": 180,
+    "telegram": 180,
     "google_alerts": 30,
 }
 DEFAULT_FETCH_TIMEOUT = 120  # 2 min default

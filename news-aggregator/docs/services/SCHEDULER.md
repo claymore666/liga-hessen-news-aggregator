@@ -161,7 +161,7 @@ Every channel fetch runs under a per-connector timeout (`CHANNEL_FETCH_TIMEOUTS`
 | `linkedin` | 180 s | Browser-based |
 | `rss` | 180 s | Heavy feeds extract every article |
 | `html`, `pdf` | 120 s | JS rendering / large downloads |
-| `mastodon`, `bluesky`, `telegram` | 90 s | Light API fetch, but `follow_links` extracts every linked article (httpx → Wayback → Playwright fallback). At 20 s these channels timed out on every cycle from 2026-09-14 on. |
+| `mastodon`, `bluesky`, `telegram` | 180 s | Light API fetch, but `follow_links` extracts linked articles and the pipeline is CPU-bound on the 2-core VM when ~50 channels run at once. At 20 s (and 90 s) these channels timed out on every cycle from 2026-09-14 on (#188). |
 | `google_alerts`, others | 30 s / default | Plain feeds |
 
 Before each fetch the scheduler loads the channel's stored item URLs into
