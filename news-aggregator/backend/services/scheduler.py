@@ -353,6 +353,16 @@ async def fetch_all_channels(training_mode: bool = False) -> dict:
     }
 
 
+def _unknown_raw_items(raw_items: list, known_urls: set[str]) -> list:
+    """Raw items whose URL is not stored yet.
+
+    Only these can become new items, so only these need the embedding-based
+    pre-filter; embedding every feed entry on every cycle was part of what
+    starved the big RSS feeds (#189).
+    """
+    return [r for r in raw_items if r.url not in known_urls]
+
+
 async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
     """Fetch items from a single channel.
 
@@ -476,8 +486,11 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                 "classifier_worker will backfill."
             )
         else:
-            logger.debug(f"Pre-filtering {len(raw_items)} items for channel {channel_id}")
-            for raw_item in raw_items:
+            candidates = _unknown_raw_items(raw_items, known_urls)
+            logger.debug(
+                f"Pre-filtering {len(candidates)}/{len(raw_items)} items for channel {channel_id}"
+            )
+            for raw_item in candidates:
                 try:
                     should_process, result = await relevance_filter.should_process(
                         title=raw_item.title,

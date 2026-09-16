@@ -600,3 +600,19 @@ class TestLightConnectorTimeouts:
 
         for connector in ("mastodon", "bluesky", "telegram"):
             assert CHANNEL_FETCH_TIMEOUTS[connector] >= CHANNEL_FETCH_TIMEOUTS["rss"]
+
+
+class TestPrefilterCandidates:
+    """#189: only entries not yet stored are pre-filtered (each pre-filter call
+    embeds the entry through the classifier)."""
+
+    def test_known_urls_are_excluded(self):
+        from connectors.base import RawItem
+        from services.scheduler import _unknown_raw_items
+
+        items = [
+            RawItem(external_id="1", title="a", url="https://example.org/a"),
+            RawItem(external_id="2", title="b", url="https://example.org/b"),
+        ]
+        assert _unknown_raw_items(items, {"https://example.org/a"}) == [items[1]]
+        assert _unknown_raw_items(items, set()) == items

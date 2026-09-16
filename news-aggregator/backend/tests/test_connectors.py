@@ -872,3 +872,53 @@ class TestKnownUrlsSkipLinkFollowing:
 
         assert len(items) == 2
         extractor.fetch_article.assert_awaited_once_with("https://example.org/artikel")
+
+
+class TestLinkFollowCap:
+    """#189: the RSS connector extracts at most LINK_FOLLOW_MAX_PER_FETCH new
+    entries per cycle and defers the rest, so a backlog converges over cycles
+    instead of timing out on every one of them."""
+
+    FEED = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+    <item><title>old</title><link>https://example.org/old</link><guid>old</guid></item>
+    <item><title>a</title><link>https://example.org/a</link><guid>a</guid></item>
+    <item><title>b</title><link>https://example.org/b</link><guid>b</guid></item>
+    <item><title>c</title><link>https://example.org/c</link><guid>c</guid></item>
+    </channel></rss>"""
+
+    async def _fetch(self, cap, known):
+        connector = RSSConnector()
+        connector.known_urls = known
+        extractor = MagicMock()
+        extractor.fetch_article = AsyncMock(return_value=None)
+        response = MagicMock()
+        response.text = self.FEED
+        response.raise_for_status = MagicMock()
+        with patch("services.article_extractor.ArticleExtractor", return_value=extractor), \
+             patch("connectors.rss.LINK_FOLLOW_MAX_PER_FETCH", cap), \
+             patch("connectors.rss.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=response
+            )
+            items = await connector.fetch(RSSConfig(url="https://example.org/feed"))
+        return items, extractor
+
+    @pytest.mark.asyncio
+    async def test_defers_entries_beyond_cap(self):
+        items, extractor = await self._fetch(cap=2, known=set())
+        assert [i.url for i in items] == ["https://example.org/old", "https://example.org/a"]
+        assert extractor.fetch_article.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_known_entries_do_not_count_against_cap(self):
+        items, extractor = await self._fetch(cap=2, known={"https://example.org/old"})
+        assert [i.url for i in items] == [
+            "https://example.org/old", "https://example.org/a", "https://example.org/b",
+        ]
+        assert extractor.fetch_article.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_zero_disables_cap(self):
+        items, extractor = await self._fetch(cap=0, known=set())
+        assert len(items) == 4
+        assert extractor.fetch_article.await_count == 4

@@ -192,6 +192,11 @@ class TestClassifierPriorityToggle:
             db_session.add(source)
             db_session.add(channel)
             await db_session.flush()
+            # The pipeline commits new items (#189), so rollback() leaves
+            # source/channel persistent but expired; reload them explicitly
+            # instead of tripping the async lazy-load on the next process().
+            await db_session.refresh(source)
+            await db_session.refresh(channel)
 
             mock_processor = MagicMock()
             mock_processor.calculate_keyword_score = MagicMock(return_value=(50, []))

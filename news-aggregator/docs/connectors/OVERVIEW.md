@@ -147,6 +147,7 @@ Standard RSS/Atom feed parser.
 
 **Notes**:
 - `follow_links` fetches full article from linked URLs
+- Link following is capped at `LINK_FOLLOW_MAX_PER_FETCH` (default 30) new entries per fetch; the rest are picked up on the next cycle (#189)
 - `verify_ssl=false` for sites with certificate issues
 
 **Special Handling**:

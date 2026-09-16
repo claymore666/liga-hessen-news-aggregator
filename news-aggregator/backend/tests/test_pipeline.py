@@ -468,3 +468,46 @@ class TestPipelineEmbeddingsGate:
         rf.find_duplicates.assert_not_awaited()
         rf.should_process.assert_not_awaited()
         rf.index_items_batch.assert_not_awaited()
+
+
+class TestPipelineCommitsBeforeIndexing:
+    """#189: new items are committed before vector indexing, so a fetch timeout
+    that cancels the pipeline during indexing no longer discards the cycle."""
+
+    @pytest.mark.asyncio
+    async def test_items_survive_cancellation_during_indexing(
+        self, db_engine, db_session: AsyncSession
+    ):
+        import asyncio
+
+        from sqlalchemy import func, select
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        source = Source(name="CommitTest")
+        db_session.add(source)
+        await db_session.flush()
+        channel = Channel(source_id=source.id, connector_type=ConnectorType.RSS, config={})
+        db_session.add(channel)
+        await db_session.flush()
+
+        rf = AsyncMock()
+        rf.find_duplicates = AsyncMock(return_value=[])
+        rf.should_process = AsyncMock(return_value=(True, {"relevance_confidence": 0.5}))
+        rf.index_items_batch = AsyncMock(side_effect=asyncio.CancelledError())
+
+        pipeline = Pipeline(db_session, relevance_filter=rf)
+        raw = [RawItem(external_id="c-1", title="T", content="B", url="https://example.com/c-1")]
+        with patch(
+            "services.embeddings_gate.embeddings_allowed",
+            new=AsyncMock(return_value=(True, None)),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await pipeline.process(raw, channel)
+        await db_session.rollback()
+
+        async with async_sessionmaker(db_engine, expire_on_commit=False)() as other:
+            count = await other.scalar(
+                select(func.count()).select_from(Item).where(Item.channel_id == channel.id)
+            )
+        assert count == 1
+        rf.index_items_batch.assert_awaited_once()

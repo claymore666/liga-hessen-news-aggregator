@@ -172,6 +172,16 @@ to 40 linked articles per cycle and still timed out at 90 s. Even with the
 skip, the pipeline stage needed ~70 s per channel during the post-restart burst
 (backend at 100 % CPU), hence the 180 s budget.
 
+Even with the skip, a feed with a large backlog could never finish: after two
+days of downtime FAZ returned 172 entries, the RSS connector extracted every
+new one sequentially, the pre-filter embedded all 172, and the single commit at
+the end of the cycle was rolled back by the 180 s timeout, so the next cycle
+started from zero and the circuit breaker tripped (#189). Three changes make a
+backlog converge instead: the RSS connector extracts at most
+`LINK_FOLLOW_MAX_PER_FETCH` (default 30) new entries per cycle and defers the
+rest, the pre-filter only embeds entries whose URL is not stored yet, and the
+pipeline commits new items before vector indexing so a late timeout keeps them.
+
 The Playwright fallback of the article extractor only waits 5 s for a
 browser-pool slot (`get_browser(slot_timeout=5.0)`); when the pool is busy with
 x_scrapers it gives up instead of blocking the whole channel fetch.

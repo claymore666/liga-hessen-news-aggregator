@@ -2,6 +2,7 @@
 
 import logging
 import re
+import os
 import ssl
 from datetime import datetime
 from calendar import timegm
@@ -35,6 +36,14 @@ def create_legacy_ssl_context():
     except AttributeError:
         pass  # Option not available in older Python versions
     return ctx
+
+
+# Upper bound on article extractions per fetch cycle. A feed with a large
+# backlog (FAZ: 172 entries after two days of downtime) can otherwise never
+# finish within the scheduler's timeout; entries beyond the cap are left for
+# the next cycle, when the extracted ones are known URLs and skipped (#189).
+# 0 disables the cap.
+LINK_FOLLOW_MAX_PER_FETCH = int(os.environ.get("LINK_FOLLOW_MAX_PER_FETCH", "30"))
 
 
 class RSSConfig(BaseModel):
@@ -94,6 +103,8 @@ class RSSConnector(BaseConnector):
 
         feed = feedparser.parse(response.text)
         items = []
+        extractions = 0
+        deferred = 0
 
         for entry in feed.entries:
             # Parse publication date
@@ -154,6 +165,11 @@ class RSSConnector(BaseConnector):
             if article_extractor and link and link in known_urls:
                 logger.debug(f"Skipping article extraction for known URL: {link}")
             elif article_extractor and link:
+                if 0 < LINK_FOLLOW_MAX_PER_FETCH <= extractions:
+                    # Leave this entry for the next cycle (see constant above)
+                    deferred += 1
+                    continue
+                extractions += 1
                 try:
                     article = await article_extractor.fetch_article(link)
                     if article and article.content:
@@ -214,6 +230,12 @@ class RSSConnector(BaseConnector):
                     published_at=published or datetime.utcnow(),
                     metadata=item_metadata,
                 )
+            )
+
+        if deferred:
+            logger.info(
+                f"Deferred {deferred} new entries of {config.url} to the next cycle "
+                f"(link-following cap {LINK_FOLLOW_MAX_PER_FETCH} reached)"
             )
 
         return items

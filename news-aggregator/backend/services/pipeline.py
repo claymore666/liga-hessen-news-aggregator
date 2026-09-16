@@ -624,6 +624,14 @@ class Pipeline:
                     except Exception as e:
                         logger.warning(f"Failed to log processing steps for item {item.id}: {e}")
 
+            # Persist the new items before the slow steps below: vector
+            # indexing embeds every item through the classifier, and a fetch
+            # timeout that cancelled us there rolled back the whole cycle, so
+            # the big RSS feeds never made progress (#189). dedup_worker
+            # backfills any item left without the vectordb_indexed flag; the
+            # scheduler's own commit afterwards only adds last_fetch_at.
+            await self.db.commit()
+
             # 9. Index items in vector store for semantic search (async, non-blocking)
             # Skipped when the embeddings gate is closed; dedup_worker._process_unindexed_items
             # will backfill items missing the vectordb_indexed flag once the gate reopens.
