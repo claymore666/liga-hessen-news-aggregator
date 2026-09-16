@@ -275,3 +275,32 @@ class TestLogsEndpoint:
         # Page size too high
         response = await client.get("/api/admin/logs", params={"page_size": 500})
         assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_stats_exposes_llm_service_availability_and_disk(client):
+    """#184/#185: the flags written by the workers must reach /api/admin/stats."""
+    from unittest.mock import AsyncMock, patch
+
+    async def fake_read_state(name):
+        if name == "llm":
+            return {"running": True, "paused": False, "stopped_due_to_errors": False,
+                    "service_available": False}
+        return {"running": False, "paused": False, "stopped_due_to_errors": False}
+
+    async def fake_read_stats(name):
+        if name == "scheduler":
+            return {"jobs": [], "cycle": {}, "disk": {"percent_used": 84.0}}
+        return {}
+
+    with patch("services.worker_status.read_state", side_effect=fake_read_state), \
+         patch("services.worker_status.read_stats", side_effect=fake_read_stats), \
+         patch("api.admin.workers._get_classifier_bypass", new=AsyncMock(return_value=False)), \
+         patch("services.scheduler.scheduler") as sched:
+        sched.running = False
+        response = await client.get("/api/admin/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_worker"]["service_available"] is False
+    assert data["scheduler"]["disk"] == {"percent_used": 84.0}

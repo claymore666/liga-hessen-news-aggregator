@@ -40,6 +40,7 @@ class SchedulerStatus(BaseModel):
     jobs: list[dict]
     cycle: dict = {}  # last fetch cycle bookkeeping (see scheduler.get_cycle_stats)
     ingestion: dict = {}  # freshness verdict (see scheduler.get_ingestion_freshness)
+    disk: dict = {}  # root filesystem usage of the backend container (#185)
 
 
 class ProcessingQueueStats(BaseModel):
@@ -102,6 +103,7 @@ async def get_system_stats(
     Returns status of scheduler, workers, processing queue, and items.
     """
     from services.scheduler import (
+        _disk_usage,
         get_cycle_stats,
         get_ingestion_freshness,
         get_job_status,
@@ -121,6 +123,7 @@ async def get_system_stats(
         jobs=jobs,
         cycle=cycle,
         ingestion=await get_ingestion_freshness(),
+        disk=_disk_usage() if scheduler.running else sched_stats.get("disk", {}) or {},
     )
 
     # LLM Worker status from DB
@@ -130,6 +133,7 @@ async def get_system_stats(
         running=llm_state.get("running", False),
         paused=llm_state.get("paused", False),
         stopped_due_to_errors=llm_state.get("stopped_due_to_errors", False),
+        service_available=llm_state.get("service_available", True),
         stats={k: v for k, v in llm_stats.items() if k not in ("fresh_queue_size", "synced_at")} or
               {"fresh_processed": 0, "backlog_processed": 0, "errors": 0},
     )

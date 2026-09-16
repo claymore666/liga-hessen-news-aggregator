@@ -882,7 +882,7 @@ class TestLLMWorkerUnavailable:
         assert backoff == 15.0
 
     @pytest.mark.asyncio
-    async def test_on_unavailable_writes_state_once(self, worker):
+    async def test_on_unavailable_writes_state_every_attempt(self, worker):
         from services.llm.base import LLMUnavailableError
 
         with patch("services.gpu1_power.get_power_manager", return_value=None), \
@@ -890,7 +890,7 @@ class TestLLMWorkerUnavailable:
             for _ in range(3):
                 await worker._on_unavailable(LLMUnavailableError("404"))
 
-        assert ws.await_count == 1
+        assert ws.await_count == 3
         assert worker._unavailable_streak == 3
 
     @pytest.mark.asyncio

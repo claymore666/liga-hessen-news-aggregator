@@ -207,14 +207,18 @@ class LLMWorker:
         # the proxy may serve a different provider by then.
         self._processor = None
 
-        if self._service_available:
-            self._service_available = False
+        first = self._service_available
+        self._service_available = False
+        # Written on every attempt: a pause/resume in between rewrites the
+        # state without this flag, and stats must not report "available".
+        from services.worker_status import write_state
+        try:
+            await write_state("llm", running=True, service_available=False)
+        except Exception as e:
+            logger.debug(f"Failed to write LLM service state: {e}")
+
+        if first:
             logger.warning(f"LLM service unavailable, backing off: {error}")
-            from services.worker_status import write_state
-            try:
-                await write_state("llm", running=True, service_available=False)
-            except Exception as e:
-                logger.debug(f"Failed to write LLM service state: {e}")
         elif self._unavailable_streak % 10 == 0:
             logger.warning(
                 f"LLM service still unavailable after {self._unavailable_streak} attempts: {error}"
