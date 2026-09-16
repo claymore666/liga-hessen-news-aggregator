@@ -788,3 +788,269 @@ class TestBrowserPoolResilience:
         with pytest.raises(RuntimeError, match="shutting down"):
             async with pool.get_browser():
                 pass
+
+
+# ---------------------------------------------------------------------------
+# #187 — bounded Playwright cleanup and hard reset
+# ---------------------------------------------------------------------------
+
+class _HangingClose:
+    """Stand-in for a Playwright page/context whose close() never returns
+    until `release` is set (Chromium refusing to close a page)."""
+
+    def __init__(self):
+        self.release = asyncio.Event()
+        self.close_calls = 0
+
+    async def close(self):
+        self.close_calls += 1
+        await self.release.wait()
+
+
+def _fake_playwright(pid=4242, returncode=None):
+    """MagicMock Playwright instance with a reachable driver subprocess."""
+    pw = MagicMock()
+    proc = MagicMock()
+    proc.pid = pid
+    proc.returncode = returncode
+    pw._impl_obj._connection._transport._proc = proc
+    pw.stop = AsyncMock()
+    return pw, proc
+
+
+class TestCloseQuietly:
+    @pytest.mark.asyncio
+    async def test_none_is_a_noop(self):
+        from services.browser_pool import close_quietly
+
+        assert await close_quietly(None, "nothing") is True
+
+    @pytest.mark.asyncio
+    async def test_fast_close_returns_true(self):
+        from services.browser_pool import close_quietly
+
+        obj = MagicMock()
+        obj.close = AsyncMock()
+        assert await close_quietly(obj, "page", timeout=1.0) is True
+        obj.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_close_error_is_swallowed(self):
+        from services.browser_pool import close_quietly
+
+        obj = MagicMock()
+        obj.close = AsyncMock(side_effect=RuntimeError("Target closed"))
+        assert await close_quietly(obj, "page", timeout=1.0) is True
+
+    @pytest.mark.asyncio
+    async def test_hung_close_is_abandoned_after_timeout(self):
+        from services.browser_pool import close_quietly
+
+        obj = _HangingClose()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        result = await close_quietly(obj, "page", timeout=0.1)
+        assert result is False
+        assert loop.time() - t0 < 1.0
+        assert obj.close_calls == 1
+        obj.release.set()  # let the detached close finish
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_caller_cancellation_does_not_cancel_the_close(self):
+        """Cancelling the coroutine that awaits close_quietly must not cancel
+        the Playwright close() itself (that would hang in Connection._abort)."""
+        from services.browser_pool import close_quietly
+
+        obj = _HangingClose()
+        cancelled_inside = False
+
+        async def caller():
+            nonlocal cancelled_inside
+            try:
+                await close_quietly(obj, "page", timeout=10)
+            except asyncio.CancelledError:
+                cancelled_inside = True
+                raise
+
+        task = asyncio.ensure_future(caller())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancelled_inside
+        # The close is still pending, untouched by the cancellation
+        assert obj.close_calls == 1
+        obj.release.set()
+        await asyncio.sleep(0)
+
+
+class TestBrowserPoolHardReset:
+    def _make_pool(self, **kw):
+        from services.browser_pool import BrowserPool
+
+        kw.setdefault("max_browsers", 2)
+        kw.setdefault("error_threshold", 3)
+        kw.setdefault("close_timeout", 0.1)
+        return BrowserPool(**kw)
+
+    @pytest.mark.asyncio
+    async def test_hard_reset_kills_driver_and_restores_capacity(self):
+        pool = self._make_pool()
+        pw, proc = _fake_playwright()
+        pool._playwright = pw
+        pool._initialized = True
+        pool._generation = 3
+        old_semaphore = pool._semaphore
+        await old_semaphore.acquire()  # a leaked slot held by an abandoned task
+
+        with patch.object(pool, "_reap_orphan_chromium", return_value=0):
+            summary = await pool.hard_reset(reason="test")
+
+        proc.kill.assert_called_once()
+        assert summary["driver_pid_killed"] == 4242
+        assert summary["leaked_slots_recovered"] == 1
+        assert pool._playwright is None
+        assert pool._initialized is False
+        assert pool._generation == 4
+        assert pool._semaphore is not old_semaphore
+        assert pool._semaphore._value == 2
+        health = await pool.health_check()
+        assert health["hard_resets"] == 1
+        assert health["last_hard_reset_reason"] == "test"
+        assert health["available_slots"] == 2
+
+    @pytest.mark.asyncio
+    async def test_hard_reset_without_driver(self):
+        pool = self._make_pool()
+        with patch.object(pool, "_reap_orphan_chromium", return_value=0):
+            summary = await pool.hard_reset(reason="nothing running")
+        assert summary["driver_pid_killed"] is None
+        assert pool._generation == 1
+
+    @pytest.mark.asyncio
+    async def test_hard_reset_proceeds_when_lock_is_stuck(self):
+        pool = self._make_pool()
+        pool.LOCK_TIMEOUT = 0.1
+        pw, proc = _fake_playwright()
+        pool._playwright = pw
+        await pool._lock.acquire()  # simulate a wedged _restart_driver holding the lock
+        try:
+            with patch.object(pool, "_reap_orphan_chromium", return_value=0):
+                await asyncio.wait_for(pool.hard_reset(reason="stuck lock"), timeout=2)
+        finally:
+            pool._lock.release()
+        proc.kill.assert_called_once()
+        assert pool._playwright is None
+
+    @pytest.mark.asyncio
+    async def test_get_browser_releases_the_semaphore_it_acquired(self):
+        """After a hard reset swaps the semaphore, a task that was already
+        inside get_browser() must release the *old* semaphore, so the new
+        pool cannot be over-filled."""
+        pool = self._make_pool()
+        pw, _ = _fake_playwright()
+        browser = MagicMock()
+        browser.close = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        pool._playwright = pw
+        pool._initialized = True
+        old_semaphore = pool._semaphore
+
+        with patch.object(pool, "_reap_orphan_chromium", return_value=0):
+            async with pool.get_browser() as b:
+                assert b is browser
+                assert old_semaphore._value == 1
+                await pool.hard_reset(reason="mid-flight")
+                new_semaphore = pool._semaphore
+                assert new_semaphore is not old_semaphore
+                assert new_semaphore._value == 2
+
+        assert old_semaphore._value == 2
+        assert new_semaphore._value == 2  # not over-released
+
+    @pytest.mark.asyncio
+    async def test_hung_browser_close_is_bounded_and_counted(self):
+        pool = self._make_pool(close_timeout=0.1)
+        pw, _ = _fake_playwright()
+        browser = _HangingClose()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        pool._playwright = pw
+        pool._initialized = True
+
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        async with pool.get_browser():
+            pass
+        assert loop.time() - t0 < 1.0
+        assert pool._hung_closes == 1
+        assert pool._error_count == 1  # counts towards a driver restart
+        assert pool._semaphore._value == 2  # slot released despite hung close
+        browser.release.set()
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_caller_gets_out_of_get_browser(self):
+        """Scheduler cancellation while the caller holds a browser whose
+        close() hangs must complete within the close timeout."""
+        pool = self._make_pool(close_timeout=0.1)
+        pw, _ = _fake_playwright()
+        browser = _HangingClose()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        pool._playwright = pw
+        pool._initialized = True
+
+        entered = asyncio.Event()
+
+        async def consumer():
+            async with pool.get_browser():
+                entered.set()
+                await asyncio.sleep(60)
+
+        task = asyncio.ensure_future(consumer())
+        await entered.wait()
+        task.cancel()
+        done, pending = await asyncio.wait({task}, timeout=2)
+        assert done and task.cancelled()
+        assert pool._semaphore._value == 2
+        browser.release.set()
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_stop_playwright_kills_driver_when_stop_hangs(self):
+        pool = self._make_pool()
+        pw, proc = _fake_playwright()
+        stop_release = asyncio.Event()
+
+        async def hanging_stop():
+            await stop_release.wait()
+
+        pw.stop = hanging_stop
+        await pool._stop_playwright(pw, timeout=0.1)
+        proc.kill.assert_called_once()
+        stop_release.set()
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_reap_orphan_chromium_only_targets_headless_chromium_with_ppid_1(self, tmp_path):
+        """The reaper must ignore everything that is not an orphaned headless Chromium."""
+        from services.browser_pool import BrowserPool
+
+        def mk(pid, ppid, cmd):
+            d = tmp_path / str(pid)
+            d.mkdir()
+            (d / "status").write_text(f"Name:\tx\nPid:\t{pid}\nPPid:\t{ppid}\n")
+            (d / "cmdline").write_bytes(cmd.replace(" ", "\0").encode())
+
+        mk(100, 1, "/opt/playwright/chromium/chrome --headless --no-sandbox")  # orphan → kill
+        mk(101, 50, "/opt/playwright/chromium/chrome --headless --type=renderer")  # parent → keep
+        mk(102, 1, "gunicorn main:app -w 2")  # not chromium → keep
+        (tmp_path / "self").mkdir()
+
+        killed = []
+        with patch("services.browser_pool.Path", return_value=tmp_path), \
+             patch("services.browser_pool.os.kill",
+                   side_effect=lambda pid, sig: killed.append(pid)):
+            n = BrowserPool._reap_orphan_chromium()
+        assert n == 1
+        assert killed == [100]

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections import defaultdict
+from typing import NamedTuple
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -146,6 +147,121 @@ def get_effective_limit(source_type: str) -> int:
 
 # Lock to prevent overlapping fetches (replaces boolean flag to avoid race conditions)
 _fetch_lock = asyncio.Lock()
+
+# Fetch tasks that exceeded their timeout AND did not finish cleanup within the
+# grace period. They are left running detached; browser_pool.hard_reset() is
+# what eventually unblocks them (see #187). Tracked for stats only.
+_abandoned_tasks: set[asyncio.Task] = set()
+
+# Progress/freshness bookkeeping, synced to Redis via _sync_scheduler_stats and
+# after every fetch cycle. `last_activity_at` advances whenever a cycle starts,
+# a cycle completes, or a single channel fetch finishes — it is what /health
+# uses to detect a wedged scheduler.
+_cycle_stats: dict = {
+    "last_activity_at": None,
+    "last_cycle_started_at": None,
+    "last_cycle_completed_at": None,
+    "last_cycle_seconds": None,
+    "last_cycle_due": 0,
+    "last_cycle_fetched": 0,
+    "last_cycle_errors": 0,
+    "last_cycle_timeouts": 0,
+    "last_cycle_abandoned": 0,
+    "cycles_completed": 0,
+    "abandoned_tasks_total": 0,
+    "abandoned_tasks_pending": 0,
+    "hard_resets": 0,
+}
+
+
+def _touch_activity() -> None:
+    _cycle_stats["last_activity_at"] = utcnow().isoformat()
+
+
+def get_cycle_stats() -> dict:
+    """Snapshot of the scheduler's fetch-cycle bookkeeping (leader worker only)."""
+    stats = dict(_cycle_stats)
+    stats["abandoned_tasks_pending"] = len(_abandoned_tasks)
+    return stats
+
+
+async def get_ingestion_freshness() -> dict:
+    """Judge whether the scheduler is still making progress.
+
+    Works from any gunicorn worker: the leader uses its in-memory cycle
+    stats, other workers read the copy the leader publishes to Redis/DB.
+    ``stale`` is True only when the scheduler is enabled, a threshold is
+    configured and the last recorded activity is older than that threshold.
+    An unknown age (nothing recorded yet) is never reported as stale.
+    """
+    max_minutes = int(settings.scheduler_freshness_max_minutes or 0)
+    result: dict = {
+        "enabled": bool(settings.scheduler_enabled and max_minutes > 0),
+        "stale": False,
+        "max_minutes": max_minutes,
+        "last_activity_at": None,
+        "age_seconds": None,
+        "source": None,
+    }
+    if not result["enabled"]:
+        return result
+
+    last_activity = None
+    if scheduler.running and _cycle_stats.get("last_activity_at"):
+        last_activity = _cycle_stats["last_activity_at"]
+        result["source"] = "local"
+    else:
+        from services.worker_status import read_stats
+
+        try:
+            stats = await read_stats("scheduler")
+        except Exception as e:  # never let a stats hiccup fail the healthcheck
+            logger.warning(f"Could not read scheduler stats for freshness check: {e}")
+            stats = {}
+        cycle = stats.get("cycle") or {}
+        last_activity = cycle.get("last_activity_at")
+        result["source"] = "shared"
+
+    if not last_activity:
+        return result
+
+    try:
+        age = (utcnow() - datetime.fromisoformat(last_activity)).total_seconds()
+    except (TypeError, ValueError):
+        return result
+
+    result["last_activity_at"] = last_activity
+    result["age_seconds"] = round(age, 1)
+    result["stale"] = age > max_minutes * 60
+    return result
+
+
+def _abandon_task(task: asyncio.Task, label: str) -> None:
+    """Detach a task whose cleanup did not finish within the grace period."""
+    started = asyncio.get_running_loop().time()
+    _abandoned_tasks.add(task)
+    _cycle_stats["abandoned_tasks_total"] += 1
+
+    def _on_done(t: asyncio.Task) -> None:
+        _abandoned_tasks.discard(t)
+        waited = asyncio.get_running_loop().time() - started
+        if t.cancelled():
+            outcome = "cancelled"
+        elif t.exception() is not None:
+            outcome = f"error: {t.exception()!r}"
+        else:
+            outcome = "completed"
+        logger.warning(
+            f"Abandoned fetch task {label} finished after {waited:.0f}s more ({outcome})"
+        )
+
+    task.add_done_callback(_on_done)
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    """Retrieve a finished task's exception so asyncio does not warn about it."""
+    if not task.cancelled():
+        task.exception()
 
 scheduler = AsyncIOScheduler()
 
@@ -420,12 +536,26 @@ async def fetch_channel(channel_id: int, training_mode: bool = False) -> int:
                 await relevance_filter.close()
 
 
+class GroupResult(NamedTuple):
+    """Outcome of fetching one connector-type group. Unpacks as (fetched, errors)
+    for backwards compatibility."""
+
+    fetched: int
+    errors: int
+    timeouts: int = 0
+    abandoned: int = 0
+
+    def __iter__(self):
+        # Legacy callers/tests do `fetched, errors = result`
+        return iter((self.fetched, self.errors))
+
+
 async def _fetch_source_type_group(
     source_type: str,
     channels: list[Channel],
     semaphore: asyncio.Semaphore,
     training_mode: bool = False,
-) -> tuple[int, int]:
+) -> "GroupResult":
     """Fetch all channels of a given source type with concurrency limit.
 
     Args:
@@ -435,18 +565,19 @@ async def _fetch_source_type_group(
         training_mode: If True, disables filtering for training data collection
 
     Returns:
-        Tuple of (fetched_count, error_count)
+        GroupResult with fetched/error/timeout/abandoned counts.
     """
     fetched = 0
     errors = 0
     timeouts = 0
+    abandoned = 0
     results_lock = asyncio.Lock()
 
     # Get timeout for this source type
     timeout = CHANNEL_FETCH_TIMEOUTS.get(source_type, DEFAULT_FETCH_TIMEOUT)
 
     async def fetch_with_limit(channel: Channel) -> None:
-        nonlocal fetched, errors, timeouts
+        nonlocal fetched, errors, timeouts, abandoned
         # Circuit breaker: skip channels that keep failing
         if _should_skip_channel(channel.id):
             failures = _channel_failures.get(channel.id, 0)
@@ -455,34 +586,67 @@ async def _fetch_source_type_group(
                 f"— circuit breaker active ({failures} consecutive failures)"
             )
             return
+        label = f"channel {channel.id} ({channel.source.name}/{channel.connector_type})"
         async with semaphore:
-            try:
-                # Wrap in timeout to prevent indefinite hangs
-                await asyncio.wait_for(
-                    fetch_channel(channel.id, training_mode=training_mode),
-                    timeout=timeout,
-                )
-                _record_channel_success(channel.id)
-                async with results_lock:
-                    fetched += 1
-            except asyncio.TimeoutError:
-                _record_channel_failure(channel.id)
-                failures = _channel_failures.get(channel.id, 0)
+            # Run the fetch as its own task and wait with a timeout instead of
+            # asyncio.wait_for(): wait_for() cancels the task and then waits
+            # for it *without a bound*, so a hung cleanup (Playwright
+            # page.close() that Chromium never answers) wedged the whole
+            # scheduler for days (#187). Here the cancelled task gets a grace
+            # period for cleanup and is abandoned afterwards.
+            task = asyncio.ensure_future(fetch_channel(channel.id, training_mode=training_mode))
+            done, _ = await asyncio.wait({task}, timeout=timeout)
+
+            if done:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    _record_channel_failure(channel.id)
+                    logger.error(f"Fetch of {label} was cancelled")
+                    async with results_lock:
+                        errors += 1
+                except Exception as e:
+                    _record_channel_failure(channel.id)
+                    logger.error(f"Error fetching {label}: {e}")
+                    async with results_lock:
+                        errors += 1
+                else:
+                    _record_channel_success(channel.id)
+                    async with results_lock:
+                        fetched += 1
+                _touch_activity()
+                return
+
+            # Timed out: cancel and give cleanup a bounded grace period.
+            _record_channel_failure(channel.id)
+            failures = _channel_failures.get(channel.id, 0)
+            logger.error(
+                f"{label[0].upper()}{label[1:]} timed out after {timeout}s (failure #{failures})"
+            )
+            async with results_lock:
+                timeouts += 1
+                errors += 1
+
+            grace = float(settings.fetch_cleanup_grace_seconds)
+            task.cancel()
+            cleanup_started = asyncio.get_running_loop().time()
+            done, pending = await asyncio.wait({task}, timeout=grace)
+            if pending:
                 logger.error(
-                    f"Channel {channel.id} ({channel.source.name}/{channel.connector_type}) "
-                    f"timed out after {timeout}s (failure #{failures})"
+                    f"Cleanup of {label} did not finish within {grace:.0f}s grace period; "
+                    f"abandoning the task (browser pool will be hard-reset after this cycle)"
                 )
+                _abandon_task(task, label)
                 async with results_lock:
-                    timeouts += 1
-                    errors += 1
-            except Exception as e:
-                _record_channel_failure(channel.id)
-                logger.error(
-                    f"Error fetching channel {channel.id} "
-                    f"({channel.source.name}/{channel.connector_type}): {e}"
-                )
-                async with results_lock:
-                    errors += 1
+                    abandoned += 1
+            else:
+                _consume_task_result(task)
+                cleanup_seconds = asyncio.get_running_loop().time() - cleanup_started
+                if cleanup_seconds > 1.0:
+                    logger.warning(
+                        f"Cleanup of {label} took {cleanup_seconds:.1f}s after cancellation"
+                    )
+            _touch_activity()
 
     # Run all channels of this type concurrently (within semaphore limit)
     await asyncio.gather(*[fetch_with_limit(ch) for ch in channels], return_exceptions=True)
@@ -490,7 +654,7 @@ async def _fetch_source_type_group(
     if timeouts > 0:
         logger.warning(f"{source_type}: {timeouts} channel(s) timed out after {timeout}s")
 
-    return fetched, errors
+    return GroupResult(fetched=fetched, errors=errors, timeouts=timeouts, abandoned=abandoned)
 
 
 async def fetch_due_channels() -> dict:
@@ -513,81 +677,141 @@ async def fetch_due_channels() -> dict:
         return {"skipped": True, "reason": "fetch_in_progress"}
 
     async with _fetch_lock:
-        now = utcnow()
-
-        async with async_session_maker() as db:
-            # Find enabled channels where parent source is also enabled
-            query = (
-                select(Channel)
-                .join(Source)
-                .options(selectinload(Channel.source))
-                .where(
-                    Channel.enabled == True,  # noqa: E712
-                    Source.enabled == True,  # noqa: E712
-                )
+        cycle_started = asyncio.get_running_loop().time()
+        _cycle_stats["last_cycle_started_at"] = utcnow().isoformat()
+        _touch_activity()
+        try:
+            result = await _fetch_due_channels_locked()
+        finally:
+            _cycle_stats["last_cycle_completed_at"] = utcnow().isoformat()
+            _cycle_stats["last_cycle_seconds"] = round(
+                asyncio.get_running_loop().time() - cycle_started, 1
             )
-            result = await db.execute(query)
-            all_channels = result.scalars().all()
+            _cycle_stats["cycles_completed"] += 1
+            _touch_activity()
+            await _publish_cycle_stats()
+    return result
 
-            # Filter in Python for clearer logic
-            due_channels = []
-            for channel in all_channels:
-                if channel.last_fetch_at is None:
+
+async def _publish_cycle_stats() -> None:
+    """Push cycle stats to Redis/DB right away so /health sees fresh data."""
+    try:
+        await _sync_scheduler_stats()
+    except Exception as e:
+        logger.warning(f"Failed to publish scheduler cycle stats: {e}")
+
+
+async def _fetch_due_channels_locked() -> dict:
+    """Body of fetch_due_channels(); caller holds _fetch_lock."""
+    now = utcnow()
+
+    async with async_session_maker() as db:
+        # Find enabled channels where parent source is also enabled
+        query = (
+            select(Channel)
+            .join(Source)
+            .options(selectinload(Channel.source))
+            .where(
+                Channel.enabled == True,  # noqa: E712
+                Source.enabled == True,  # noqa: E712
+            )
+        )
+        result = await db.execute(query)
+        all_channels = result.scalars().all()
+
+        # Filter in Python for clearer logic
+        due_channels = []
+        for channel in all_channels:
+            if channel.last_fetch_at is None:
+                due_channels.append(channel)
+            else:
+                due_time = channel.last_fetch_at + timedelta(minutes=channel.fetch_interval_minutes)
+                if due_time < now:
                     due_channels.append(channel)
-                else:
-                    due_time = channel.last_fetch_at + timedelta(minutes=channel.fetch_interval_minutes)
-                    if due_time < now:
-                        due_channels.append(channel)
 
-            if not due_channels:
-                return {"due_channels": 0, "fetched": 0, "errors": 0}
-
-            # Group channels by source type
-            by_type: dict[str, list[Channel]] = defaultdict(list)
-            for channel in due_channels:
-                by_type[channel.connector_type].append(channel)
-
-            logger.info(
-                f"Found {len(due_channels)} channels due for fetching "
-                f"across {len(by_type)} source types: "
-                f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
+        if not due_channels:
+            _cycle_stats.update(
+                last_cycle_due=0, last_cycle_fetched=0, last_cycle_errors=0,
+                last_cycle_timeouts=0, last_cycle_abandoned=0,
             )
+            return {"due_channels": 0, "fetched": 0, "errors": 0}
 
-            # Create semaphores per source type (dynamic limits for proxy-using connectors)
-            semaphores = {
-                source_type: asyncio.Semaphore(get_effective_limit(source_type))
-                for source_type in by_type.keys()
-            }
+        # Group channels by source type
+        by_type: dict[str, list[Channel]] = defaultdict(list)
+        for channel in due_channels:
+            by_type[channel.connector_type].append(channel)
 
-            # Fetch all source types in parallel
-            tasks = [
-                _fetch_source_type_group(source_type, channels, semaphores[source_type])
-                for source_type, channels in by_type.items()
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info(
+            f"Found {len(due_channels)} channels due for fetching "
+            f"across {len(by_type)} source types: "
+            f"{', '.join(f'{k}({len(v)})' for k, v in by_type.items())}"
+        )
 
-            # Collect results
-            total_fetched = 0
-            total_errors = 0
-            for source_type, result in zip(by_type.keys(), results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error in source type group {source_type}: {result}")
-                    total_errors += len(by_type[source_type])
-                else:
-                    fetched, errors = result
-                    total_fetched += fetched
-                    total_errors += errors
-                    if fetched > 0 or errors > 0:
-                        logger.info(f"  {source_type}: {fetched} fetched, {errors} errors")
-
-        if total_fetched > 0 or total_errors > 0:
-            logger.info(f"Parallel fetch complete: {total_fetched} channels, {total_errors} errors")
-
-        return {
-            "due_channels": len(due_channels),
-            "fetched": total_fetched,
-            "errors": total_errors,
+        # Create semaphores per source type (dynamic limits for proxy-using connectors)
+        semaphores = {
+            source_type: asyncio.Semaphore(get_effective_limit(source_type))
+            for source_type in by_type.keys()
         }
+
+        # Fetch all source types in parallel
+        tasks = [
+            _fetch_source_type_group(source_type, channels, semaphores[source_type])
+            for source_type, channels in by_type.items()
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results
+        total_fetched = 0
+        total_errors = 0
+        total_timeouts = 0
+        total_abandoned = 0
+        for source_type, result in zip(by_type.keys(), results):
+            if isinstance(result, BaseException):
+                logger.error(f"Error in source type group {source_type}: {result!r}")
+                total_errors += len(by_type[source_type])
+            else:
+                total_fetched += result.fetched
+                total_errors += result.errors
+                total_timeouts += result.timeouts
+                total_abandoned += result.abandoned
+                if result.fetched > 0 or result.errors > 0:
+                    logger.info(
+                        f"  {source_type}: {result.fetched} fetched, {result.errors} errors"
+                    )
+
+    if total_fetched > 0 or total_errors > 0:
+        logger.info(f"Parallel fetch complete: {total_fetched} channels, {total_errors} errors")
+
+    _cycle_stats.update(
+        last_cycle_due=len(due_channels),
+        last_cycle_fetched=total_fetched,
+        last_cycle_errors=total_errors,
+        last_cycle_timeouts=total_timeouts,
+        last_cycle_abandoned=total_abandoned,
+    )
+
+    if total_abandoned > 0:
+        # Abandoned tasks may still hold a browser-pool slot and an
+        # unanswered Playwright close() call. Nothing else is in flight
+        # now, so kill the driver: every pending call fails immediately,
+        # the tasks finish, and the next cycle starts with a clean pool.
+        from services.browser_pool import browser_pool
+
+        try:
+            await browser_pool.hard_reset(
+                reason=f"{total_abandoned} fetch task(s) abandoned after cleanup grace period"
+            )
+            _cycle_stats["hard_resets"] += 1
+        except Exception as e:
+            logger.error(f"Browser pool hard reset failed: {e!r}")
+
+    return {
+        "due_channels": len(due_channels),
+        "fetched": total_fetched,
+        "errors": total_errors,
+        "timeouts": total_timeouts,
+        "abandoned": total_abandoned,
+    }
 
 
 async def retry_llm_processing(batch_size: int = 10) -> dict:
@@ -882,7 +1106,16 @@ async def _sync_scheduler_stats() -> None:
     jobs = get_job_status()
     # Exclude the sync job itself from the list
     jobs = [j for j in jobs if j["id"] != "sync_scheduler_stats"]
-    await write_stats("scheduler", {"jobs": jobs})
+    from services.browser_pool import browser_pool
+
+    await write_stats(
+        "scheduler",
+        {
+            "jobs": jobs,
+            "cycle": get_cycle_stats(),
+            "browser_pool": await browser_pool.health_check(),
+        },
+    )
 
 
 def start_scheduler() -> None:
@@ -977,6 +1210,7 @@ def start_scheduler() -> None:
 
     scheduler.start()
     logger.info("Scheduler started")
+    _touch_activity()
 
     # Write state and initial jobs to DB
     import asyncio

@@ -1,5 +1,6 @@
 """X.com (Twitter) scraper connector using Playwright."""
 
+import asyncio
 import json
 import logging
 import random
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
-from services.browser_pool import browser_pool
+from services.browser_pool import browser_pool, close_quietly
 from database import utcnow
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ class XScraperConnector(BaseConnector):
     display_name = "X.com Scraper"
     description = "Scrape posts directly from X.com/Twitter profiles"
     config_schema = XScraperConfig
+
+    # Upper bound for visiting one linked article (goto + consent + expand + content)
+    ARTICLE_FETCH_TIMEOUT = 45
 
     # User-Agent rotation pool (modern desktop browsers)
     USER_AGENTS = [
@@ -206,6 +210,10 @@ class XScraperConnector(BaseConnector):
                     context_args["proxy"] = {"server": proxy_server}
 
                 context = await browser.new_context(**context_args)
+                # Bound every Playwright action/navigation so a stalled page
+                # cannot hold the fetch until the scheduler timeout (#187).
+                context.set_default_timeout(15000)
+                context.set_default_navigation_timeout(45000)
 
                 # Load and inject saved cookies for authentication
                 cookies = self._load_cookies()
@@ -257,12 +265,8 @@ class XScraperConnector(BaseConnector):
                 logger.error(f"Error scraping @{config.username}: {e}")
                 raise
             finally:
-                # Close context (browser is closed by pool)
-                if context:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
+                # Close context (browser is closed by pool); bounded wait
+                await close_quietly(context, "x_scraper context")
 
         logger.info(f"Extracted {len(items)} tweets from @{config.username}")
         return items
@@ -495,71 +499,20 @@ Verlinkter Artikel von {article.source_domain}:
         Returns:
             ArticleContent object or None if extraction failed
         """
-        from services.article_extractor import ArticleContent
-
-        page = None
+        page_holder: list = [None]
         try:
-            # Resolve t.co redirects first
-            if "t.co" in url:
-                url = await article_extractor.resolve_redirect(url)
-                logger.debug(f"Resolved t.co URL to: {url}")
-
-            # Clean tracking parameters
-            url = article_extractor._clean_url(url)
-
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            domain = parsed.netloc.lower().replace("www.", "")
-
-            # Open new page in existing context
-            page = await context.new_page()
-
-            # Navigate to article
-            logger.debug(f"Fetching article with Playwright: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-
-            # Handle common cookie consent dialogs
-            await self._handle_cookie_consent(page)
-
-            # Wait for content to load (JS rendering)
-            await page.wait_for_timeout(2000)
-
-            # Try to expand "read more" or similar buttons
-            await self._expand_article_content(page)
-
-            # Get page HTML after JS execution
-            html = await page.content()
-
-            # Use BeautifulSoup for parsing
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, "lxml")
-
-            # Check if it's likely an article
-            is_article = article_extractor.is_likely_news_article(soup, url)
-            if not is_article:
-                logger.debug(f"URL {url} does not appear to be a news article (Playwright)")
-                return None
-
-            # Extract title
-            title = article_extractor._extract_title(soup)
-
-            # Extract content using trafilatura (works better with full HTML)
-            content = article_extractor._extract_content(soup, html)
-
-            if not content or len(content) < 100:
-                logger.debug(f"Insufficient content from {url}: {len(content) if content else 0} chars")
-                return None
-
-            logger.info(f"Extracted article via Playwright from {domain}: {len(content)} chars")
-
-            return ArticleContent(
-                url=url,
-                title=title,
-                content=content,
-                is_article=is_article,
-                source_domain=domain,
+            # Whole article visit is bounded independently of the scheduler
+            # timeout so one slow link cannot eat the channel's budget. The
+            # page is closed here, outside the timeout, with a bounded wait.
+            async with asyncio.timeout(self.ARTICLE_FETCH_TIMEOUT):
+                return await self._fetch_article_with_playwright_inner(
+                    context, url, article_extractor, page_holder
+                )
+        except TimeoutError:
+            logger.warning(
+                f"Timeout ({self.ARTICLE_FETCH_TIMEOUT}s) fetching article with Playwright: {url}"
             )
-
+            return None
         except PlaywrightTimeout:
             logger.warning(f"Timeout fetching article with Playwright: {url}")
             return None
@@ -567,11 +520,74 @@ Verlinkter Artikel von {article.source_domain}:
             logger.warning(f"Failed to fetch article with Playwright from {url}: {e}")
             return None
         finally:
-            if page:
-                try:
-                    await page.close()
-                except Exception as e:
-                    logger.debug(f"Error closing page: {e}")
+            await close_quietly(page_holder[0], "x_scraper article page")
+
+    async def _fetch_article_with_playwright_inner(
+        self, context, url: str, article_extractor, page_holder: list
+    ):
+        from services.article_extractor import ArticleContent
+
+        # Resolve t.co redirects first
+        if "t.co" in url:
+            url = await article_extractor.resolve_redirect(url)
+            logger.debug(f"Resolved t.co URL to: {url}")
+
+        # Clean tracking parameters
+        url = article_extractor._clean_url(url)
+
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().replace("www.", "")
+
+        # Open new page in existing context
+        page = await context.new_page()
+        page_holder[0] = page
+
+        # Navigate to article
+        logger.debug(f"Fetching article with Playwright: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+
+        # Handle common cookie consent dialogs
+        await self._handle_cookie_consent(page)
+
+        # Wait for content to load (JS rendering)
+        await page.wait_for_timeout(2000)
+
+        # Try to expand "read more" or similar buttons
+        await self._expand_article_content(page)
+
+        # Get page HTML after JS execution
+        html = await page.content()
+
+        # Use BeautifulSoup for parsing
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+
+        # Check if it's likely an article
+        is_article = article_extractor.is_likely_news_article(soup, url)
+        if not is_article:
+            logger.debug(f"URL {url} does not appear to be a news article (Playwright)")
+            return None
+
+        # Extract title
+        title = article_extractor._extract_title(soup)
+
+        # Extract content using trafilatura (works better with full HTML)
+        content = article_extractor._extract_content(soup, html)
+
+        if not content or len(content) < 100:
+            logger.debug(f"Insufficient content from {url}: {len(content) if content else 0} chars")
+            return None
+
+        logger.info(f"Extracted article via Playwright from {domain}: {len(content)} chars")
+
+        return ArticleContent(
+            url=url,
+            title=title,
+            content=content,
+            is_article=is_article,
+            source_domain=domain,
+        )
 
     async def _handle_cookie_consent(self, page):
         """Click common cookie consent buttons.
@@ -715,7 +731,7 @@ Verlinkter Artikel von {article.source_domain}:
                     else:
                         return False, f"Profile @{config.username} not found (HTTP {response.status if response else 'error'})"
                 finally:
-                    await context.close()
+                    await close_quietly(context, "x_scraper validate context")
 
         except Exception as e:
             return False, f"Validation error: {str(e)}"

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
-from services.browser_pool import browser_pool
+from services.browser_pool import browser_pool, close_quietly
 from services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,9 @@ class InstagramScraperConnector(BaseConnector):
                     context_args["proxy"] = {"server": proxy_server}
 
                 context = await browser.new_context(**context_args)
+                # Bound every Playwright action/navigation (#187)
+                context.set_default_timeout(15000)
+                context.set_default_navigation_timeout(45000)
                 page = await context.new_page()
 
                 # NOTE: playwright_stealth is deliberately not applied — its
@@ -249,12 +252,8 @@ class InstagramScraperConnector(BaseConnector):
                 logger.error(f"Error scraping @{config.username}: {e}")
                 raise
             finally:
-                # Close context (browser is closed by pool)
-                if context:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
+                # Close context (browser is closed by pool); bounded wait
+                await close_quietly(context, "instagram context")
 
         logger.info(f"Extracted {len(items)} posts from @{config.username}")
         return items
@@ -447,7 +446,7 @@ class InstagramScraperConnector(BaseConnector):
 
                     return True, f"Profile @{config.username} found (may have no posts)"
                 finally:
-                    await context.close()
+                    await close_quietly(context, "instagram validate context")
 
         except PlaywrightTimeout:
             return False, "Connection timeout - Instagram may be blocking"

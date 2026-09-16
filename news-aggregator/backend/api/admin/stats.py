@@ -38,6 +38,8 @@ class SchedulerStatus(BaseModel):
     """Status of the scheduler."""
     running: bool
     jobs: list[dict]
+    cycle: dict = {}  # last fetch cycle bookkeeping (see scheduler.get_cycle_stats)
+    ingestion: dict = {}  # freshness verdict (see scheduler.get_ingestion_freshness)
 
 
 class ProcessingQueueStats(BaseModel):
@@ -99,7 +101,12 @@ async def get_system_stats(
 
     Returns status of scheduler, workers, processing queue, and items.
     """
-    from services.scheduler import scheduler, get_job_status
+    from services.scheduler import (
+        get_cycle_stats,
+        get_ingestion_freshness,
+        get_job_status,
+        scheduler,
+    )
     from services.worker_status import read_state, read_stats
 
     # Scheduler status - read from DB, fall back to local
@@ -108,9 +115,12 @@ async def get_system_stats(
     scheduler_running = sched_state.get("running", False) or scheduler.running
     # Local scheduler has live jobs; non-leader reads from DB
     jobs = get_job_status() if scheduler.running else sched_stats.get("jobs", [])
+    cycle = get_cycle_stats() if scheduler.running else sched_stats.get("cycle", {}) or {}
     scheduler_status = SchedulerStatus(
         running=scheduler_running,
         jobs=jobs,
+        cycle=cycle,
+        ingestion=await get_ingestion_freshness(),
     )
 
     # LLM Worker status from DB

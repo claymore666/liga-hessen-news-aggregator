@@ -12,7 +12,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_async
 from pydantic import BaseModel, Field, field_validator
 
-from services.browser_pool import browser_pool
+from services.browser_pool import browser_pool, close_quietly
 
 from .base import BaseConnector, RawItem
 from .registry import ConnectorRegistry
@@ -208,6 +208,9 @@ class LinkedInConnector(BaseConnector):
                     context_args["proxy"] = {"server": proxy_server}
 
                 context = await browser.new_context(**context_args)
+                # Bound every Playwright action/navigation (#187)
+                context.set_default_timeout(15000)
+                context.set_default_navigation_timeout(45000)
 
                 # Inject cookies
                 await context.add_cookies(cookies)
@@ -263,11 +266,7 @@ class LinkedInConnector(BaseConnector):
                 logger.error(f"Error scraping {config.profile_url}: {e}")
                 raise
             finally:
-                if context:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
+                await close_quietly(context, "linkedin context")
 
         logger.info(f"Extracted {len(items)} posts from {config.profile_url}")
         return items
@@ -499,11 +498,7 @@ Verlinkter Artikel von {article.source_domain}:
                         status = response.status if response else "error"
                         return False, f"Profile not accessible (HTTP {status})"
                 finally:
-                    if context:
-                        try:
-                            await context.close()
-                        except Exception:
-                            pass
+                    await close_quietly(context, "linkedin validate context")
 
         except Exception as e:
             return False, f"Validation error: {str(e)}"

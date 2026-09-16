@@ -34,6 +34,9 @@ class HealthCheckResponse(BaseModel):
     llm_enabled: bool
     scheduler_running: bool
     scheduler_jobs: list[dict]
+    scheduler_cycle: dict = {}
+    ingestion: dict = {}
+    browser_pool: dict = {}
     llm_available: bool
     llm_provider: str | None
     proxy_count: int
@@ -58,7 +61,12 @@ async def get_system_health(
     Combines scheduler, LLM, proxy, and database status in one call.
     """
     import json as _json
-    from services.scheduler import scheduler, get_job_status
+    from services.scheduler import (
+        get_cycle_stats,
+        get_ingestion_freshness,
+        get_job_status,
+        scheduler,
+    )
     from services.proxy_manager import proxy_manager
     from services.llm.ollama import OllamaProvider
     from services.worker_status import read_state, read_stats
@@ -69,6 +77,14 @@ async def get_system_health(
     sched_stats = await read_stats("scheduler")
     scheduler_running = sched_state.get("running", False) or scheduler.running
     scheduler_jobs = get_job_status() if scheduler.running else sched_stats.get("jobs", [])
+    scheduler_cycle = get_cycle_stats() if scheduler.running else sched_stats.get("cycle", {}) or {}
+    ingestion = await get_ingestion_freshness()
+    if scheduler.running:
+        from services.browser_pool import browser_pool as _pool
+
+        browser_pool_health = await _pool.health_check()
+    else:
+        browser_pool_health = sched_stats.get("browser_pool", {}) or {}
 
     # LLM status
     llm_available = False
@@ -122,7 +138,7 @@ async def get_system_health(
         database_ok = False
 
     overall_status = "healthy"
-    if not scheduler_running or not database_ok:
+    if not scheduler_running or not database_ok or ingestion.get("stale"):
         overall_status = "degraded"
     if not database_ok:
         overall_status = "unhealthy"
@@ -136,6 +152,9 @@ async def get_system_health(
         llm_enabled=settings.llm_enabled,
         scheduler_running=scheduler_running,
         scheduler_jobs=scheduler_jobs,
+        scheduler_cycle=scheduler_cycle,
+        ingestion=ingestion,
+        browser_pool=browser_pool_health,
         llm_available=llm_available,
         llm_provider=llm_provider,
         proxy_count=proxy_count,

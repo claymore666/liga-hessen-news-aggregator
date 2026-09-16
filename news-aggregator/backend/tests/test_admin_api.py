@@ -20,7 +20,11 @@ class TestHealthEndpoints:
         response = await client.get("/health")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "healthy"}
+        body = response.json()
+        assert body["status"] == "healthy"
+        # Ingestion freshness verdict is always attached (see #187)
+        assert "ingestion" in body
+        assert body["ingestion"]["stale"] is False
 
     @pytest.mark.asyncio
     async def test_detailed_health_check(self, client: AsyncClient):

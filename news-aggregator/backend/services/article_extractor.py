@@ -565,7 +565,7 @@ async def _fetch_with_playwright(url: str, domain: str) -> ArticleContent | None
     Uses the shared browser pool to render the page and re-extract content
     with trafilatura.
     """
-    from services.browser_pool import browser_pool
+    from services.browser_pool import browser_pool, close_quietly
 
     try:
         async with browser_pool.get_browser() as browser:
@@ -573,6 +573,7 @@ async def _fetch_with_playwright(url: str, domain: str) -> ArticleContent | None
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="de-DE",
             )
+            context.set_default_timeout(15000)
             try:
                 page = await context.new_page()
 
@@ -581,7 +582,7 @@ async def _fetch_with_playwright(url: str, domain: str) -> ArticleContent | None
 
                 html = await page.content()
             finally:
-                await context.close()
+                await close_quietly(context, "article_extractor context")
 
         # Re-extract with trafilatura on rendered HTML
         try:

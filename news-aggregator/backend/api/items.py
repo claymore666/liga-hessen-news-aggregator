@@ -1018,7 +1018,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
     import json
     from pathlib import Path
     from playwright_stealth import stealth_async
-    from services.browser_pool import browser_pool
+    from services.browser_pool import browser_pool, close_quietly
 
     links = []
     cookie_file = Path("/app/data/x_cookies.json")
@@ -1070,7 +1070,7 @@ async def _scrape_tweet_for_links(tweet_url: str) -> list[str]:
                         if resolved not in links:
                             links.append(resolved)
 
-            await context.close()
+            await close_quietly(context, "refetch context")
 
     except Exception as e:
         logger.warning(f"Error scraping tweet for links: {e}")

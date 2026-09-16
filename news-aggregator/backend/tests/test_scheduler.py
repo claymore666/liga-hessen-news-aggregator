@@ -305,3 +305,289 @@ class TestEffectiveLimitPool:
         with patch("services.proxy_manager.proxy_manager") as pm:
             pm.available_count.return_value = 0
             assert get_effective_limit("x_scraper") == 1
+
+
+# ---------------------------------------------------------------------------
+# #187 — a hung cleanup must never wedge the fetch cycle
+# ---------------------------------------------------------------------------
+
+def _fake_channel(channel_id: int, connector_type: str = "fake"):
+    from unittest.mock import MagicMock
+
+    ch = MagicMock()
+    ch.id = channel_id
+    ch.connector_type = connector_type
+    ch.source.name = f"Source {channel_id}"
+    return ch
+
+
+class TestFetchTimeoutHandling:
+    """_fetch_source_type_group cancels on timeout, waits a bounded grace
+    period for cleanup and abandons tasks that still do not finish."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_breaker(self):
+        import services.scheduler as sched
+
+        sched._channel_failures.clear()
+        yield
+        sched._channel_failures.clear()
+
+    @pytest.mark.asyncio
+    async def test_fast_fetch_is_counted(self):
+        import asyncio
+        from services.scheduler import _fetch_source_type_group
+
+        async def ok_fetch(channel_id, training_mode=False):
+            return 1
+
+        with patch("services.scheduler.fetch_channel", ok_fetch), \
+             patch.dict("services.scheduler.CHANNEL_FETCH_TIMEOUTS", {"fake": 1.0}):
+            result = await _fetch_source_type_group(
+                "fake", [_fake_channel(1)], asyncio.Semaphore(2)
+            )
+
+        assert (result.fetched, result.errors, result.timeouts, result.abandoned) == (1, 0, 0, 0)
+        # Legacy tuple unpacking still works
+        fetched, errors = result
+        assert (fetched, errors) == (1, 0)
+
+    @pytest.mark.asyncio
+    async def test_timeout_cancels_and_waits_for_quick_cleanup(self):
+        import asyncio
+        from services.scheduler import _fetch_source_type_group
+
+        cleanup_ran = asyncio.Event()
+
+        async def slow_fetch(channel_id, training_mode=False):
+            try:
+                await asyncio.sleep(60)
+            finally:
+                await asyncio.sleep(0.05)  # quick cleanup
+                cleanup_ran.set()
+
+        with patch("services.scheduler.fetch_channel", slow_fetch), \
+             patch.dict("services.scheduler.CHANNEL_FETCH_TIMEOUTS", {"fake": 0.1}), \
+             patch("services.scheduler.settings.fetch_cleanup_grace_seconds", 2.0):
+            result = await asyncio.wait_for(
+                _fetch_source_type_group("fake", [_fake_channel(2)], asyncio.Semaphore(2)),
+                timeout=5,
+            )
+
+        assert cleanup_ran.is_set()
+        assert (result.fetched, result.errors, result.timeouts, result.abandoned) == (0, 1, 1, 0)
+
+    @pytest.mark.asyncio
+    async def test_hung_cleanup_is_abandoned_after_grace(self):
+        import asyncio
+        import services.scheduler as sched
+        from services.scheduler import _fetch_source_type_group
+
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def wedged_fetch(channel_id, training_mode=False):
+            try:
+                await asyncio.sleep(60)
+            finally:
+                # Simulates Playwright page.close() that Chromium never answers:
+                # cleanup ignores the cancellation and blocks indefinitely.
+                await release.wait()
+                finished.set()
+
+        loop = asyncio.get_running_loop()
+        with patch("services.scheduler.fetch_channel", wedged_fetch), \
+             patch.dict("services.scheduler.CHANNEL_FETCH_TIMEOUTS", {"fake": 0.1}), \
+             patch("services.scheduler.settings.fetch_cleanup_grace_seconds", 0.2):
+            t0 = loop.time()
+            result = await asyncio.wait_for(
+                _fetch_source_type_group("fake", [_fake_channel(3)], asyncio.Semaphore(2)),
+                timeout=5,
+            )
+            elapsed = loop.time() - t0
+
+        # Returned promptly (timeout + grace), not blocked by the wedged task
+        assert elapsed < 2.0
+        assert (result.timeouts, result.abandoned, result.errors) == (1, 1, 1)
+        assert len(sched._abandoned_tasks) == 1
+        assert sched._cycle_stats["abandoned_tasks_total"] >= 1
+
+        # When the abandoned task finally completes it is dropped from the set
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.sleep(0)  # let the done-callback run
+        assert len(sched._abandoned_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_cycle_hard_resets_pool_when_task_abandoned(
+        self, db_session: AsyncSession, channels_with_intervals
+    ):
+        """A full fetch_due_channels cycle with one wedged channel completes,
+        releases the fetch lock, reports the abandonment and hard-resets the
+        browser pool."""
+        import asyncio
+        import services.scheduler as sched
+        from services.scheduler import fetch_due_channels
+
+        release = asyncio.Event()
+        calls = 0
+
+        async def fetch(channel_id, training_mode=False):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                try:
+                    await asyncio.sleep(60)
+                finally:
+                    await release.wait()
+            return 0
+
+        with patch("services.scheduler.async_session_maker") as mock_session_maker, \
+             patch("services.scheduler.fetch_channel", fetch), \
+             patch.dict("services.scheduler.CHANNEL_FETCH_TIMEOUTS", {"rss": 0.1}), \
+             patch("services.scheduler.settings.fetch_cleanup_grace_seconds", 0.2), \
+             patch("services.browser_pool.browser_pool.hard_reset",
+                   new_callable=AsyncMock) as hard_reset, \
+             patch("services.scheduler._publish_cycle_stats", new_callable=AsyncMock):
+            mock_session_maker.return_value.__aenter__ = AsyncMock(return_value=db_session)
+            mock_session_maker.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await asyncio.wait_for(fetch_due_channels(), timeout=5)
+
+        try:
+            assert result["due_channels"] == 2
+            assert result["fetched"] == 1
+            assert result["abandoned"] == 1
+            assert result["timeouts"] == 1
+            hard_reset.assert_awaited_once()
+            assert "abandoned" in hard_reset.await_args.kwargs["reason"]
+            # The lock is free again: the scheduler will run the next cycle
+            assert not sched._fetch_lock.locked()
+            stats = sched.get_cycle_stats()
+            assert stats["last_cycle_abandoned"] == 1
+            assert stats["last_cycle_completed_at"] is not None
+            assert stats["last_activity_at"] is not None
+            assert stats["abandoned_tasks_pending"] == 1
+        finally:
+            release.set()
+            await asyncio.sleep(0.05)
+
+    @pytest.mark.asyncio
+    async def test_no_hard_reset_without_abandonment(
+        self, db_session: AsyncSession, channels_with_intervals
+    ):
+        from services.scheduler import fetch_due_channels
+
+        async def fetch(channel_id, training_mode=False):
+            return 0
+
+        with patch("services.scheduler.async_session_maker") as mock_session_maker, \
+             patch("services.scheduler.fetch_channel", fetch), \
+             patch("services.browser_pool.browser_pool.hard_reset",
+                   new_callable=AsyncMock) as hard_reset, \
+             patch("services.scheduler._publish_cycle_stats", new_callable=AsyncMock):
+            mock_session_maker.return_value.__aenter__ = AsyncMock(return_value=db_session)
+            mock_session_maker.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await fetch_due_channels()
+
+        assert result["abandoned"] == 0
+        hard_reset.assert_not_awaited()
+
+
+_STALE = {
+    "enabled": True, "stale": True, "max_minutes": 15,
+    "last_activity_at": "2026-09-14T20:19:00", "age_seconds": 99999, "source": "shared",
+}
+
+
+class TestIngestionFreshness:
+    """get_ingestion_freshness() drives /health (#187)."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_when_scheduler_disabled(self):
+        from services.scheduler import get_ingestion_freshness
+
+        with patch("services.scheduler.settings.scheduler_enabled", False):
+            result = await get_ingestion_freshness()
+        assert result["enabled"] is False
+        assert result["stale"] is False
+
+    @pytest.mark.asyncio
+    async def test_disabled_when_threshold_zero(self):
+        from services.scheduler import get_ingestion_freshness
+
+        with patch("services.scheduler.settings.scheduler_enabled", True), \
+             patch("services.scheduler.settings.scheduler_freshness_max_minutes", 0):
+            result = await get_ingestion_freshness()
+        assert result["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_activity_is_not_stale(self):
+        from services.scheduler import get_ingestion_freshness
+
+        with patch("services.scheduler.settings.scheduler_enabled", True), \
+             patch("services.scheduler.settings.scheduler_freshness_max_minutes", 15), \
+             patch("services.worker_status.read_stats", new_callable=AsyncMock, return_value={}):
+            result = await get_ingestion_freshness()
+        assert result["enabled"] is True
+        assert result["stale"] is False
+        assert result["age_seconds"] is None
+
+    @pytest.mark.asyncio
+    async def test_old_shared_activity_is_stale(self):
+        from services.scheduler import get_ingestion_freshness
+
+        old = (utcnow() - timedelta(minutes=40)).isoformat()
+        with patch("services.scheduler.settings.scheduler_enabled", True), \
+             patch("services.scheduler.settings.scheduler_freshness_max_minutes", 15), \
+             patch("services.worker_status.read_stats", new_callable=AsyncMock,
+                   return_value={"cycle": {"last_activity_at": old}}):
+            result = await get_ingestion_freshness()
+        assert result["stale"] is True
+        assert result["source"] == "shared"
+        assert result["age_seconds"] > 15 * 60
+
+    @pytest.mark.asyncio
+    async def test_recent_shared_activity_is_fresh(self):
+        from services.scheduler import get_ingestion_freshness
+
+        recent = (utcnow() - timedelta(minutes=3)).isoformat()
+        with patch("services.scheduler.settings.scheduler_enabled", True), \
+             patch("services.scheduler.settings.scheduler_freshness_max_minutes", 15), \
+             patch("services.worker_status.read_stats", new_callable=AsyncMock,
+                   return_value={"cycle": {"last_activity_at": recent}}):
+            result = await get_ingestion_freshness()
+        assert result["stale"] is False
+
+    @pytest.mark.asyncio
+    async def test_stats_read_failure_is_not_stale(self):
+        from services.scheduler import get_ingestion_freshness
+
+        with patch("services.scheduler.settings.scheduler_enabled", True), \
+             patch("services.scheduler.settings.scheduler_freshness_max_minutes", 15), \
+             patch("services.worker_status.read_stats", new_callable=AsyncMock,
+                   side_effect=RuntimeError("redis down")):
+            result = await get_ingestion_freshness()
+        assert result["stale"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_endpoint_returns_503_when_stale(self, client):
+        with patch("services.scheduler.get_ingestion_freshness",
+                   new_callable=AsyncMock, return_value=_STALE):
+            response = await client.get("/health")
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "unhealthy"
+        assert body["reason"] == "ingestion_stale"
+        assert body["ingestion"]["age_seconds"] == 99999
+
+    @pytest.mark.asyncio
+    async def test_admin_health_degraded_when_stale(self, client):
+        with patch("services.scheduler.get_ingestion_freshness",
+                   new_callable=AsyncMock, return_value=_STALE):
+            response = await client.get("/api/admin/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "degraded"
+        assert body["ingestion"]["stale"] is True

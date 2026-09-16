@@ -151,15 +151,27 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True  # Set to False to disable scheduler on startup
     fetch_interval_minutes: int = 30
     cleanup_days: int = 30
+    # After a channel fetch hits its timeout it is cancelled; the scheduler then
+    # waits at most this long for the task's cleanup (browser page/context
+    # close) before abandoning it and hard-resetting the browser pool. This
+    # keeps a wedged Chromium page from blocking the fetch cycle forever (#187).
+    fetch_cleanup_grace_seconds: float = 30.0
+    # Ingestion freshness: the scheduler must complete a fetch cycle at least
+    # this often or /health reports 503 so Docker marks the container unhealthy.
+    # Set to 0 to disable. Only enforced when the scheduler is enabled.
+    scheduler_freshness_max_minutes: int = 15
+
+    # Browser Pool
+    browser_pool_max: int = 2  # Max concurrent Playwright browsers (match CPU cores)
+    # Upper bound for a single page/context/browser close() call. Playwright
+    # sends those with an infinite protocol timeout, so this is the only limit.
+    browser_close_timeout_seconds: float = 10.0
 
     # Workers
     llm_worker_enabled: bool = True  # Set to False to disable LLM worker on startup
     classifier_worker_enabled: bool = True  # Set to False to disable classifier on startup
     dedup_worker_enabled: bool = True  # Set to False to disable dedup worker on startup
     worker_status_poll_interval: int = 10  # Seconds between DB status sync/command polls
-
-    # Browser Pool
-    browser_pool_max: int = 2  # Max concurrent Playwright browsers (match CPU cores)
 
     # Proxy Pool
     proxy_pool_min: int = 20  # Minimum working proxies to maintain

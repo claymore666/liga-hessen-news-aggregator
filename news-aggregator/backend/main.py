@@ -537,9 +537,23 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "healthy"}
+async def health_check():
+    """Liveness/readiness endpoint used by the Docker healthcheck.
+
+    Returns 503 when the scheduler has stopped making progress (no fetch
+    cycle activity for longer than SCHEDULER_FRESHNESS_MAX_MINUTES), so a
+    wedged scheduler shows up as an unhealthy container instead of a
+    silently stale feed (#187).
+    """
+    from services.scheduler import get_ingestion_freshness
+
+    ingestion = await get_ingestion_freshness()
+    if ingestion.get("stale"):
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": "ingestion_stale", "ingestion": ingestion},
+        )
+    return {"status": "healthy", "ingestion": ingestion}
 
 
 # Import and include routers

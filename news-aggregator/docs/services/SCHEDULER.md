@@ -151,6 +151,31 @@ except Exception as e:
 
 Errors don't stop the scheduler - other channels continue.
 
+### Timeouts and Abandoned Tasks
+
+Every channel fetch runs under a per-connector timeout (`CHANNEL_FETCH_TIMEOUTS`,
+e.g. 300 s for `x_scraper`). Since #187 the timeout is enforced with an explicit
+task plus `asyncio.wait`, **not** `asyncio.wait_for()`: `wait_for()` cancels the
+task and then waits for it without any bound, so a cleanup that never finishes
+(a Playwright `page.close()` Chromium never answers) blocked `fetch_due_channels`
+and therefore all ingestion for two days in September 2026.
+
+The sequence on timeout is now:
+
+1. The channel is recorded as failed (circuit breaker) and the task is cancelled.
+2. The scheduler waits up to `FETCH_CLEANUP_GRACE_SECONDS` (default 30) for the
+   task's cleanup to finish.
+3. If it still has not finished, the task is **abandoned** (left running detached,
+   logged as `Cleanup of channel … did not finish within 30s grace period`) and
+   the cycle continues.
+4. At the end of a cycle with abandoned tasks the scheduler calls
+   `browser_pool.hard_reset()`, which kills the Playwright driver so every
+   pending call fails, the abandoned tasks finish, and the next cycle starts with
+   a clean pool.
+
+Abandoned tasks are counted in the cycle stats (`abandoned_tasks_total`,
+`abandoned_tasks_pending`, `hard_resets`).
+
 ## Training Mode
 
 Special mode for collecting training data:
@@ -191,8 +216,10 @@ async def cleanup_old_items():
 ### Environment Variables
 
 ```bash
-SCHEDULER_ENABLED=true       # Auto-start on boot
-SCHEDULER_INTERVAL=5         # Minutes between fetch cycles
+SCHEDULER_ENABLED=true                 # Auto-start on boot
+SCHEDULER_INTERVAL=5                   # Minutes between fetch cycles
+FETCH_CLEANUP_GRACE_SECONDS=30         # Cleanup budget after a channel timeout (#187)
+SCHEDULER_FRESHNESS_MAX_MINUTES=15     # /health → 503 when no fetch activity for this long; 0 disables
 ```
 
 ### Database Settings
@@ -212,10 +239,31 @@ docker compose logs backend | grep -i scheduler
 ### Health Check
 
 ```http
+GET /health
 GET /api/admin/health
+GET /api/admin/stats
 ```
 
-Returns scheduler status in `scheduler_running` field.
+`scheduler_running` only says that APScheduler is up; it stayed `true` during the
+#187 hang. The **ingestion freshness** check is the signal that matters: the
+leader worker records `last_activity_at` whenever a fetch cycle starts, a channel
+fetch finishes, or a cycle completes, and publishes it (with the rest of the
+cycle stats and the browser pool health) to Redis after every cycle and every 30 s.
+
+- `GET /health` (used by the Docker healthcheck) returns **503** with
+  `{"status": "unhealthy", "reason": "ingestion_stale", ...}` when the scheduler
+  is enabled and the last activity is older than `SCHEDULER_FRESHNESS_MAX_MINUTES`.
+  The container then shows as `unhealthy` in `docker ps`. Note that
+  `restart: unless-stopped` does not restart unhealthy containers by itself.
+- `GET /api/admin/health` reports `status: degraded`, plus `ingestion`
+  (`stale`, `age_seconds`, `last_activity_at`), `scheduler_cycle` and
+  `browser_pool`.
+- `GET /api/admin/stats` exposes the same under `scheduler.cycle` and
+  `scheduler.ingestion`.
+
+Unknown age (nothing recorded yet, e.g. right after a fresh deploy) is never
+reported as stale. The default of 15 minutes leaves room for the longest single
+channel fetch (300 s timeout + 30 s grace).
 
 ## Common Issues
 
