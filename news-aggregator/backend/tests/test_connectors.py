@@ -764,3 +764,111 @@ class TestTelegramConnectorValidate:
 
         assert valid is False
         assert "not found" in message.lower() or "private" in message.lower()
+
+
+class TestKnownUrlsSkipLinkFollowing:
+    """#188: connectors with follow_links must not re-extract linked articles for
+    posts the scheduler already stored (``connector.known_urls``)."""
+
+    def _extractor(self):
+        extractor = MagicMock()
+        extractor.extract_urls_from_text = MagicMock(
+            return_value=["https://example.org/artikel"]
+        )
+        extractor.fetch_article = AsyncMock(return_value=None)
+        return extractor
+
+    @staticmethod
+    def _http_response(text):
+        response = MagicMock()
+        response.text = text
+        response.status_code = 200
+        response.raise_for_status = MagicMock()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_bluesky_skips_known_posts(self):
+        from connectors.bluesky import BlueskyConnector, BlueskyConfig
+
+        feed = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <item><link>https://bsky.app/profile/a/post/old</link>
+              <description>alt https://example.org/artikel</description></item>
+        <item><link>https://bsky.app/profile/a/post/new</link>
+              <description>neu https://example.org/artikel</description></item>
+        </channel></rss>"""
+        connector = BlueskyConnector()
+        connector.known_urls = {"https://bsky.app/profile/a/post/old"}
+        extractor = self._extractor()
+
+        with patch("services.article_extractor.ArticleExtractor", return_value=extractor), \
+             patch("connectors.bluesky.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=self._http_response(feed)
+            )
+            items = await connector.fetch(BlueskyConfig(handle="a.bsky.social"))
+
+        assert len(items) == 2
+        extractor.fetch_article.assert_awaited_once_with("https://example.org/artikel")
+
+    @pytest.mark.asyncio
+    async def test_mastodon_api_skips_known_posts(self):
+        from connectors.mastodon import MastodonConnector, MastodonConfig
+
+        statuses = [
+            {"id": "1", "url": "https://hessen.social/@x/1", "created_at": "2026-09-16T10:00:00Z",
+             "content": "<p>alt <a href='https://example.org/artikel'>link</a></p>",
+             "account": {"acct": "x", "display_name": "X"}, "reblog": None,
+             "favourites_count": 0, "reblogs_count": 0, "replies_count": 0},
+            {"id": "2", "url": "https://hessen.social/@x/2", "created_at": "2026-09-16T11:00:00Z",
+             "content": "<p>neu <a href='https://example.org/artikel'>link</a></p>",
+             "account": {"acct": "x", "display_name": "X"}, "reblog": None,
+             "favourites_count": 0, "reblogs_count": 0, "replies_count": 0},
+        ]
+        connector = MastodonConnector()
+        connector.known_urls = {"https://hessen.social/@x/1"}
+        extractor = self._extractor()
+
+        with patch("services.article_extractor.ArticleExtractor", return_value=extractor), \
+             patch.object(connector, "_fetch_via_rss", new_callable=AsyncMock) as via_rss, \
+             patch("connectors.mastodon.httpx.AsyncClient") as mock_client:
+            lookup = self._http_response("")
+            lookup.json = MagicMock(return_value={"id": "42"})
+            listing = self._http_response("")
+            listing.json = MagicMock(return_value=statuses)
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                side_effect=[lookup, listing]
+            )
+            items = await connector.fetch(
+                MastodonConfig(handle="x@hessen.social", use_api=True, api_token="t")
+            )
+
+        via_rss.assert_not_awaited()
+        assert len(items) == 2
+        extractor.fetch_article.assert_awaited_once_with("https://example.org/artikel")
+
+    @pytest.mark.asyncio
+    async def test_telegram_skips_known_posts(self):
+        from connectors.telegram import TelegramConnector, TelegramConfig
+
+        def msg(post_id, text):
+            return f"""<div class="tgme_widget_message_wrap">
+              <div class="tgme_widget_message" data-post="c/{post_id}">
+                <div class="tgme_widget_message_text">{text} https://example.org/artikel</div>
+                <a class="tgme_widget_message_date" href="https://t.me/c/{post_id}">
+                  <time datetime="2026-09-16T10:00:00+00:00">x</time></a>
+              </div></div>"""
+
+        html = f"<html><body>{msg(1, 'alt')}{msg(2, 'neu')}</body></html>"
+        connector = TelegramConnector()
+        connector.known_urls = {"https://t.me/c/1"}
+        extractor = self._extractor()
+
+        with patch("services.article_extractor.ArticleExtractor", return_value=extractor), \
+             patch("connectors.telegram.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=self._http_response(html)
+            )
+            items = await connector.fetch(TelegramConfig(channel="c"))
+
+        assert len(items) == 2
+        extractor.fetch_article.assert_awaited_once_with("https://example.org/artikel")

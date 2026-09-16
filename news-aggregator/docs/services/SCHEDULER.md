@@ -164,6 +164,12 @@ Every channel fetch runs under a per-connector timeout (`CHANNEL_FETCH_TIMEOUTS`
 | `mastodon`, `bluesky`, `telegram` | 90 s | Light API fetch, but `follow_links` extracts every linked article (httpx → Wayback → Playwright fallback). At 20 s these channels timed out on every cycle from 2026-09-14 on. |
 | `google_alerts`, others | 30 s / default | Plain feeds |
 
+Before each fetch the scheduler loads the channel's stored item URLs into
+`connector.known_urls`. RSS, Mastodon, Bluesky and Telegram skip link following
+for posts that are already known, so only genuinely new posts pay for article
+extraction (#188). Without this the Mastodon/Bluesky channels re-extracted up
+to 40 linked articles per cycle and still timed out at 90 s.
+
 The Playwright fallback of the article extractor only waits 5 s for a
 browser-pool slot (`get_browser(slot_timeout=5.0)`); when the pool is busy with
 x_scrapers it gives up instead of blocking the whole channel fetch.

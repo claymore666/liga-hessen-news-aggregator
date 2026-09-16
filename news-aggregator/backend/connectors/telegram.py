@@ -109,8 +109,9 @@ class TelegramConnector(BaseConnector):
                 try:
                     item = self._parse_message(msg, config)
                     if item:
-                        # Try to fetch full article content if link following is enabled
-                        if article_extractor and item.content:
+                        # Skip link following for posts we already have (#188)
+                        known_urls = getattr(self, "known_urls", set())
+                        if article_extractor and item.content and item.url not in known_urls:
                             urls = article_extractor.extract_urls_from_text(item.content)
                             # Filter out internal Telegram links
                             external_urls = [

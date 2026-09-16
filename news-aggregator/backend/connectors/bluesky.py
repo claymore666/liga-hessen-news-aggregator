@@ -91,10 +91,13 @@ class BlueskyConnector(BaseConnector):
             content = entry.get("summary", entry.get("description", ""))
             title = content[:100] + "..." if len(content) > 100 else content
 
-            # Try to fetch full article content if link following is enabled
+            # Skip link following for posts we already have (same as the RSS
+            # connector): the pipeline dedups them anyway, and extracting every
+            # linked article on every cycle is what starved these fetches (#188).
+            known_urls = getattr(self, "known_urls", set())
             final_content = content
             article_fetched = False
-            if article_extractor:
+            if article_extractor and entry.link not in known_urls:
                 urls = article_extractor.extract_urls_from_text(content)
                 # Filter out internal Bluesky links
                 external_urls = [

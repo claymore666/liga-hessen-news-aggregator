@@ -133,10 +133,13 @@ class MastodonConnector(BaseConnector):
             plain_content = self._strip_html(content)
             title = plain_content[:100] + "..." if len(plain_content) > 100 else plain_content
 
-            # Try to fetch full article content if link following is enabled
+            # Skip link following for posts we already have (same as the RSS
+            # connector): the pipeline dedups them anyway, and extracting every
+            # linked article on every cycle is what starved these fetches (#188).
+            known_urls = getattr(self, "known_urls", set())
             final_content = plain_content
             article_fetched = False
-            if article_extractor:
+            if article_extractor and entry.link not in known_urls:
                 urls = article_extractor.extract_urls_from_text(content)
                 # Filter out internal Mastodon links (same instance, known Mastodon domains)
                 external_urls = [
@@ -226,10 +229,13 @@ class MastodonConnector(BaseConnector):
                 except ValueError:
                     pass
 
-            # Try to fetch full article content if link following is enabled
+            # Skip link following for posts we already have (same as the RSS
+            # connector): the pipeline dedups them anyway, and extracting every
+            # linked article on every cycle is what starved these fetches (#188).
+            known_urls = getattr(self, "known_urls", set())
             final_content = plain_content
             article_fetched = False
-            if article_extractor:
+            if article_extractor and status["url"] not in known_urls:
                 urls = article_extractor.extract_urls_from_text(html_content)
                 # Filter out internal Mastodon links (same instance, known Mastodon domains)
                 external_urls = [
