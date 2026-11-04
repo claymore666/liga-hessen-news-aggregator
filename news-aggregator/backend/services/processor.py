@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 # channel-level timeout (120-300s).  See GitHub issue #176.
 LLM_CALL_TIMEOUT = 120
 
+# Token budget for short-answer LLM calls (duplicate confirmation, summaries).
+# Ollama runs with thinking mode on, and the thinking tokens count against
+# num_predict. With 200 tokens qwen3/qwen3.8 often spent the whole budget
+# thinking and returned empty content (qwen3.8 used ~255 tokens for a single
+# duplicate check), so duplicates were silently treated as "not duplicate".
+SHORT_ANSWER_MAX_TOKENS = 1500
+
 # System prompt for news analysis (used with base models, not fine-tuned)
 ANALYSIS_SYSTEM_PROMPT = """Du bist ein Sozialpolitik-Experte und klassifizierst Nachrichtenartikel für die Liga der Freien Wohlfahrtspflege Hessen.
 
@@ -271,7 +278,7 @@ Antworte NUR mit JSON:
                 self.llm.complete(
                     prompt,
                     temperature=0.1,
-                    max_tokens=200,
+                    max_tokens=SHORT_ANSWER_MAX_TOKENS,
                 ),
                 timeout=LLM_CALL_TIMEOUT,
             )
@@ -326,7 +333,7 @@ Antworte NUR mit der Zusammenfassung, ohne zusätzliche Erklärungen."""
 
         try:
             response = await asyncio.wait_for(
-                self.llm.complete(prompt, temperature=0.3, max_tokens=200),
+                self.llm.complete(prompt, temperature=0.3, max_tokens=SHORT_ANSWER_MAX_TOKENS),
                 timeout=LLM_CALL_TIMEOUT,
             )
             return response.text.strip()

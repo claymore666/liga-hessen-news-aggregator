@@ -439,6 +439,26 @@ class TestLLMCallTimeout:
         assert "Timeout" in reason
 
     @pytest.mark.asyncio
+    async def test_short_answer_calls_leave_room_for_thinking(self):
+        """confirm_duplicate() and summarize() must not cap tokens so low that
+        thinking mode consumes the whole budget and returns empty content."""
+        from services.processor import ItemProcessor, SHORT_ANSWER_MAX_TOKENS
+        from services.llm import LLMResponse
+
+        assert SHORT_ANSWER_MAX_TOKENS >= 1000
+        mock_llm = MagicMock()
+        mock_llm.complete = AsyncMock(return_value=LLMResponse(
+            text='{"is_duplicate": false, "reasoning": "x"}', model="m"))
+        processor = ItemProcessor(llm_service=mock_llm)
+
+        await processor.confirm_duplicate(
+            MagicMock(title="A", content="C1"), MagicMock(title="B", content="C2"))
+        await processor.summarize(MagicMock(title="A", content="C1"))
+
+        for call in mock_llm.complete.await_args_list:
+            assert call.kwargs["max_tokens"] == SHORT_ANSWER_MAX_TOKENS
+
+    @pytest.mark.asyncio
     async def test_wait_for_called_with_correct_timeout(self):
         """asyncio.wait_for should be called with LLM_CALL_TIMEOUT=120."""
         from services.processor import ItemProcessor, LLM_CALL_TIMEOUT
