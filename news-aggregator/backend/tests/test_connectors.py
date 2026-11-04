@@ -322,6 +322,34 @@ class TestRSSConnectorFetch:
         assert items[0].url == "https://example.com/article1"
         assert items[0].external_id == "article1"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "user_agent, expected",
+        [
+            (None, "NewsAggregator/1.0"),
+            ("Mozilla/5.0 (X11; Linux x86_64)", "Mozilla/5.0 (X11; Linux x86_64)"),
+        ],
+    )
+    async def test_fetch_sends_configured_user_agent(
+        self, rss_feed_content, user_agent, expected
+    ):
+        """Feeds that 403 the default UA (cdu-fraktion-hessen.de) can set their own."""
+        connector = RSSConnector()
+        config = RSSConfig(
+            url="https://example.com/feed.xml", follow_links=False, user_agent=user_agent
+        )
+
+        with patch("connectors.rss.httpx.AsyncClient") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = rss_feed_content
+            mock_response.raise_for_status = MagicMock()
+            get = AsyncMock(return_value=mock_response)
+            mock_client.return_value.__aenter__.return_value.get = get
+
+            await connector.fetch(config)
+
+        assert get.call_args.kwargs["headers"]["User-Agent"] == expected
+
 
 class TestRSSConnectorValidate:
     """Tests for RSS connector validation."""

@@ -45,6 +45,8 @@ def create_legacy_ssl_context():
 # 0 disables the cap.
 LINK_FOLLOW_MAX_PER_FETCH = int(os.environ.get("LINK_FOLLOW_MAX_PER_FETCH", "30"))
 
+DEFAULT_USER_AGENT = "NewsAggregator/1.0"
+
 
 class RSSConfig(BaseModel):
     """Configuration for RSS connector."""
@@ -58,6 +60,14 @@ class RSSConfig(BaseModel):
     )
     verify_ssl: bool = Field(
         default=True, description="Verify SSL certificates (disable for sites with certificate issues)"
+    )
+    user_agent: str | None = Field(
+        default=None,
+        description=(
+            "User-Agent header for the feed request (optional). Set a browser "
+            "User-Agent for sites that answer 403 to NewsAggregator/1.0, "
+            "e.g. cdu-fraktion-hessen.de"
+        ),
     )
 
 
@@ -96,7 +106,7 @@ class RSSConnector(BaseConnector):
         async with httpx.AsyncClient(timeout=30.0, verify=ssl_context) as client:
             response = await client.get(
                 str(config.url),
-                headers={"User-Agent": "NewsAggregator/1.0"},
+                headers={"User-Agent": config.user_agent or DEFAULT_USER_AGENT},
                 follow_redirects=True,
             )
             response.raise_for_status()
@@ -254,7 +264,7 @@ class RSSConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=10.0, verify=ssl_context) as client:
                 response = await client.get(
                     str(config.url),
-                    headers={"User-Agent": "NewsAggregator/1.0"},
+                    headers={"User-Agent": config.user_agent or DEFAULT_USER_AGENT},
                     follow_redirects=True,
                 )
                 response.raise_for_status()

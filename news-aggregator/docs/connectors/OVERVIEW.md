@@ -68,6 +68,7 @@ class RSSConfig(BaseModel):
     custom_title: str | None = None
     follow_links: bool = True
     verify_ssl: bool = True
+    user_agent: str | None = None
 ```
 
 Configs are stored as JSON in the `channels.config` column.
@@ -141,7 +142,8 @@ Standard RSS/Atom feed parser.
   "url": "https://example.com/feed.xml",
   "custom_title": "My Feed",
   "follow_links": true,
-  "verify_ssl": true
+  "verify_ssl": true,
+  "user_agent": null
 }
 ```
 
@@ -149,6 +151,7 @@ Standard RSS/Atom feed parser.
 - `follow_links` fetches full article from linked URLs
 - Link following is capped at `LINK_FOLLOW_MAX_PER_FETCH` (default 30) new entries per fetch; the rest are picked up on the next cycle (#189)
 - `verify_ssl=false` for sites with certificate issues
+- `user_agent` overrides the default `NewsAggregator/1.0` header on the feed request, for sites that answer 403 to it (e.g. cdu-fraktion-hessen.de). Article extraction uses its own browser User-Agents
 
 **Special Handling**:
 - **Eurostat feeds**: Automatically enriched with SDMX metadata. When the feed URL contains "eurostat", the connector extracts the dataset ID from the title and fetches additional metadata from Eurostat's SDMX API:
