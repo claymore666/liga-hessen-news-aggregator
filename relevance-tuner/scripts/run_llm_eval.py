@@ -252,6 +252,9 @@ def main():
                         help=f"Path to eval set JSON (default: {EVAL_SET_PATH})")
     parser.add_argument("--no-think", action="store_true",
                         help="Disable Qwen3 thinking mode (append /no_think)")
+    parser.add_argument("--system-prompt-file", type=str, default=None,
+                        help="Read the system prompt from this file instead of processor.py "
+                             "(e.g. a DB-stored prompt exported via /api/prompts/{model})")
     parser.add_argument("--limit", type=int, default=None,
                         help="Only evaluate first N items (for testing)")
     args = parser.parse_args()
@@ -289,7 +292,8 @@ def main():
             tag = "unknown"
 
     model = args.model
-    system_prompt = get_system_prompt()
+    system_prompt = (Path(args.system_prompt_file).read_text().strip()
+                     if args.system_prompt_file else get_system_prompt())
 
     print("=" * 80)
     print("LLM EVALUATION")
