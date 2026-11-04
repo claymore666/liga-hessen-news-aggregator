@@ -670,6 +670,60 @@ Full documentation: `backups/priority-tuning-2026-03-07/PRIORITY_TUNING_RESULTS.
 
 ---
 
+## Local Model Comparison (2026-11-04)
+
+With the cloud models gone, prod runs on gpu1 only. We checked whether a newer local
+model should replace `qwen3:30b`. All runs used the fixed eval set
+(`relevance-tuner/evaluations/eval_set.json`, 181 items, Haiku ground truth, 47 relevant)
+and the active prod prompt `qwen3:30b` v1, exported from the DB and passed with
+`--system-prompt-file`:
+
+```bash
+python3 scripts/run_llm_eval.py --model qwen3.6:27b \
+  --system-prompt-file prompt_qwen3_30b_v1.txt --prompt-tag prod-qwen3-30b-v1   # add --no-think to disable thinking
+```
+
+Pause the prod LLM worker (`/api/admin/llm-worker/pause`) during runs so they don't
+compete for gpu1, and the dedup worker as well if a big re-index is running: in the
+qwen3.6 run, sharing gpu1 with re-indexing pushed item time from ~25 s to ~38 s.
+
+| Model | Accuracy | Precision | Recall | FN | FP | Priority exact | Parse OK | s/item |
+|-------|----------|-----------|--------|----|----|----------------|----------|--------|
+| **qwen3:30b** (thinking, prod) | **87.8%** | **90.3%** | 59.6% | 19 | **3** | 57% | 99.5% | 7.8 |
+| qwen3.6:27b (thinking) | 86.7% | 78.0% | **68.1%** | **15** | 9 | 53% | 91% | ~25–29 |
+| qwen3.8:27b (thinking) | 85.6% | 76.9% | 63.8% | 17 | 9 | 33% | 100% | 18.5 |
+| qwen3.8:27b (no thinking) | 82.9% | 71.1% | 57.4% | 20 | 11 | **59%** | 100% | **5.9** |
+
+Results: `relevance-tuner/evaluations/results/llm_2026-11-04_*.json`.
+
+**Observations:**
+- **qwen3.8 with thinking under-prioritises:** of 25 expected-HIGH items, 12 came out
+  medium and 2 low. Turning thinking off fixes priority (15/18 HIGH kept) but costs the
+  most recall, so it misses the most items.
+- **qwen3.6 misses the fewest items** (15 vs 19), but 3× as many irrelevant items get
+  through and it is 3–4× slower.
+- **qwen3.6's 16 parse failures all hit the eval's `num_predict` of 4096**: thinking used
+  the whole budget before any JSON was written. Prod gives the analysis call
+  `max_tokens=6000` (`processor.py`), so prod would fail less often, but each item would
+  take even longer. The eval budget is lower than prod's, which penalises verbose
+  thinkers. Align it before the next comparison.
+- **Thinking stays on in prod** (`ollama.py`, `think: True`). It was briefly disabled
+  (`178ab70`) and re-enabled in `449f69d` because it raised topic accuracy from 70% to 89%.
+  Disabling it per model would need a new field in `llm_model_configs`, plus a topic eval
+  (`run_topic_eval.py`).
+
+**Decision:** Keep `qwen3:30b`. A short prod trial of qwen3.8 (config id 4, prompt
+`qwen3.8:27b` v1 copied from qwen3:30b v1) was reverted the same day. Both stay in the DB,
+disabled. qwen3.6 is the only candidate worth a follow-up: rerun with
+`num_predict` ≥ 6000 and check that ~28 s/item keeps up with the daily intake.
+
+**Related fix (`79c0332`):** thinking tokens count against `num_predict`. The duplicate
+check and summaries had only 200 tokens, so qwen3/qwen3.8 often returned empty content
+and duplicates were silently treated as "not duplicate". Both now use
+`SHORT_ANSWER_MAX_TOKENS = 1500`.
+
+---
+
 ## Open Issues
 
 ### Sozialleistungen emerging as new catch-all (topic assignment)
