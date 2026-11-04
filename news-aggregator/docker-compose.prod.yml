@@ -26,11 +26,15 @@ networks:
     # D-Link switch on .200 — see Jan 4 LAN outage.
     #
     # Create on the host once (parent NIC: ens18 on docker-ai):
-    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v1.9.0
+    #   docker plugin install ghcr.io/claymore666/docker-net-dhcp:v2.7.0
     #   docker network create \
-    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v1.9.0 \
-    #     --ipam-driver=null \
+    #     --driver=ghcr.io/claymore666/docker-net-dhcp:v2.7.0 \
+    #     --ipam-driver=ghcr.io/claymore666/docker-net-dhcp:v2.7.0 \
     #     -o mode=macvlan -o parent=ens18 lan-shared
+    #
+    # The plugin is also the IPAM driver (recreated this way 2026-10-31), which
+    # is what makes the backend's ipv4_address pin below work. With
+    # --ipam-driver=null the pin would have to go back to driver_opts ip.
     external: true
     name: lan-shared
   ollamaproxy:
@@ -191,6 +195,13 @@ services:
     networks:
       default:  # For db connectivity
       lan:
+        # Request the stable LAN address from the DHCP server on (re)create.
+        # Previously this was a manual `docker network connect --driver-opt
+        # ip=...` after every recreate; pinning it here survives compose-
+        # driven recreates. The server still has final say (DHCPREQUEST).
+        # docker-net-dhcp v2.7 is also the IPAM driver of lan-shared, so the
+        # pin must be ipv4_address (driver_opts ip conflicts with the IPAM lease).
+        ipv4_address: 192.168.0.72
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
     # Docker's embedded DNS (127.0.0.11) sometimes drops responses when the
     # upstream LAN resolver (192.168.0.9) is slow, causing intermittent failures
