@@ -32,9 +32,8 @@ networks:
     #     --ipam-driver=ghcr.io/claymore666/docker-net-dhcp:v2.7.0 \
     #     -o mode=macvlan -o parent=ens18 lan-shared
     #
-    # The plugin is also the IPAM driver (recreated this way 2026-10-31), which
-    # is what makes the backend's ipv4_address pin below work. With
-    # --ipam-driver=null the pin would have to go back to driver_opts ip.
+    # The plugin is also the IPAM driver (recreated this way 2026-10-31).
+    # The backend takes a plain DHCP lease; see the note on its lan network.
     external: true
     name: lan-shared
   ollamaproxy:
