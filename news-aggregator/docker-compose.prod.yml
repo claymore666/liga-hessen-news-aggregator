@@ -195,13 +195,12 @@ services:
     networks:
       default:  # For db connectivity
       lan:
-        # Request the stable LAN address from the DHCP server on (re)create.
-        # Previously this was a manual `docker network connect --driver-opt
-        # ip=...` after every recreate; pinning it here survives compose-
-        # driven recreates. The server still has final say (DHCPREQUEST).
-        # docker-net-dhcp v2.7 is also the IPAM driver of lan-shared, so the
-        # pin must be ipv4_address (driver_opts ip conflicts with the IPAM lease).
-        ipv4_address: 192.168.0.72
+        # No static pin: the backend takes whatever lease the DHCP server
+        # gives. A compose `ipv4_address` pin (3c88b4a) kept the backend from
+        # starting after the 2026-11-05 reboot, because DHCP offered a
+        # different lease and docker-net-dhcp refused the pin. If a fixed
+        # address is ever needed, reserve one in the Fritz.Box for the
+        # container's MAC instead.
       ollamaproxy:  # Reach Ollama proxy backplane by name (http://ollamaproxy:11434)
     # Docker's embedded DNS (127.0.0.11) sometimes drops responses when the
     # upstream LAN resolver (192.168.0.9) is slow, causing intermittent failures
