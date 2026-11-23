@@ -18,6 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
+from services.dedup_groups import rebalance_group, resolve_primary
 from services.llm.base import LLMUnavailableError, RateLimitError
 
 logger = logging.getLogger(__name__)
@@ -605,7 +606,8 @@ class LLMWorker:
                         "assigned_aks": item.assigned_aks or [],
                     }
 
-                    # Check for edge-case duplicate candidate needing LLM confirmation
+                    # Load the edge-case duplicate candidate, if any. Whether it
+                    # is confirmed is decided after the verdict (relevant items only).
                     dup_candidate = item_data["metadata_"].get("duplicate_candidate")
                     if dup_candidate:
                         candidate_id = dup_candidate.get("candidate_id")
@@ -626,22 +628,6 @@ class LLMWorker:
                 # Phase 2: LLM processing - NO connection held
                 # This can take 10-60 seconds per item
                 start_time = time.time()
-
-                # 2a. Check for edge-case duplicate confirmation first
-                duplicate_confirmed = None
-                duplicate_reasoning = None
-                if candidate_data:
-                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
-                    logger.info(
-                        f"Confirming duplicate: '{item_data['title'][:40]}...' vs "
-                        f"'{candidate_data['title'][:40]}...' (score: {dup_candidate.get('similarity_score', 0):.3f})"
-                    )
-                    duplicate_confirmed, duplicate_reasoning = await processor.confirm_duplicate(
-                        item_data, candidate_data
-                    )
-                    logger.info(
-                        f"Duplicate confirmation: {duplicate_confirmed} - {duplicate_reasoning}"
-                    )
 
                 # 2b. Main item analysis (with conversation messages for topic extraction)
                 analysis, conversation_messages = await processor.analyze_from_data_with_messages(item_data)
@@ -689,11 +675,6 @@ class LLMWorker:
                     except Exception as topic_err:
                         logger.warning(f"Topic extraction failed for item {item_id}: {topic_err}")
 
-                elapsed = time.time() - start_time
-                async with self._stats_lock:
-                    self._stats["total_processing_time"] += elapsed
-                    self._stats["items_timed"] += 1
-
                 # Compute values to update
                 llm_priority = analysis.get("priority") or analysis.get("priority_suggestion")
                 if analysis.get("relevant") is False:
@@ -714,6 +695,31 @@ class LLMWorker:
                 else:
                     new_priority = Priority.NONE
                     new_score = min(item_data["priority_score"] or 100, 20)
+
+                # 2d. Edge-case duplicate confirmation - only now that the verdict
+                # is known, and only for relevant items. An irrelevant item is not
+                # shown in the feed, so spending an LLM call on whether it
+                # duplicates another article buys nothing.
+                dup_candidate = item_data["metadata_"].get("duplicate_candidate") or {}
+                duplicate_confirmed = None
+                duplicate_reasoning = None
+                if candidate_data and new_priority != Priority.NONE:
+                    logger.info(
+                        f"Confirming duplicate: '{item_data['title'][:40]}...' vs "
+                        f"'{candidate_data['title'][:40]}...' "
+                        f"(score: {dup_candidate.get('similarity_score') or 0:.3f})"
+                    )
+                    duplicate_confirmed, duplicate_reasoning = await processor.confirm_duplicate(
+                        item_data, candidate_data
+                    )
+                    logger.info(
+                        f"Duplicate confirmation: {duplicate_confirmed} - {duplicate_reasoning}"
+                    )
+
+                elapsed = time.time() - start_time
+                async with self._stats_lock:
+                    self._stats["total_processing_time"] += elapsed
+                    self._stats["items_timed"] += 1
 
                 # Set assigned_aks: LLM takes precedence, classifier AK as fallback
                 llm_aks = analysis.get("assigned_aks", [])
@@ -750,10 +756,14 @@ class LLMWorker:
                 }
                 remove_keys = []
 
+                # The candidate is settled either way: confirmed/rejected by the
+                # LLM, dropped because the item is irrelevant, or stale because
+                # the candidate item no longer exists.
+                if dup_candidate:
+                    remove_keys.append("duplicate_candidate")
+
                 # Record duplicate confirmation result in metadata
-                confirmed_similar_to_id = None
                 if duplicate_confirmed is not None:
-                    dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
                     metadata_patch["duplicate_confirmation"] = {
                         "confirmed": duplicate_confirmed,
                         "reasoning": duplicate_reasoning,
@@ -761,16 +771,23 @@ class LLMWorker:
                         "similarity_score": dup_candidate.get("similarity_score"),
                         "confirmed_at": utcnow().isoformat(),
                     }
-                    # Clear the candidate since we've processed it
-                    remove_keys.append("duplicate_candidate")
-
-                    if duplicate_confirmed:
-                        confirmed_similar_to_id = dup_candidate.get("candidate_id")
 
                 # Phase 3: Quick write - update item in database
                 # Connection is released after this block
                 async with async_session_maker() as db:
                     from database import json_merge, json_merge_remove
+
+                    # LLM-confirmed duplicate: link to the top item of the
+                    # candidate's group, never to a copy. Nothing to link if the
+                    # candidate is gone or already sits under this item.
+                    confirmed_similar_to_id = None
+                    if duplicate_confirmed and dup_candidate.get("candidate_id"):
+                        primary_id = await resolve_primary(db, dup_candidate["candidate_id"])
+                        if primary_id is not None and primary_id != item_id:
+                            confirmed_similar_to_id = primary_id
+                            metadata_patch["duplicate_method"] = "llm_confirmed"
+                            if dup_candidate.get("similarity_score") is not None:
+                                metadata_patch["duplicate_score"] = dup_candidate["similarity_score"]
 
                     update_values = {
                         "summary": analysis.get("summary"),
@@ -825,7 +842,6 @@ class LLMWorker:
                     # Record duplicate confirmation event if applicable
                     if duplicate_confirmed is not None:
                         from services.item_events import EVENT_DUPLICATE_DETECTED
-                        dup_candidate = item_data["metadata_"].get("duplicate_candidate", {})
                         event_type = EVENT_DUPLICATE_DETECTED if duplicate_confirmed else "duplicate_rejected"
                         await record_event(
                             db,
@@ -833,6 +849,7 @@ class LLMWorker:
                             event_type,
                             data={
                                 "candidate_id": dup_candidate.get("candidate_id"),
+                                "similar_to_id": confirmed_similar_to_id,
                                 "similarity_score": dup_candidate.get("similarity_score"),
                                 "llm_confirmed": duplicate_confirmed,
                                 "reasoning": duplicate_reasoning,
@@ -859,6 +876,22 @@ class LLMWorker:
 
                     # Commit events and processing log
                     await db.commit()
+
+                    # Re-rank the item's duplicate group now that its verdict is
+                    # stored: a relevant copy nested under an irrelevant top item
+                    # would otherwise stay invisible in the feed. Never let a
+                    # failure here lose the (already committed) LLM result.
+                    try:
+                        await rebalance_group(db, item_id)
+                        await db.commit()
+                    except Exception as rebalance_err:
+                        logger.warning(
+                            f"Failed to rebalance duplicate group of item {item_id}: {rebalance_err}"
+                        )
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            pass
 
                 processed += 1
                 async with self._stats_lock:

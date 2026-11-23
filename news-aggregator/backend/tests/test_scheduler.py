@@ -616,3 +616,76 @@ class TestPrefilterCandidates:
         ]
         assert _unknown_raw_items(items, {"https://example.org/a"}) == [items[1]]
         assert _unknown_raw_items(items, set()) == items
+
+
+class TestRetryLlmProcessingRebalance:
+    """An LLM retry verdict re-ranks the item's duplicate group."""
+
+    @staticmethod
+    async def _group(db, channel, **top_fields):
+        """Top (MEDIUM, awaiting the LLM) with an LLM-judged LOW copy."""
+        from database import utcnow
+        from models import Item, Priority
+
+        def make(name, priority, **fields):
+            return Item(
+                channel_id=channel.id,
+                external_id=f"grp-{name}",
+                title=f"Group {name}",
+                content=f"Content {name}",
+                url=f"https://test.com/group/{name}",
+                published_at=utcnow(),
+                content_hash=f"grp-hash-{name}",
+                priority=priority,
+                **fields,
+            )
+
+        top = make("top", Priority.MEDIUM, **top_fields)
+        db.add(top)
+        await db.flush()
+        copy = make("copy", Priority.LOW, similar_to_id=top.id, summary="Already analysed")
+        db.add(copy)
+        await db.commit()
+        return top, copy
+
+    @staticmethod
+    async def _links(db):
+        from sqlalchemy import select
+        from models import Item
+
+        rows = await db.execute(select(Item.id, Item.similar_to_id))
+        return {row.id: row.similar_to_id for row in rows}
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_verdict_on_top_promotes_relevant_copy(
+        self, db_engine, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        from unittest.mock import MagicMock
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from services.scheduler import retry_llm_processing
+
+        top, copy = await self._group(
+            db_session,
+            channel_in_db,
+            needs_llm_processing=True,
+            metadata_={"retry_priority": "high"},
+        )
+
+        processor = MagicMock()
+        processor.analyze = AsyncMock(return_value={"relevant": False, "relevance_score": 0.1})
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+
+        with (
+            patch("services.scheduler.async_session_maker", maker),
+            patch(
+                "services.processor.create_processor_from_settings",
+                new=AsyncMock(return_value=processor),
+            ),
+        ):
+            result = await retry_llm_processing(batch_size=5)
+
+        assert result == {"processed": 1, "errors": 0, "remaining": 0}
+        async with maker() as fresh:
+            assert await self._links(fresh) == {copy.id: None, top.id: copy.id}

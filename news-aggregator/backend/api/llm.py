@@ -12,6 +12,7 @@ from api.auth import require_admin_key
 from config import settings
 from database import get_db, utcnow
 from models import Item, Priority, Setting
+from services.dedup_groups import rebalance_groups_guarded
 from services.llm.ollama import OllamaProvider
 
 logger = logging.getLogger(__name__)
@@ -409,6 +410,9 @@ async def reprocess_unprocessed_items(limit: int = 100) -> int:
                 )
                 await db.commit()
                 processed += 1
+
+                # New verdict -> the duplicate group's top may have to change
+                await rebalance_groups_guarded(db, [row.id], context="llm reprocess")
                 logger.debug(f"Processed item {row.id}: {row.title[:50]}...")
 
         except Exception as e:

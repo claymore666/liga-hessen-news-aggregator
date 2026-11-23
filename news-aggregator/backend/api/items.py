@@ -12,6 +12,7 @@ from api.auth import require_admin_key
 from database import get_db, async_session_maker, json_extract_path, json_array_overlaps, utcnow
 from models import Channel, Item, ItemEvent, Priority, Source
 from pydantic import BaseModel, Field
+from services.dedup_groups import rebalance_groups_guarded
 from schemas import BulkArchiveRequest, BulkArchiveResponse, DuplicateBrief, ItemListResponse, ItemResponse, ItemUpdate, SourceBrief, TopicGroupsResponse, TopicGroup, TopicItemBrief
 
 
@@ -535,6 +536,7 @@ async def update_item(
 
     update_data = update.model_dump(exclude_unset=True)
     manually_reviewed = False
+    priority_changed = False
 
     # Handle priority conversion from string to enum
     if "priority" in update_data:
@@ -551,6 +553,7 @@ async def update_item(
                 if item.priority != new_priority:
                     item.priority = new_priority
                     manually_reviewed = True
+                    priority_changed = True
             else:
                 raise HTTPException(
                     status_code=400,
@@ -600,6 +603,13 @@ async def update_item(
             data={"changes": changes},
             ip_address=get_client_ip(request),
         )
+
+    if priority_changed:
+        # The new priority can change which member of the duplicate group
+        # belongs on top. Commit the user's change first so a failed rebalance
+        # can never undo it (the helper logs failures and never raises).
+        await db.commit()
+        await rebalance_groups_guarded(db, [item_id], context="item update")
 
     # Re-fetch with duplicates loaded
     query = (
@@ -1338,6 +1348,9 @@ async def _reprocess_items_task(item_ids: list[int], force: bool):
                 await db.commit()
                 processed += 1
 
+                # New verdict -> the group's top may have to change
+                await rebalance_groups_guarded(db, [item_id], context="reprocess")
+
             if processed % 10 == 0:
                 logger.info(f"Reprocessed {processed}/{len(item_ids)} items")
 
@@ -1487,6 +1500,7 @@ async def prefilter_item(
 
     relevant = check_result["relevant"]
     duration_ms = check_result.get("duration_ms", 0)
+    title = item.title
 
     # Update item metadata
     new_metadata = dict(item.metadata_) if item.metadata_ else {}
@@ -1499,7 +1513,9 @@ async def prefilter_item(
     }
     item.metadata_ = new_metadata
 
+    priority_changed = False
     if not relevant:
+        priority_changed = item.priority != Priority.NONE
         item.needs_llm_processing = False
         item.priority = Priority.NONE
         item.priority_score = 10
@@ -1511,9 +1527,15 @@ async def prefilter_item(
         data={"relevant": relevant, "model": settings.title_prefilter_model, "duration_ms": duration_ms},
     )
 
+    if priority_changed:
+        # Demoted to NONE: it must not stay on top of a relevant copy.
+        # Commit first so a failed rebalance cannot undo the verdict.
+        await db.commit()
+        await rebalance_groups_guarded(db, [item_id], context="title prefilter")
+
     return {
         "id": item_id,
-        "title": item.title,
+        "title": title,
         "relevant": relevant,
         "duration_ms": duration_ms,
     }
@@ -1588,6 +1610,10 @@ async def _prefilter_batch_task(item_ids: list[int]):
                 )
                 await db.commit()
                 checked += 1
+
+                if not relevant:
+                    # Demoted to NONE: it must not stay on top of a relevant copy
+                    await rebalance_groups_guarded(db, [item_id], context="title prefilter")
         except Exception as e:
             logger.error(f"Pre-filter batch: failed to update item {item_id}: {e}")
 

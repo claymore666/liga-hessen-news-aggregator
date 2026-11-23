@@ -2,28 +2,54 @@
 Deduplication Background Worker.
 
 Independent worker that handles all deduplication duties:
-1. Index items in ChromaDB vector store (prerequisite for semantic dedup)
-2. Phase 1: URL match, content hash, title similarity (no GPU needed)
-3. Phase 2: Semantic similarity via ChromaDB (requires classifier API)
-4. Daily ChromaDB<->DB consistency check
+1. Index items in the classifier's vector store (prerequisite for semantic dedup)
+2. Phase 1: URL match and content hash (no GPU needed)
+3. Phase 2: Semantic similarity on the stored embeddings (classifier API,
+   id-based lookup) combined with the title rule from services.dedup_groups
+4. Daily vector store <-> DB consistency check
 
 Serial ID-ascending processing eliminates race conditions from
-concurrent channel fetches.
+concurrent channel fetches. Links always point at the top item of a group
+(never copy -> copy), see services.dedup_groups.
 """
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import cast, func, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import selectinload
 
 from database import async_session_maker, json_extract_path, json_merge, utcnow
-from models import Channel, Item, Priority
-from services.pipeline import _strip_boilerplate, _titles_similar, _normalize_url
+from models import Channel, Item
+from services.dedup_groups import (
+    DUPLICATE_THRESHOLD_MAYBE,
+    decide_semantic_link,
+    rebalance_group,
+    resolve_primary,
+)
+from services.pipeline import _normalize_url, _strip_boilerplate
 
 logger = logging.getLogger(__name__)
+
+# Phase 2: wait this long before asking the classifier again about an item it
+# could not compare (not indexed yet, or the call failed).
+PHASE2_RETRY_SECONDS = 300.0
+# Matches fetched per lookup. A title-confirmed grey-band match can rank well
+# below the best-scoring ones, so the default of 5 loses real duplicates.
+LOOKUP_N_RESULTS = 20
+
+
+def _json_merge_bound(column, patch: dict):
+    """Like database.json_merge, but with the patch as a bound parameter.
+
+    Used for patches that carry free text (titles): json_merge embeds the JSON
+    in a text() literal, where a " :word" sequence is read as a bind parameter.
+    """
+    return func.coalesce(cast(column, JSONB), cast({}, JSONB)).op("||")(cast(patch, JSONB))
 
 
 class DedupWorker:
@@ -31,8 +57,9 @@ class DedupWorker:
     Background worker for deduplication processing.
 
     Two-phase approach:
-    - Phase 1 (always runs, no GPU): URL match, content hash, title similarity
-    - Phase 2 (when classifier available): semantic similarity via ChromaDB
+    - Phase 1 (always runs, no GPU): URL match, content hash
+    - Phase 2 (when classifier available): semantic similarity on the stored
+      embeddings, grey-band matches only together with similar titles
     """
 
     def __init__(
@@ -64,6 +91,11 @@ class DedupWorker:
         self._stats_lock = asyncio.Lock()
         self._stopped_due_to_errors = False
         self._consecutive_errors = 0
+
+        # Phase 2: items the classifier could not compare yet (not indexed or
+        # call failed) -> monotonic time of the next attempt. Keeps them from
+        # blocking the head of the id-ordered queue.
+        self._phase2_retry_at: dict[int, float] = {}
 
     async def start(self):
         """Start the worker background task."""
@@ -175,7 +207,7 @@ class DedupWorker:
                         await asyncio.sleep(0.5)
                         continue
 
-                # Priority 2: Phase 1 dedup (URL, hash, title — no embeddings needed,
+                # Priority 2: Phase 1 dedup (URL, hash — no embeddings needed,
                 # runs regardless of the embeddings gate so URL-level dupes still
                 # collapse during off-hours-gpu1-down.)
                 phase1 = await self._process_phase1_dedup()
@@ -192,7 +224,7 @@ class DedupWorker:
                         await asyncio.sleep(0.5)
                         continue
 
-                # Daily sync check: verify DB and ChromaDB are in sync
+                # Daily sync check: verify DB and vector store are in sync
                 today = utcnow().date()
                 if last_sync_check_date != today and utcnow().hour >= 0:
                     last_sync_check_date = today
@@ -269,14 +301,94 @@ class DedupWorker:
                 await asyncio.sleep(10)
 
     # -------------------------------------------------------------------------
-    # Phase 1: URL match, content hash, title similarity (no GPU needed)
+    # Shared: store the outcome of a dedup check
     # -------------------------------------------------------------------------
+
+    async def _save_dedup_result(
+        self,
+        db,
+        item_id: int,
+        similar_to_id: int | None,
+        metadata_patch: dict,
+    ) -> None:
+        """Write the phase flags (and the link, if any) for one item and commit.
+
+        Committed per item so that the next item of the batch already sees the
+        link when it resolves the top item of its own match.
+        """
+        values = {"metadata_": json_merge(Item.metadata_, metadata_patch)}
+        if similar_to_id is not None:
+            values["similar_to_id"] = similar_to_id
+        await db.execute(update(Item).where(Item.id == item_id).values(**values))
+        await db.commit()
+
+        if similar_to_id is None:
+            return
+
+        # The item may have had copies of its own, or be rated higher than its
+        # new top item: flatten the group and put the best-rated member on top.
+        try:
+            await rebalance_group(db, item_id)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"Rebalancing duplicate group of item {item_id} failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Phase 1: URL match, content hash (no GPU needed)
+    # -------------------------------------------------------------------------
+
+    async def _find_exact_match(self, db, item_data: dict) -> tuple[int | None, str | None]:
+        """Find an earlier item with the same URL (other channel) or content hash.
+
+        Returns:
+            (matched item id, duplicate_method) or (None, None)
+        """
+        url = item_data.get("url")
+        if url:
+            url_match = await db.scalar(
+                select(Item.id).where(
+                    Item.url == url,
+                    Item.id < item_data["id"],
+                    Item.channel_id != item_data["channel_id"],
+                ).order_by(Item.id).limit(1)
+            )
+
+            if not url_match:
+                norm_url = _normalize_url(url)
+                if norm_url != url:
+                    url_match = await db.scalar(
+                        select(Item.id).where(
+                            Item.url == norm_url,
+                            Item.id < item_data["id"],
+                            Item.channel_id != item_data["channel_id"],
+                        ).order_by(Item.id).limit(1)
+                    )
+
+            if url_match:
+                return url_match, "url_match"
+
+        if item_data.get("content_hash"):
+            hash_match = await db.scalar(
+                select(Item.id).where(
+                    Item.content_hash == item_data["content_hash"],
+                    Item.id < item_data["id"],
+                ).order_by(Item.id).limit(1)
+            )
+            if hash_match:
+                return hash_match, "content_hash"
+
+        return None, None
 
     async def _process_phase1_dedup(self) -> int:
         """
-        Phase 1 dedup: URL match, content hash, and title similarity.
+        Phase 1 dedup: URL match and content hash.
         Runs without GPU/classifier API. Processes items by ID ascending
         to eliminate race conditions.
+
+        Titles alone are not compared here: rubric headlines ("Auf einen
+        Blick", "Der Tag") made title-only links wrong. Titles are only used
+        together with the embedding score in Phase 2.
 
         Returns:
             Number of items checked
@@ -296,33 +408,31 @@ class DedupWorker:
                 conditions.append(Item.fetched_at >= cutoff)
 
             query = (
-                select(Item)
+                select(Item.id, Item.title, Item.url, Item.channel_id, Item.content_hash)
                 .where(*conditions)
                 .order_by(Item.id.asc())
                 .limit(self.batch_size)
             )
 
             result = await db.execute(query)
-            items = result.scalars().all()
+            items_data = [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "url": row.url,
+                    "channel_id": row.channel_id,
+                    "content_hash": row.content_hash,
+                }
+                for row in result.all()
+            ]
 
-            if not items:
-                return 0
-
-            items_data = []
-            for item in items:
-                items_data.append({
-                    "id": item.id,
-                    "title": item.title,
-                    "url": item.url,
-                    "channel_id": item.channel_id,
-                    "content_hash": item.content_hash,
-                })
+        if not items_data:
+            return 0
 
         logger.info(f"Phase 1 dedup: checking {len(items_data)} items")
 
         checked = 0
         duplicates_found = 0
-        updates = []
 
         for item_data in items_data:
             if self._paused or not self._running:
@@ -332,136 +442,40 @@ class DedupWorker:
                 metadata_patch = {}
                 similar_to_id = None
 
-                # 1. URL-based duplicate check
-                if item_data.get("url"):
-                    async with async_session_maker() as url_db:
-                        # Exact URL match
-                        url_match = await url_db.scalar(
-                            select(Item.id).where(
-                                Item.url == item_data["url"],
-                                Item.id < item_data["id"],
-                                Item.channel_id != item_data["channel_id"],
-                            ).order_by(Item.id).limit(1)
-                        )
+                async with async_session_maker() as db:
+                    match_id, method = await self._find_exact_match(db, item_data)
 
-                        # Normalized URL match
-                        if not url_match:
-                            norm_url = _normalize_url(item_data["url"])
-                            if norm_url != item_data["url"]:
-                                url_match = await url_db.scalar(
-                                    select(Item.id).where(
-                                        Item.url == norm_url,
-                                        Item.id < item_data["id"],
-                                        Item.channel_id != item_data["channel_id"],
-                                    ).order_by(Item.id).limit(1)
-                                )
-
-                        if url_match:
-                            similar_to_id = url_match
-                            metadata_patch["duplicate_method"] = "url_match"
-                            duplicates_found += 1
+                    if match_id is not None:
+                        # Never link copy -> copy: point at the top item of the match
+                        primary_id = await resolve_primary(db, match_id)
+                        if primary_id is not None and primary_id != item_data["id"]:
+                            similar_to_id = primary_id
+                            metadata_patch["duplicate_method"] = method
                             logger.info(
-                                f"Phase 1 URL duplicate: '{item_data['title'][:40]}...' "
-                                f"same URL as item {similar_to_id}"
+                                f"Phase 1 {method} duplicate: '{item_data['title'][:40]}...' "
+                                f"matches item {match_id} (top item {primary_id})"
                             )
 
-                # 2. Content hash duplicate check
-                if not similar_to_id and item_data.get("content_hash"):
-                    async with async_session_maker() as hash_db:
-                        hash_match = await hash_db.scalar(
-                            select(Item.id).where(
-                                Item.content_hash == item_data["content_hash"],
-                                Item.id < item_data["id"],
-                            ).order_by(Item.id).limit(1)
-                        )
-                        if hash_match:
-                            similar_to_id = hash_match
-                            metadata_patch["duplicate_method"] = "content_hash"
-                            duplicates_found += 1
-                            logger.info(
-                                f"Phase 1 hash duplicate: '{item_data['title'][:40]}...' "
-                                f"same hash as item {similar_to_id}"
-                            )
+                    # Mark Phase 1 complete
+                    now = utcnow().isoformat()
+                    metadata_patch["dedup_phase1"] = True
+                    metadata_patch["dedup_phase1_at"] = now
+                    # Backward compatibility
+                    metadata_patch["duplicate_checked"] = True
+                    metadata_patch["duplicate_checked_at"] = now
 
-                # 3. Title similarity check against recent items
-                if not similar_to_id:
-                    clean_title = _strip_boilerplate(item_data["title"]).lower()
-                    async with async_session_maker() as title_db:
-                        # Check against items from last N days with lower ID
-                        title_cutoff = utcnow() - timedelta(days=check_days)
-                        recent_items = await title_db.execute(
-                            select(Item.id, Item.title).where(
-                                Item.id < item_data["id"],
-                                Item.fetched_at >= title_cutoff,
-                                Item.similar_to_id.is_(None),
-                            ).order_by(Item.id.desc()).limit(200)
-                        )
-                        for row in recent_items.fetchall():
-                            other_title = _strip_boilerplate(row[1]).lower()
-                            if _titles_similar(clean_title, other_title):
-                                similar_to_id = row[0]
-                                metadata_patch["duplicate_method"] = "title_similarity"
-                                duplicates_found += 1
-                                logger.info(
-                                    f"Phase 1 title duplicate: '{item_data['title'][:40]}...' "
-                                    f"similar to item {similar_to_id}"
-                                )
-                                break
+                    await self._save_dedup_result(
+                        db, item_data["id"], similar_to_id, metadata_patch
+                    )
 
-                # Mark Phase 1 complete
-                now = utcnow().isoformat()
-                metadata_patch["dedup_phase1"] = True
-                metadata_patch["dedup_phase1_at"] = now
-                # Backward compatibility
-                metadata_patch["duplicate_checked"] = True
-                metadata_patch["duplicate_checked_at"] = now
-
-                updates.append({
-                    "id": item_data["id"],
-                    "similar_to_id": similar_to_id,
-                    "metadata_patch": metadata_patch,
-                })
                 checked += 1
+                if similar_to_id is not None:
+                    duplicates_found += 1
 
             except Exception as e:
                 logger.warning(f"Phase 1 dedup failed for item {item_data['id']}: {e}")
                 async with self._stats_lock:
                     self._stats["errors"] += 1
-
-        # Apply updates
-        if updates:
-            try:
-                async with async_session_maker() as db:
-                    # Verify similar_to_ids exist
-                    similar_ids = [u["similar_to_id"] for u in updates if u["similar_to_id"] is not None]
-                    if similar_ids:
-                        result = await db.execute(
-                            select(Item.id).where(Item.id.in_(similar_ids))
-                        )
-                        existing_ids = set(row[0] for row in result.fetchall())
-
-                        for upd in updates:
-                            if upd["similar_to_id"] is not None and upd["similar_to_id"] not in existing_ids:
-                                logger.warning(
-                                    f"Skipping similar_to_id={upd['similar_to_id']} for item {upd['id']} - "
-                                    f"referenced item no longer exists"
-                                )
-                                upd["similar_to_id"] = None
-                                upd["metadata_patch"].pop("duplicate_method", None)
-
-                    for upd in updates:
-                        await db.execute(
-                            update(Item)
-                            .where(Item.id == upd["id"])
-                            .values(
-                                similar_to_id=upd["similar_to_id"],
-                                metadata_=json_merge(Item.metadata_, upd["metadata_patch"]),
-                            )
-                        )
-                    await db.commit()
-            except Exception as e:
-                logger.error(f"Failed to commit Phase 1 dedup updates: {e}")
-                raise
 
         async with self._stats_lock:
             self._stats["phase1_checked"] += checked
@@ -474,12 +488,21 @@ class DedupWorker:
         return checked
 
     # -------------------------------------------------------------------------
-    # Phase 2: Semantic similarity via ChromaDB (requires classifier API)
+    # Phase 2: Semantic similarity on stored embeddings (requires classifier API)
     # -------------------------------------------------------------------------
 
     async def _process_phase2_dedup(self) -> int:
         """
-        Phase 2 dedup: semantic similarity via classifier API.
+        Phase 2 dedup: semantic similarity via the classifier's id-based lookup
+        (exact cosine similarity on the stored embeddings, no embedding call).
+
+        - score >= DUPLICATE_THRESHOLD_CONFIRMED: linked
+        - grey band (MAYBE..CONFIRMED): linked only if the titles are similar,
+          otherwise kept as ``duplicate_candidate`` for the LLM (only while the
+          item is still waiting for the LLM)
+        - item not indexed yet / call failed: not marked, retried later. It
+          leaves the queue by itself once older than DUPLICATE_CHECK_DAYS.
+
         Skips gracefully if classifier unavailable.
 
         Returns:
@@ -496,9 +519,15 @@ class DedupWorker:
 
         check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
 
-        async with async_session_maker() as db:
-            from sqlalchemy import or_
+        # Items whose retry time has come are eligible again
+        now_mono = time.monotonic()
+        self._phase2_retry_at = {
+            item_id: retry_at
+            for item_id, retry_at in self._phase2_retry_at.items()
+            if retry_at > now_mono
+        }
 
+        async with async_session_maker() as db:
             conditions = [
                 Item.similar_to_id.is_(None),
                 # Phase 1 done (new flag) OR old duplicate_checked flag (backward compat)
@@ -513,131 +542,131 @@ class DedupWorker:
                 cutoff = utcnow() - timedelta(days=check_days)
                 conditions.append(Item.fetched_at >= cutoff)
 
+            if self._phase2_retry_at:
+                conditions.append(Item.id.notin_(list(self._phase2_retry_at)))
+
             query = (
-                select(Item)
+                select(Item.id, Item.title, Item.fetched_at)
                 .where(*conditions)
                 .order_by(Item.id.asc())
                 .limit(self.batch_size)
             )
 
             result = await db.execute(query)
-            items = result.scalars().all()
+            items_data = [
+                {"id": row.id, "title": row.title, "fetched_at": row.fetched_at}
+                for row in result.all()
+            ]
 
-            if not items:
-                return 0
-
-            items_data = []
-            for item in items:
-                items_data.append({
-                    "id": item.id,
-                    "title": item.title,
-                    "content": item.content or "",
-                })
+        if not items_data:
+            return 0
 
         logger.info(f"Phase 2 dedup: checking {len(items_data)} items")
 
         checked = 0
+        deferred = 0
         duplicates_found = 0
-        updates = []
 
         for item_data in items_data:
             if self._paused or not self._running:
                 break
 
+            item_id = item_data["id"]
+
             try:
+                # Candidates: every earlier item (top items and copies) fetched
+                # within the check window before this item. IDs only.
+                candidate_query = select(Item.id).where(Item.id < item_id)
+                if check_days > 0 and item_data["fetched_at"] is not None:
+                    candidate_query = candidate_query.where(
+                        Item.fetched_at >= item_data["fetched_at"] - timedelta(days=check_days)
+                    )
+                async with async_session_maker() as db:
+                    candidate_ids = [
+                        row[0] for row in (await db.execute(candidate_query)).all()
+                    ]
+
+                matches: list[dict] | None = []
+                if candidate_ids:
+                    matches = await classifier.find_duplicates_by_id(
+                        item_id,
+                        candidate_ids,
+                        threshold=DUPLICATE_THRESHOLD_MAYBE,
+                        n_results=LOOKUP_N_RESULTS,
+                    )
+
+                if matches is None:
+                    # Not indexed yet or the call failed: leave Phase 2 open
+                    # and look at the item again later. Not an error.
+                    self._phase2_retry_at[item_id] = time.monotonic() + PHASE2_RETRY_SECONDS
+                    deferred += 1
+                    continue
+
+                decision = decide_semantic_link(
+                    _strip_boilerplate(item_data["title"]), matches
+                )
+
                 metadata_patch = {}
                 similar_to_id = None
 
-                # Semantic duplicate check
-                clean_title = _strip_boilerplate(item_data["title"])
-                clean_content = _strip_boilerplate(item_data["content"])
-
-                # Only match against items from recent days
-                fetched_after = None
-                if check_days > 0:
-                    fetched_after = (utcnow() - timedelta(days=check_days)).isoformat()
-
-                duplicates = await classifier.find_duplicates(
-                    title=clean_title,
-                    content=clean_content,
-                    threshold=0.75,
-                    fetched_after=fetched_after,
-                )
-
-                if duplicates:
-                    for dup in duplicates:
-                        dup_id = int(dup["id"])
-                        if dup_id != item_data["id"] and dup_id < item_data["id"]:
-                            similar_to_id = dup_id
-                            metadata_patch["duplicate_score"] = dup.get("score")
-                            metadata_patch["duplicate_method"] = "semantic"
-                            duplicates_found += 1
-                            logger.info(
-                                f"Phase 2 semantic duplicate: '{item_data['title'][:40]}...' "
-                                f"similar to item {similar_to_id} (score: {dup.get('score', 0):.3f})"
-                            )
-                            break
-
-                # Mark Phase 2 complete
-                now = utcnow().isoformat()
-                metadata_patch["dedup_phase2"] = True
-                metadata_patch["dedup_phase2_at"] = now
-
-                updates.append({
-                    "id": item_data["id"],
-                    "similar_to_id": similar_to_id,
-                    "metadata_patch": metadata_patch,
-                })
-                checked += 1
-
-            except Exception as e:
-                logger.warning(f"Phase 2 dedup failed for item {item_data['id']}: {e}")
-                async with self._stats_lock:
-                    self._stats["errors"] += 1
-
-        # Apply updates
-        if updates:
-            try:
                 async with async_session_maker() as db:
-                    # Verify similar_to_ids exist
-                    similar_ids = [u["similar_to_id"] for u in updates if u["similar_to_id"] is not None]
-                    if similar_ids:
-                        result = await db.execute(
-                            select(Item.id).where(Item.id.in_(similar_ids))
-                        )
-                        existing_ids = set(row[0] for row in result.fetchall())
-
-                        for upd in updates:
-                            if upd["similar_to_id"] is not None and upd["similar_to_id"] not in existing_ids:
-                                logger.warning(
-                                    f"Skipping similar_to_id={upd['similar_to_id']} for item {upd['id']} - "
-                                    f"referenced item no longer exists (stale ChromaDB entry)"
-                                )
-                                upd["similar_to_id"] = None
-                                upd["metadata_patch"].pop("duplicate_score", None)
-                                upd["metadata_patch"].pop("duplicate_method", None)
-
-                    for upd in updates:
-                        values = {"metadata_": json_merge(Item.metadata_, upd["metadata_patch"])}
-                        if upd["similar_to_id"] is not None:
-                            values["similar_to_id"] = upd["similar_to_id"]
+                    if decision.link_id is not None:
+                        # Never link copy -> copy: point at the top item of the match
+                        primary_id = await resolve_primary(db, decision.link_id)
+                        if primary_id is not None and primary_id != item_id:
+                            similar_to_id = primary_id
+                            metadata_patch["duplicate_method"] = decision.method
+                            metadata_patch["duplicate_score"] = decision.score
+                            logger.info(
+                                f"Phase 2 {decision.method} duplicate: "
+                                f"'{item_data['title'][:40]}...' similar to item "
+                                f"{decision.link_id} (top item {primary_id}, "
+                                f"score: {decision.score or 0:.3f})"
+                            )
+                    elif decision.candidate:
+                        # Grey band without similar titles: let the LLM decide,
+                        # but only if the item is still waiting for it. The
+                        # flag itself is never set here.
                         await db.execute(
                             update(Item)
-                            .where(Item.id == upd["id"])
-                            .values(**values)
+                            .where(
+                                Item.id == item_id,
+                                Item.needs_llm_processing.is_(True),
+                            )
+                            .values(
+                                metadata_=_json_merge_bound(
+                                    Item.metadata_,
+                                    {"duplicate_candidate": decision.candidate},
+                                )
+                            )
                         )
-                    await db.commit()
+
+                    # Mark Phase 2 complete
+                    now = utcnow().isoformat()
+                    metadata_patch["dedup_phase2"] = True
+                    metadata_patch["dedup_phase2_at"] = now
+
+                    await self._save_dedup_result(db, item_id, similar_to_id, metadata_patch)
+
+                checked += 1
+                if similar_to_id is not None:
+                    duplicates_found += 1
+
             except Exception as e:
-                logger.error(f"Failed to commit Phase 2 dedup updates: {e}")
-                raise
+                logger.warning(f"Phase 2 dedup failed for item {item_id}: {e}")
+                async with self._stats_lock:
+                    self._stats["errors"] += 1
 
         async with self._stats_lock:
             self._stats["phase2_checked"] += checked
             self._stats["duplicates_found"] += duplicates_found
             self._stats["last_processed_at"] = utcnow().isoformat()
 
-        if checked > 0:
-            logger.info(f"Phase 2 dedup: checked {checked} items ({duplicates_found} duplicates found)")
+        if checked > 0 or deferred > 0:
+            logger.info(
+                f"Phase 2 dedup: checked {checked} items ({duplicates_found} duplicates found, "
+                f"{deferred} not comparable yet)"
+            )
 
         return checked
 
@@ -744,11 +773,11 @@ class DedupWorker:
         return len(item_ids)
 
     # -------------------------------------------------------------------------
-    # Daily ChromaDB <-> DB sync check (moved from classifier_worker)
+    # Daily vector store <-> DB sync check (moved from classifier_worker)
     # -------------------------------------------------------------------------
 
     async def _check_vectordb_sync(self) -> None:
-        """Daily check: compare DB indexed count with ChromaDB item count."""
+        """Daily check: compare DB indexed count with the vector store item count."""
         try:
             classifier = await self._get_classifier()
             if not classifier:
@@ -759,7 +788,7 @@ class DedupWorker:
                 logger.warning("VectorDB sync check: classifier health unavailable")
                 return
 
-            chromadb_count = health.get("duplicate_index_items", 0)
+            vector_count = health.get("duplicate_index_items", 0)
 
             async with async_session_maker() as db:
                 db_count = await db.scalar(
@@ -768,11 +797,11 @@ class DedupWorker:
                     )
                 )
 
-            diff = (db_count or 0) - chromadb_count
+            diff = (db_count or 0) - vector_count
             if abs(diff) > 50:
                 logger.error(
                     f"VECTORDB SYNC CHECK: DB says {db_count} items indexed, "
-                    f"vector store has {chromadb_count} items. "
+                    f"vector store has {vector_count} items. "
                     f"Difference: {diff} items. "
                     f"POST /admin/housekeeping/vector-sync to delete orphans "
                     f"and requeue missing items for re-indexing."
@@ -780,11 +809,11 @@ class DedupWorker:
             elif diff > 0:
                 logger.warning(
                     f"VectorDB sync: {diff} items in DB but not in vector store "
-                    f"(DB: {db_count}, vector store: {chromadb_count})"
+                    f"(DB: {db_count}, vector store: {vector_count})"
                 )
             else:
                 logger.info(
-                    f"VectorDB sync check OK: DB={db_count}, vector store={chromadb_count}"
+                    f"VectorDB sync check OK: DB={db_count}, vector store={vector_count}"
                 )
         except Exception as e:
             logger.warning(f"VectorDB sync check failed: {e}")

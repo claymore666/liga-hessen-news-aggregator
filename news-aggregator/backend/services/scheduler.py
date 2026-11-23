@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from config import settings
 from database import async_session_maker, json_merge, utcnow
 from models import Channel, Item, Source
+from services.dedup_groups import rebalance_groups_guarded
 
 logger = logging.getLogger(__name__)
 
@@ -898,6 +899,7 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
             return {"processed": 0, "errors": 0, "remaining": 0}
 
         logger.info(f"Retrying LLM processing for {len(items)} items")
+        retried_ids: list[int] = []
 
         for item in items:
             try:
@@ -949,6 +951,7 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                     )
                 )
                 processed += 1
+                retried_ids.append(item.id)
 
                 logger.info(f"LLM retry success: {item.title[:40]} -> {llm_priority}")
 
@@ -957,6 +960,10 @@ async def retry_llm_processing(batch_size: int = 10) -> dict:
                 errors += 1
 
         await db.commit()
+
+        # New verdicts -> the duplicate groups' tops may have to change
+        if retried_ids:
+            await rebalance_groups_guarded(db, retried_ids, context="llm retry")
 
         # Count remaining items (use COUNT instead of loading all into memory)
         remaining = await db.scalar(

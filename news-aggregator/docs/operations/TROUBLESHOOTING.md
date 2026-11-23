@@ -446,6 +446,83 @@ print(json.loads(r.read()).get('duplicate_index_items', 0))
      -d '{"title": "...", "content": "...", "threshold": 0.6}'
    ```
 
+### Rebuilding Duplicate Groups
+
+**Symptoms**: Relevant items missing from the feed because they are filed as a copy under an irrelevant item; copies pointing at other copies; items grouped with an unrelated story.
+
+`POST /api/admin/dedup/rebuild` re-checks every item fetched in a time range against the earlier items (same URL on another channel, same content hash, then embedding similarity among the 20 best matches: >= 0.88 links, 0.75-0.88 links only if the titles are similar), puts the best-rated item of each group on top, and reports or writes the difference to the stored `similar_to_id` links.
+
+- Runs in the background, one run at a time across all backend worker processes (a PostgreSQL advisory lock; 409 if one is active). Poll `GET /api/admin/dedup/rebuild`.
+- `dry_run` defaults to `true` and writes nothing. Always look at a dry run first.
+- A real run (`"dry_run": false`) is refused with 409 unless the dedup worker is paused or stopped.
+- Send `X-Admin-Key` if an admin key is configured.
+
+What is read and what is written:
+
+- Items fetched in `[since, until)` are re-checked and may be re-linked.
+- Stored links are never taken as evidence: every link of the range has to be found again by the rules above, otherwise it is removed.
+- Items fetched in the `DUPLICATE_CHECK_DAYS` (default 3) before `since` are context: an item of the range can be linked to one of them, they are not re-checked themselves. If such a context item is a copy, its own link is checked first (one lookup against its top item, same link rule; an identical URL or content hash also counts). If the link holds, the new item goes under that top. If it does not (below the rule, context item or top without a vector, lookup failed), the context item is unlinked and becomes the top (`context_unlinked`). Context items that nothing matches are left alone.
+- An item without a vector (`skipped_not_indexed`) cannot be compared. Unless it has an exact URL or hash match it is unlinked (`unlinked_not_indexed`) - a visible duplicate is better than a relevant item hidden under a link nobody checked. The same goes for an item whose stored target has no vector. These items, and unlinked context items without a vector, lose the dedup worker's done-marker (`dedup_phase2`, `dedup_phase2_at`), so the worker checks them again once they are indexed - but only items fetched within `DUPLICATE_CHECK_DAYS`; for older ones repeat the rebuild later.
+- Only a single failed lookup (`lookup_errors`) keeps the stored link, unchecked (`unverified_links_kept`).
+- Outside the range a real run writes only three things: context items whose link did not hold are unlinked (`context_unlinked`), rows that point at an item of the range which became a copy are re-pointed to its new top (`outside_repointed`), and the final rebalance pass may swap the top of a group it touched (`rebalanced_after_apply`).
+
+A real run writes in this order, so an interrupted run never hides a group (at worst a story shows twice until the next run): first every item that becomes a top item is unlinked (including the context items above), then the copies are linked (only under an item that is a top item at that moment), then outside rows are re-pointed, then every group of the range is rebalanced on the live priorities - the LLM and classifier workers may have changed a priority since the plan was made, and a better-rated copy of an item before the range is promoted here.
+
+```bash
+# 1. Dry run (prod: run inside the backend container)
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+req = urllib.request.Request(
+    'http://localhost:8000/api/admin/dedup/rebuild', method='POST',
+    data=json.dumps({'since': '2026-09-01T00:00:00', 'until': None, 'dry_run': True}).encode(),
+    headers={'Content-Type': 'application/json'})
+print(urllib.request.urlopen(req).read().decode())
+"
+
+# 2. Progress and result
+docker exec liga-news-backend python3 -c "
+import urllib.request, json
+r = json.loads(urllib.request.urlopen('http://localhost:8000/api/admin/dedup/rebuild').read())
+print(r['state'], r['progress'], r['error'])
+print(json.dumps(r['result'], indent=2, ensure_ascii=False))
+"
+
+# 3. Apply: pause the dedup worker, repeat step 1 with 'dry_run': False, then resume
+docker exec liga-news-backend curl -s -X POST http://localhost:8000/api/admin/dedup-worker/pause
+docker exec liga-news-backend curl -s -X POST http://localhost:8000/api/admin/dedup-worker/resume
+```
+
+`state` is `idle`, `running`, `done` or `failed`. Fields of `result`:
+
+| Field | Meaning |
+|-------|---------|
+| `items`, `groups` | Items in the range; groups with at least one copy after the rebuild |
+| `links_before`, `links_after` | Items that are a copy before / after |
+| `links_added`, `links_removed`, `links_repointed` | Changed rows by kind |
+| `promoted_groups` | Groups where a better-rated copy replaces the item on top. Includes promotions over a top item before the range, which a real run does in the rebalance pass |
+| `relevant_hidden_before`, `relevant_hidden_after` | Relevant items of the range filed under an irrelevant top item (dry run: planned; real run: counted from the stored links afterwards). Links counted in `unverified_links_kept` are included without having been checked |
+| `skipped_not_indexed` | Items of the range that have no vector yet |
+| `unlinked_not_indexed` | Links removed because the item or its stored target has no vector. Handed back to the dedup worker |
+| `lookup_errors` | Lookups that failed (classifier or embeddings error) |
+| `unverified_links_kept` | Stored links kept without a check because the item's lookup failed. Should be 0 or close to it; repeat the run to have them checked |
+| `context_unlinked` | Context items (before the range) whose own link did not hold and that become top items (dry run: planned; real run: written) |
+| `context_items` | Items before the range that were loaded as link targets |
+| `outside_links_to_copies` | Rows outside the range that point at an item of the range which is a copy in the plan |
+| `samples` | Up to 30 changes: id, title, old target, new target, score, method |
+| `applied`, `apply_conflicts` | Real run only: rows written / rows skipped because their link (or their target) changed during the run |
+| `outside_repointed` | Real run only: rows outside the range re-pointed to the new top |
+| `rebalanced_after_apply` | Real run only: groups whose top was changed or flattened by the final rebalance pass |
+
+**If it fails or looks wrong**:
+
+1. **`skipped_not_indexed` / `unlinked_not_indexed` is high**: those items have no vector yet (classifier worker paused or behind, see `/api/admin/stats`). The run goes on however many there are; a real run unlinks them, so their duplicates show up in the feed until they are indexed and checked again (dedup worker for recent items, otherwise a repeated rebuild). If that is too many, let the classifier worker catch up before the real run.
+2. **`failed` with "lookups in a row failed" / "All N lookups failed"**: the run (dry or real) stops before writing anything after 10 failed lookups in a row, or when not a single lookup succeeded - the classifier or its embeddings are down. Check `docker logs liga-classifier`.
+3. **`failed` with "Run was interrupted"**: the backend restarted during the run. Batches of 500 rows already committed stay and no group is hidden by a half-applied run; start it again, a repeated run only changes what is still different.
+4. **`apply_conflicts` > 0**: links changed while the run was in progress (an item is also not linked under a context item that could not be unlinked). Run it again.
+5. **409 "already running" after a backend restart**: the status of the interrupted run is still reported as `running` until it is 15 minutes old (then `failed`). The lock itself is gone with the old process; wait and start again.
+
+Rows changed by the plan (and unlinked context items) get `dedup_rebuilt_at` in their metadata; `duplicate_method` is `url_match`, `content_hash`, `semantic`, `semantic_title`, or `rebalanced` for a former top item that now sits under a better-rated copy. A link that was kept without a new check (sample method `kept_unverified`) keeps its stored method and score. Re-pointed rows outside the range and rows moved by the rebalance pass only get a new `similar_to_id`.
+
 ### Frontend Issues
 
 **Symptoms**: UI not loading, blank page

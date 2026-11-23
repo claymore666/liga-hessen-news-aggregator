@@ -20,6 +20,18 @@ def worker():
     return LLMWorker(batch_size=5, idle_sleep=1.0, backlog_batch_size=10)
 
 
+@pytest.fixture(autouse=True)
+def _skip_group_rebalance_for_mocked_db(request):
+    """Tests that mock the DB session cannot run the duplicate-group rebalance
+    (it issues real queries after the item update). Tests that use the real
+    database (``db_engine``) keep it."""
+    if "db_engine" in request.fixturenames:
+        yield
+        return
+    with patch("services.llm_worker.rebalance_group", new=AsyncMock(return_value=None)):
+        yield
+
+
 class TestLLMWorkerInit:
     """Tests for LLMWorker initialization."""
 
@@ -929,3 +941,288 @@ class TestLLMWorkerUnavailable:
         status = await worker.get_status()
         assert status["service_available"] is True
         assert status["unavailable_streak"] == 0
+
+
+class TestDuplicateConfirmation:
+    """Duplicate confirmation runs after the verdict, only for relevant items,
+    links to the top item of the group, and the group is re-ranked afterwards.
+
+    These tests run the worker against the real test database."""
+
+    @pytest.fixture
+    def session_maker(self, db_engine):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        with patch("services.llm_worker.async_session_maker", new=maker):
+            yield maker
+
+    @staticmethod
+    async def _seed_channel(maker) -> int:
+        from models import Channel, ConnectorType, Source
+
+        async with maker() as db:
+            source = Source(name="LLMDedup")
+            db.add(source)
+            await db.flush()
+            channel = Channel(source_id=source.id, connector_type=ConnectorType.RSS, config={})
+            db.add(channel)
+            await db.commit()
+            return channel.id
+
+    @staticmethod
+    async def _add_item(maker, channel_id: int, name: str, **fields) -> int:
+        from database import utcnow
+        from models import Item, Priority
+
+        fields.setdefault("priority", Priority.NONE)
+        async with maker() as db:
+            item = Item(
+                channel_id=channel_id,
+                external_id=name,
+                title=f"Title {name}",
+                content=f"Content {name}",
+                url=f"https://example.com/{name}",
+                published_at=utcnow(),
+                content_hash=f"hash-{name}",
+                **fields,
+            )
+            db.add(item)
+            await db.commit()
+            return item.id
+
+    @staticmethod
+    async def _get(maker, item_id: int):
+        from models import Item
+
+        async with maker() as db:
+            return await db.get(Item, item_id)
+
+    @staticmethod
+    async def _event_types(maker, item_id: int) -> list[str]:
+        from sqlalchemy import select
+        from models import ItemEvent
+
+        async with maker() as db:
+            rows = await db.execute(
+                select(ItemEvent.event_type).where(ItemEvent.item_id == item_id)
+            )
+            return sorted(rows.scalars().all())
+
+    @staticmethod
+    def _processor(priority: str | None, confirmed: bool = True) -> MagicMock:
+        relevant = priority is not None
+        analysis = {
+            "summary": "Zusammenfassung",
+            "priority": priority,
+            "relevant": relevant,
+            "relevance_score": 0.9 if relevant else 0.1,
+            "assigned_aks": [],
+            "tags": [],
+        }
+        processor = MagicMock()
+        processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=(analysis, [{"role": "assistant", "content": "{}"}])
+        )
+        processor.extract_topics = AsyncMock(return_value=("Sonstiges", None))
+        processor.confirm_duplicate = AsyncMock(return_value=(confirmed, "Begründung"))
+        return processor
+
+    @staticmethod
+    def _candidate(candidate_id: int) -> dict:
+        return {
+            "duplicate_candidate": {
+                "candidate_id": candidate_id,
+                "candidate_title": "Kandidat",
+                "similarity_score": 0.8,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_confirmed_duplicate_links_to_top_item(self, worker, session_maker):
+        """The candidate is itself a copy: the confirmed item is linked to the
+        candidate's top item, never copy -> copy."""
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        top_id = await self._add_item(session_maker, channel_id, "top", priority=Priority.HIGH)
+        copy_id = await self._add_item(session_maker, channel_id, "copy", similar_to_id=top_id)
+        item_id = await self._add_item(
+            session_maker, channel_id, "new",
+            needs_llm_processing=True, metadata_=self._candidate(copy_id),
+        )
+        processor = self._processor("medium", confirmed=True)
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        processor.confirm_duplicate.assert_awaited_once()
+        item = await self._get(session_maker, item_id)
+        assert item.priority == Priority.MEDIUM
+        assert item.needs_llm_processing is False
+        assert item.similar_to_id == top_id
+        assert "duplicate_candidate" not in item.metadata_
+        assert item.metadata_["duplicate_method"] == "llm_confirmed"
+        assert item.metadata_["duplicate_confirmation"]["confirmed"] is True
+        assert item.metadata_["llm_analysis"]["priority_suggestion"] == "medium"
+        assert await self._event_types(session_maker, item_id) == [
+            "duplicate_detected", "llm_processed",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_verdict_is_known_before_confirmation(self, worker, session_maker):
+        """Confirmation must run after the main analysis, not before it."""
+        channel_id = await self._seed_channel(session_maker)
+        cand_id = await self._add_item(session_maker, channel_id, "cand")
+        item_id = await self._add_item(
+            session_maker, channel_id, "new",
+            needs_llm_processing=True, metadata_=self._candidate(cand_id),
+        )
+        processor = self._processor("low")
+        calls: list[str] = []
+        analysis_result = processor.analyze_from_data_with_messages.return_value
+
+        async def analyze(_item_data):
+            calls.append("analyze")
+            return analysis_result
+
+        async def confirm(_item_data, _candidate_data):
+            calls.append("confirm")
+            return False, "anderes Ereignis"
+
+        processor.analyze_from_data_with_messages = AsyncMock(side_effect=analyze)
+        processor.confirm_duplicate = AsyncMock(side_effect=confirm)
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+        assert calls == ["analyze", "confirm"]
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_item_skips_confirmation(self, worker, session_maker):
+        """Irrelevant verdict: no confirmation call, no confirmation event, and
+        the candidate key is simply dropped."""
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        cand_id = await self._add_item(session_maker, channel_id, "cand", priority=Priority.HIGH)
+        item_id = await self._add_item(
+            session_maker, channel_id, "new",
+            needs_llm_processing=True, metadata_=self._candidate(cand_id),
+        )
+        processor = self._processor(None)
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        processor.confirm_duplicate.assert_not_awaited()
+        item = await self._get(session_maker, item_id)
+        assert item.priority == Priority.NONE
+        assert item.needs_llm_processing is False
+        assert item.similar_to_id is None
+        assert "duplicate_candidate" not in item.metadata_
+        assert "duplicate_confirmation" not in item.metadata_
+        assert "duplicate_method" not in item.metadata_
+        assert item.metadata_["llm_analysis"]["source"] == "llm_worker"
+        assert await self._event_types(session_maker, item_id) == ["llm_processed"]
+
+    @pytest.mark.asyncio
+    async def test_rejected_duplicate_is_not_linked(self, worker, session_maker):
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        cand_id = await self._add_item(session_maker, channel_id, "cand", priority=Priority.HIGH)
+        item_id = await self._add_item(
+            session_maker, channel_id, "new",
+            needs_llm_processing=True, metadata_=self._candidate(cand_id),
+        )
+        processor = self._processor("high", confirmed=False)
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        processor.confirm_duplicate.assert_awaited_once()
+        item = await self._get(session_maker, item_id)
+        assert item.similar_to_id is None
+        assert "duplicate_candidate" not in item.metadata_
+        assert "duplicate_method" not in item.metadata_
+        assert item.metadata_["duplicate_confirmation"]["confirmed"] is False
+        assert await self._event_types(session_maker, item_id) == [
+            "duplicate_rejected", "llm_processed",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_candidate_already_under_item_is_not_linked(self, worker, session_maker):
+        """The candidate's top item is the item itself: linking would be a self-loop."""
+        channel_id = await self._seed_channel(session_maker)
+        item_id = await self._add_item(session_maker, channel_id, "new", needs_llm_processing=True)
+        cand_id = await self._add_item(session_maker, channel_id, "cand", similar_to_id=item_id)
+
+        from models import Item
+        async with session_maker() as db:
+            item = await db.get(Item, item_id)
+            item.metadata_ = self._candidate(cand_id)
+            await db.commit()
+
+        processor = self._processor("medium", confirmed=True)
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        item = await self._get(session_maker, item_id)
+        assert item.similar_to_id is None
+        assert "duplicate_method" not in item.metadata_
+        assert (await self._get(session_maker, cand_id)).similar_to_id == item_id
+
+    @pytest.mark.asyncio
+    async def test_relevant_copy_is_promoted_above_irrelevant_top(self, worker, session_maker):
+        """A copy the LLM finds relevant must not stay hidden under an
+        irrelevant top item: the group is re-ranked after the verdict."""
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        top_id = await self._add_item(session_maker, channel_id, "top", priority=Priority.NONE)
+        other_copy_id = await self._add_item(session_maker, channel_id, "copy", similar_to_id=top_id)
+        item_id = await self._add_item(
+            session_maker, channel_id, "new",
+            similar_to_id=other_copy_id,  # legacy copy -> copy chain
+            needs_llm_processing=True,
+        )
+        processor = self._processor("medium")
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        assert (await self._get(session_maker, item_id)).similar_to_id is None
+        assert (await self._get(session_maker, top_id)).similar_to_id == item_id
+        assert (await self._get(session_maker, other_copy_id)).similar_to_id == item_id
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_copy_stays_under_top(self, worker, session_maker):
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        top_id = await self._add_item(session_maker, channel_id, "top", priority=Priority.LOW)
+        item_id = await self._add_item(
+            session_maker, channel_id, "new", similar_to_id=top_id, needs_llm_processing=True,
+        )
+        processor = self._processor(None)
+
+        assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        assert (await self._get(session_maker, item_id)).similar_to_id == top_id
+        assert (await self._get(session_maker, top_id)).similar_to_id is None
+
+    @pytest.mark.asyncio
+    async def test_rebalance_failure_keeps_llm_result(self, worker, session_maker):
+        """A failing rebalance must never lose the LLM result."""
+        from models import Priority
+
+        channel_id = await self._seed_channel(session_maker)
+        item_id = await self._add_item(session_maker, channel_id, "new", needs_llm_processing=True)
+        processor = self._processor("high")
+
+        with patch(
+            "services.llm_worker.rebalance_group",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            assert await worker._process_items([item_id], processor, is_fresh=True) == 1
+
+        item = await self._get(session_maker, item_id)
+        assert item.priority == Priority.HIGH
+        assert item.summary == "Zusammenfassung"
+        assert item.needs_llm_processing is False
+        assert await self._event_types(session_maker, item_id) == ["llm_processed"]
+        assert worker._stats["errors"] == 0

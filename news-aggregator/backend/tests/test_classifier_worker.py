@@ -25,6 +25,20 @@ def worker():
     return ClassifierWorker(batch_size=10, idle_sleep=1.0)
 
 
+@pytest.fixture(autouse=True)
+def _skip_group_rebalance_for_mocked_db(request):
+    """Tests with a mocked session cannot run the duplicate-group rebalance
+    (it needs real rows); tests using the real database keep it."""
+    if "db_engine" in request.fixturenames:
+        yield
+        return
+    with patch(
+        "services.classifier_worker.rebalance_groups_guarded",
+        new=AsyncMock(return_value=0),
+    ):
+        yield
+
+
 class TestClassifierWorkerInit:
     """Tests for ClassifierWorker initialization."""
 
@@ -573,3 +587,123 @@ class TestClassifierWorkerSelfHealing:
         worker._service_unavailable = True
         status = await worker.get_status()
         assert status["service_available"] is False
+
+
+class TestRebalanceAfterClassification:
+    """A classifier verdict that changes an item's priority must re-rank its
+    duplicate group (real database)."""
+
+    @pytest.fixture
+    def session_maker(self, db_engine):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        with patch("services.classifier_worker.async_session_maker", maker):
+            yield maker
+
+    @staticmethod
+    async def _seed(maker, top_priority, copy_priority):
+        """A classified copy under a not-yet-classified top; returns (top_id, copy_id)."""
+        from database import utcnow
+        from models import Channel, ConnectorType, Item, Source
+
+        async with maker() as db:
+            source = Source(name="ClassifierRebalance")
+            db.add(source)
+            await db.flush()
+            channel = Channel(source_id=source.id, connector_type=ConnectorType.RSS, config={})
+            db.add(channel)
+            await db.flush()
+
+            def make(name, priority, **fields):
+                return Item(
+                    channel_id=channel.id,
+                    external_id=name,
+                    title=f"Title {name}",
+                    content=f"Content {name}",
+                    url=f"https://example.com/{name}",
+                    published_at=utcnow(),
+                    content_hash=f"hash-{name}",
+                    priority=priority,
+                    **fields,
+                )
+
+            top = make("top", top_priority, needs_llm_processing=True)
+            db.add(top)
+            await db.flush()
+            # Already classified (has pre_filter) -> the worker leaves it alone
+            copy = make(
+                "copy",
+                copy_priority,
+                similar_to_id=top.id,
+                metadata_={"pre_filter": {"relevance_confidence": 0.9}, "llm_analysis": {}},
+            )
+            db.add(copy)
+            await db.commit()
+            return top.id, copy.id
+
+    @staticmethod
+    async def _state(maker):
+        from sqlalchemy import select
+        from models import Item
+
+        async with maker() as db:
+            rows = await db.execute(select(Item.id, Item.similar_to_id, Item.priority))
+            return {row.id: (row.similar_to_id, str(getattr(row.priority, "value", row.priority))) for row in rows}
+
+    @staticmethod
+    def _classifier(confidence):
+        classifier = MagicMock()
+        classifier.classify = AsyncMock(return_value={"relevance_confidence": confidence})
+        return classifier
+
+    @pytest.mark.asyncio
+    async def test_top_demoted_to_none_gives_way_to_relevant_copy(self, worker, session_maker):
+        """B was promoted on its rule priority MEDIUM over LLM-judged LOW item A;
+        the classifier now says B is irrelevant -> A must be the top again."""
+        worker._running = True
+        top_id, copy_id = await self._seed(session_maker, Priority.MEDIUM, Priority.LOW)
+
+        with patch.object(worker, "_get_classifier", return_value=self._classifier(0.05)):
+            assert await worker._process_unclassified_items() == 1
+
+        assert await self._state(session_maker) == {
+            copy_id: (None, "low"),
+            top_id: (copy_id, "none"),
+        }
+
+    @pytest.mark.asyncio
+    async def test_unchanged_priority_does_not_rebalance(self, worker, session_maker):
+        worker._running = True
+        top_id, copy_id = await self._seed(session_maker, Priority.NONE, Priority.LOW)
+
+        with (
+            patch.object(worker, "_get_classifier", return_value=self._classifier(0.05)),
+            patch(
+                "services.classifier_worker.rebalance_groups_guarded",
+                new=AsyncMock(return_value=0),
+            ) as rebalance,
+        ):
+            assert await worker._process_unclassified_items() == 1
+
+        rebalance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rebalance_failure_keeps_the_classification(self, worker, session_maker):
+        worker._running = True
+        top_id, copy_id = await self._seed(session_maker, Priority.MEDIUM, Priority.LOW)
+
+        with (
+            patch.object(worker, "_get_classifier", return_value=self._classifier(0.05)),
+            patch(
+                "services.dedup_groups.rebalance_group",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
+            assert await worker._process_unclassified_items() == 1
+
+        # Verdict is stored; only the re-ranking is missing
+        assert await self._state(session_maker) == {
+            top_id: (None, "none"),
+            copy_id: (top_id, "low"),
+        }

@@ -210,3 +210,72 @@ class TestLLMPrompt:
             "/api/llm/prompt", json={"prompt": "Test", "temperature": -0.5}
         )
         assert response.status_code == 422
+
+
+class TestReprocessUnprocessedRebalance:
+    """The background LLM reprocess re-ranks the item's duplicate group."""
+
+    @staticmethod
+    async def _group(db, channel, **top_fields):
+        """Top (MEDIUM, awaiting the LLM) with an LLM-judged LOW copy."""
+        from database import utcnow
+        from models import Item, Priority
+
+        def make(name, priority, **fields):
+            return Item(
+                channel_id=channel.id,
+                external_id=f"grp-{name}",
+                title=f"Group {name}",
+                content=f"Content {name}",
+                url=f"https://test.com/group/{name}",
+                published_at=utcnow(),
+                content_hash=f"grp-hash-{name}",
+                priority=priority,
+                **fields,
+            )
+
+        top = make("top", Priority.MEDIUM, **top_fields)
+        db.add(top)
+        await db.flush()
+        copy = make("copy", Priority.LOW, similar_to_id=top.id, summary="Already analysed")
+        db.add(copy)
+        await db.commit()
+        return top, copy
+
+    @staticmethod
+    async def _links(db):
+        from sqlalchemy import select
+        from models import Item
+
+        rows = await db.execute(select(Item.id, Item.similar_to_id))
+        return {row.id: row.similar_to_id for row in rows}
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_verdict_on_top_promotes_relevant_copy(
+        self, db_engine, db_session: AsyncSession, channel_in_db
+    ):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from api.llm import reprocess_unprocessed_items
+
+        top, copy = await self._group(db_session, channel_in_db)
+
+        processor = MagicMock()
+        processor.analyze_from_data = AsyncMock(
+            return_value={"relevant": False, "relevance_score": 0.1}
+        )
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+
+        with (
+            patch("database.async_session_maker", maker),
+            patch(
+                "services.processor.create_processor_from_settings",
+                new=AsyncMock(return_value=processor),
+            ),
+        ):
+            assert await reprocess_unprocessed_items(limit=5) == 1
+
+        async with maker() as fresh:
+            assert await self._links(fresh) == {copy.id: None, top.id: copy.id}

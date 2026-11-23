@@ -567,3 +567,164 @@ class TestRefetchItem:
         data = response.json()
         assert data["status"] == "started"
         assert data["connector_type"] == "x_scraper"
+
+
+class TestRebalanceAfterPriorityChange:
+    """Every API write that changes an item's priority re-ranks its duplicate
+    group, so a relevant item never stays hidden under an irrelevant top."""
+
+    @staticmethod
+    async def _group(
+        db: AsyncSession, channel: Channel, top_priority: Priority, copy_priority: Priority
+    ) -> tuple[Item, Item]:
+        def make(name: str, priority: Priority, similar_to_id: int | None = None) -> Item:
+            return Item(
+                channel_id=channel.id,
+                external_id=f"grp-{name}",
+                title=f"Group {name}",
+                content=f"Content {name}",
+                url=f"https://test.com/group/{name}",
+                published_at=utcnow(),
+                content_hash=f"grp-hash-{name}",
+                priority=priority,
+                similar_to_id=similar_to_id,
+            )
+
+        top = make("top", top_priority)
+        db.add(top)
+        await db.flush()
+        copy = make("copy", copy_priority, top.id)
+        db.add(copy)
+        await db.flush()
+        return top, copy
+
+    @staticmethod
+    async def _links(db: AsyncSession) -> dict[int, int | None]:
+        from sqlalchemy import select
+
+        rows = await db.execute(select(Item.id, Item.similar_to_id))
+        return {row.id: row.similar_to_id for row in rows}
+
+    @pytest.mark.asyncio
+    async def test_patch_top_to_none_promotes_relevant_copy(
+        self, client: AsyncClient, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        top, copy = await self._group(db_session, channel_in_db, Priority.MEDIUM, Priority.LOW)
+
+        response = await client.patch(f"/api/items/{top.id}", json={"priority": "none"})
+
+        assert response.status_code == 200
+        assert response.json()["priority"] == "none"
+        assert await self._links(db_session) == {copy.id: None, top.id: copy.id}
+
+    @pytest.mark.asyncio
+    async def test_patch_copy_above_top_promotes_it(
+        self, client: AsyncClient, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        top, copy = await self._group(db_session, channel_in_db, Priority.LOW, Priority.NONE)
+
+        response = await client.patch(f"/api/items/{copy.id}", json={"priority": "high"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["priority"] == "high"
+        # The response already shows the new shape: old top listed as duplicate
+        assert [dup["id"] for dup in data["duplicates"]] == [top.id]
+        assert await self._links(db_session) == {copy.id: None, top.id: copy.id}
+
+    @pytest.mark.asyncio
+    async def test_patch_without_priority_change_does_not_rebalance(
+        self, client: AsyncClient, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        top, copy = await self._group(db_session, channel_in_db, Priority.NONE, Priority.HIGH)
+
+        with patch("api.items.rebalance_groups_guarded", new=AsyncMock()) as rebalance:
+            read = await client.patch(f"/api/items/{top.id}", json={"is_read": True})
+            same = await client.patch(f"/api/items/{top.id}", json={"priority": "none"})
+
+        assert read.status_code == 200
+        assert same.status_code == 200
+        rebalance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_patch_survives_rebalance_failure(
+        self, client: AsyncClient, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        top, copy = await self._group(db_session, channel_in_db, Priority.MEDIUM, Priority.LOW)
+
+        with patch(
+            "services.dedup_groups.rebalance_group",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            response = await client.patch(f"/api/items/{top.id}", json={"priority": "none"})
+
+        assert response.status_code == 200
+        assert response.json()["priority"] == "none"
+        await db_session.refresh(top)
+        assert top.priority == Priority.NONE
+        assert await self._links(db_session) == {top.id: None, copy.id: top.id}
+
+    @pytest.mark.asyncio
+    async def test_title_prefilter_verdict_promotes_relevant_copy(
+        self, client: AsyncClient, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from config import settings
+
+        top, copy = await self._group(db_session, channel_in_db, Priority.MEDIUM, Priority.LOW)
+
+        with (
+            patch.object(settings, "title_prefilter_enabled", True),
+            patch(
+                "services.title_prefilter.prefilter_single",
+                new=AsyncMock(return_value={"relevant": False, "duration_ms": 3}),
+            ),
+        ):
+            response = await client.post(f"/api/items/{top.id}/prefilter")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "id": top.id,
+            "title": "Group top",
+            "relevant": False,
+            "duration_ms": 3,
+        }
+        assert await self._links(db_session) == {copy.id: None, top.id: copy.id}
+
+    @pytest.mark.asyncio
+    async def test_reprocess_verdict_promotes_relevant_copy(
+        self, db_engine, db_session: AsyncSession, channel_in_db: Channel
+    ):
+        """The reprocess background task judges the top irrelevant."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from api.items import _reprocess_items_task
+
+        top, copy = await self._group(db_session, channel_in_db, Priority.MEDIUM, Priority.LOW)
+        await db_session.commit()
+
+        processor = MagicMock()
+        processor.analyze_from_data_with_messages = AsyncMock(
+            return_value=({"relevant": False, "relevance_score": 0.1}, [])
+        )
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+
+        with (
+            patch("api.items.async_session_maker", maker),
+            patch(
+                "services.processor.create_processor_from_settings",
+                new=AsyncMock(return_value=processor),
+            ),
+        ):
+            await _reprocess_items_task([top.id], force=True)
+
+        async with maker() as fresh:
+            assert await self._links(fresh) == {copy.id: None, top.id: copy.id}
+            assert (await fresh.get(Item, top.id)).priority == Priority.NONE

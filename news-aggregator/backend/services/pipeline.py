@@ -17,6 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import Channel, Item, Priority, Rule, RuleType, Source
 from config import settings
 from database import utcnow
+from services.dedup_groups import (
+    DUPLICATE_THRESHOLD_CONFIRMED,  # noqa: F401 - re-exported for existing imports
+    DUPLICATE_THRESHOLD_MAYBE,
+    decide_semantic_link,
+    rebalance_groups_guarded,
+    resolve_primary,
+    titles_similar,
+)
 
 if TYPE_CHECKING:
     from services.processor import ItemProcessor
@@ -31,11 +39,10 @@ RSS_BOILERPLATE_PATTERNS = [
     r"\n\n--- Vollständiger Artikel von [^\n]+ ---\n\n",
 ]
 
-# Semantic duplicate thresholds
-# Items >= THRESHOLD_CONFIRMED are automatically marked as duplicates
-# Items between THRESHOLD_MAYBE and THRESHOLD_CONFIRMED are marked for LLM review
-DUPLICATE_THRESHOLD_CONFIRMED = 0.75  # Auto-confirm as duplicate
-DUPLICATE_THRESHOLD_MAYBE = 0.60  # Mark for LLM review
+# Duplicate rules live in services.dedup_groups. The thresholds
+# (DUPLICATE_THRESHOLD_CONFIRMED / DUPLICATE_THRESHOLD_MAYBE) and
+# _titles_similar stay importable from here for existing callers.
+_titles_similar = titles_similar
 
 
 # Tracking parameters to strip for URL normalization
@@ -85,35 +92,6 @@ def _strip_boilerplate(text: str) -> str:
     for pattern in RSS_BOILERPLATE_PATTERNS:
         result = re.sub(pattern, "", result, flags=re.IGNORECASE)
     return result.strip()
-
-
-def _titles_similar(title1: str, title2: str, threshold: float = 0.7) -> bool:
-    """Check if two titles are similar enough to be the same story.
-
-    Uses word overlap (Jaccard-like similarity) to detect duplicate headlines.
-    This catches cases like:
-    - "Vielen Kitas fehlen Fachkräfte - Mittelhessen"
-    - "Kinderbetreuung: Vielen Kitas fehlen Fachkräfte | DPA"
-
-    Args:
-        title1: First title (lowercase, cleaned)
-        title2: Second title (lowercase, cleaned)
-        threshold: Minimum word overlap ratio (default 0.7 = 70%)
-
-    Returns:
-        True if titles share enough words to be considered the same story
-    """
-    # Split into words, remove very short words (articles, etc.)
-    words1 = {w for w in title1.split() if len(w) > 2}
-    words2 = {w for w in title2.split() if len(w) > 2}
-
-    if not words1 or not words2:
-        return False
-
-    intersection = words1 & words2
-    # Use the smaller set as denominator to catch partial matches
-    smaller = min(len(words1), len(words2))
-    return len(intersection) / smaller >= threshold
 
 
 def _get_priority_value(priority) -> str:
@@ -261,6 +239,7 @@ class Pipeline:
             similar_to_id = None
             duplicates = []
             similarity_score = None
+            duplicate_method = None  # How a semantic link was decided
             duplicate_candidate = None  # For edge cases needing LLM review
             if not self.training_mode and normalized.url:
                 try:
@@ -287,7 +266,8 @@ class Pipeline:
                             )
 
                     if url_match:
-                        similar_to_id = url_match
+                        # Link to the top item of the match's group, never to a copy
+                        similar_to_id = await resolve_primary(self.db, url_match) or url_match
                         logger.info(
                             f"URL duplicate: '{normalized.title[:40]}...' "
                             f"same URL as item {similar_to_id}"
@@ -311,8 +291,11 @@ class Pipeline:
                     logger.warning(f"URL duplicate check failed, continuing: {e}")
 
             # 3b. Check for semantic duplicates (cross-channel, different articles on same topic)
-            # Instead of skipping, we store the duplicate with similar_to_id pointing to primary
-            # For edge cases (similarity 0.60-0.75), mark for LLM review instead of auto-linking
+            # Instead of skipping, we store the duplicate with similar_to_id pointing to the
+            # top item of the matched group. The link rules live in dedup_groups:
+            #   score >= CONFIRMED         -> same story
+            #   MAYBE <= score < CONFIRMED -> same story only if the titles are similar,
+            #                                 otherwise a candidate for LLM confirmation
             # Skipped when the embeddings gate is closed; dedup_worker Phase 2 backfills.
             if not similar_to_id and self.relevance_filter and not self.training_mode and embeds_ok:
                 try:
@@ -323,74 +306,60 @@ class Pipeline:
                     import os
                     check_days = int(os.environ.get("DUPLICATE_CHECK_DAYS", "3"))
                     fetched_after = (datetime.now(UTC) - timedelta(days=check_days)).isoformat() if check_days > 0 else None
-                    # Use lower threshold to catch "maybe duplicates" for LLM review
+                    # Use the lower threshold to also catch "maybe duplicates"
                     duplicates = await self.relevance_filter.find_duplicates(
                         title=clean_title,
                         content=clean_content,
-                        threshold=DUPLICATE_THRESHOLD_MAYBE,  # 0.60 - catches edge cases
+                        threshold=DUPLICATE_THRESHOLD_MAYBE,
                         fetched_after=fetched_after,
                     )
                     if duplicates:
-                        best_match = duplicates[0]
-                        match_score = best_match.get("score", 0)
-                        match_id = int(best_match["id"])
-
-                        # Verify the candidate item still exists (vector index may be out of sync)
                         from services.item_events import record_event, EVENT_DUPLICATE_DETECTED
-                        try:
-                            existing = await self.db.scalar(
-                                select(Item.id).where(Item.id == match_id)
+
+                        # Drop matches whose item no longer exists (vector index may be out of sync)
+                        matches = await self._existing_matches(duplicates)
+                        decision = decide_semantic_link(clean_title, matches)
+
+                        if decision.link_id is not None:
+                            similar_to_id = (
+                                await resolve_primary(self.db, decision.link_id)
+                                or decision.link_id
                             )
-                            if not existing:
-                                logger.warning(
-                                    f"Skipping duplicate: item {match_id} no longer exists "
-                                    "(vector index out of sync)"
-                                )
-                                match_id = None
-                                match_score = None
-                        except Exception as e:
-                            logger.warning(f"Failed to verify candidate item: {e}")
-                            match_id = None
+                            similarity_score = decision.score
+                            duplicate_method = decision.method
+                            logger.info(
+                                f"Semantic duplicate ({decision.method}): '{normalized.title[:40]}...' "
+                                f"matches item {decision.link_id}, linked to top item {similar_to_id} "
+                                f"(score: {decision.score:.3f})"
+                            )
 
-                        if match_id:
-                            if match_score >= DUPLICATE_THRESHOLD_CONFIRMED:
-                                # High confidence: auto-link as duplicate
-                                similar_to_id = match_id
-                                similarity_score = match_score
-                                logger.info(
-                                    f"Semantic duplicate (confirmed): '{normalized.title[:40]}...' "
-                                    f"similar to item {similar_to_id} '{best_match.get('title', '')[:40]}...' "
-                                    f"(score: {match_score:.3f})"
+                            # Record duplicate detection in audit trail of the top item
+                            try:
+                                await record_event(
+                                    self.db,
+                                    similar_to_id,
+                                    EVENT_DUPLICATE_DETECTED,
+                                    data={
+                                        "duplicate_title": normalized.title,
+                                        "duplicate_source": source_name,
+                                        "duplicate_channel_id": channel.id,
+                                        "duplicate_url": normalized.url,
+                                        "similarity_score": decision.score,
+                                        "method": decision.method,
+                                    },
                                 )
-
-                                # Record duplicate detection in audit trail of EXISTING item
-                                try:
-                                    await record_event(
-                                        self.db,
-                                        similar_to_id,  # Existing item ID
-                                        EVENT_DUPLICATE_DETECTED,
-                                        data={
-                                            "duplicate_title": normalized.title,
-                                            "duplicate_source": source_name,
-                                            "duplicate_channel_id": channel.id,
-                                            "duplicate_url": normalized.url,
-                                            "similarity_score": match_score,
-                                        },
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Failed to record duplicate event: {e}")
-                            else:
-                                # Edge case (0.60-0.75): mark for LLM review
-                                duplicate_candidate = {
-                                    "candidate_id": match_id,
-                                    "candidate_title": best_match.get("title", ""),
-                                    "similarity_score": match_score,
-                                }
-                                logger.info(
-                                    f"Maybe duplicate (LLM review needed): '{normalized.title[:40]}...' "
-                                    f"similar to item {match_id} '{best_match.get('title', '')[:40]}...' "
-                                    f"(score: {match_score:.3f})"
-                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to record duplicate event: {e}")
+                        elif decision.candidate:
+                            # Similar, but not clearly the same story: LLM decides
+                            # (only if the item turns out to be relevant)
+                            duplicate_candidate = decision.candidate
+                            logger.info(
+                                f"Maybe duplicate (LLM review needed): '{normalized.title[:40]}...' "
+                                f"similar to item {duplicate_candidate['candidate_id']} "
+                                f"'{duplicate_candidate['candidate_title'][:40]}...' "
+                                f"(score: {duplicate_candidate['similarity_score']:.3f})"
+                            )
                 except Exception as e:
                     logger.warning(f"Semantic duplicate check failed, continuing: {e}")
 
@@ -425,6 +394,9 @@ class Pipeline:
             item_metadata = dict(normalized.metadata) if normalized.metadata else {}
             if duplicate_candidate:
                 item_metadata["duplicate_candidate"] = duplicate_candidate
+            if duplicate_method:
+                item_metadata["duplicate_method"] = duplicate_method
+                item_metadata["duplicate_score"] = similarity_score
 
             item = Item(
                 channel_id=channel.id,
@@ -440,9 +412,11 @@ class Pipeline:
                 # available on the object for vector-store indexing below
                 # without triggering an async lazy-load after flush.
                 fetched_at=utcnow(),
-                similar_to_id=similar_to_id,  # Link to primary item if confirmed duplicate
-                # Mark for LLM processing if there's a duplicate candidate to review
-                needs_llm_processing=duplicate_candidate is not None,
+                similar_to_id=similar_to_id,  # Link to the top item if confirmed duplicate
+                # Set in step 6a when the classifier gate does not skip the LLM.
+                # A duplicate candidate alone must not force an item through the
+                # LLM: the worker only confirms candidates of relevant items.
+                needs_llm_processing=False,
             )
 
             # 4. Apply rules and calculate priority (keyword-based first pass)
@@ -578,10 +552,14 @@ class Pipeline:
                     similar_idx = item._batch_similar_to_idx
                     if 0 <= similar_idx < len(new_items):
                         primary_item = new_items[similar_idx]
-                        item.similar_to_id = primary_item.id
+                        # If the batch primary is itself a copy, link to its top
+                        # item instead (never copy -> copy). Earlier batch items
+                        # are already resolved, so this is always a top item.
+                        target_id = primary_item.similar_to_id or primary_item.id
+                        item.similar_to_id = target_id
                         intra_batch_count += 1
                         logger.info(
-                            f"Linked intra-batch duplicate: item {item.id} -> {primary_item.id} "
+                            f"Linked intra-batch duplicate: item {item.id} -> {target_id} "
                             f"('{item.title[:30]}...' -> '{primary_item.title[:30]}...')"
                         )
                     delattr(item, "_batch_similar_to_idx")
@@ -631,6 +609,15 @@ class Pipeline:
             # backfills any item left without the vectordb_indexed flag; the
             # scheduler's own commit afterwards only adds last_fetch_at.
             await self.db.commit()
+
+            # Every link made above (URL, semantic, intra-batch) ends with a
+            # rebalance of the group it joined: a new copy that outranks the
+            # top (e.g. rule priority HIGH under a NONE top) becomes the top.
+            # After the commit, so ids exist and no row locks are held; it
+            # commits per group and never raises.
+            linked_groups = [item.similar_to_id for item in new_items if item.similar_to_id]
+            if linked_groups:
+                await rebalance_groups_guarded(self.db, linked_groups, context="pipeline")
 
             # 9. Index items in vector store for semantic search (async, non-blocking)
             # Skipped when the embeddings gate is closed; dedup_worker._process_unindexed_items
@@ -693,6 +680,39 @@ class Pipeline:
                     logger.info(f"Enqueued {len(items_to_process)} fresh items to LLM worker")
 
         return new_items
+
+    async def _existing_matches(self, matches: list[dict]) -> list[dict]:
+        """Keep only semantic matches whose item still exists in the database.
+
+        The vector index can be out of sync with the items table (deleted
+        items), and linking to a missing id would violate the foreign key.
+        """
+        ids: set[int] = set()
+        for match in matches:
+            try:
+                ids.add(int(match["id"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not ids:
+            return []
+
+        result = await self.db.execute(select(Item.id).where(Item.id.in_(ids)))
+        existing = set(result.scalars().all())
+
+        kept = []
+        for match in matches:
+            try:
+                match_id = int(match["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if match_id in existing:
+                kept.append(match)
+            else:
+                logger.warning(
+                    f"Skipping duplicate match: item {match_id} no longer exists "
+                    "(vector index out of sync)"
+                )
+        return kept
 
     def _normalize_content(self, raw: RawItem) -> RawItem:
         """Normalize content (strip HTML, fix encoding, etc.)."""

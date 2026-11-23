@@ -314,6 +314,57 @@ class RelevanceFilter:
             logger.warning(f"Duplicate search failed: {e}")
             return []
 
+    async def find_duplicates_by_id(
+        self,
+        item_id: int,
+        candidate_ids: list[int],
+        threshold: float = 0.75,
+        n_results: int = 5,
+        raise_on_error: bool = False,
+    ) -> list[dict] | None:
+        """
+        Find duplicates of an already-indexed item among candidate items.
+
+        Uses the embeddings stored in the classifier's vector store (exact
+        cosine similarity, no embedding call), so it works while Ollama is
+        unavailable.
+
+        Args:
+            item_id: ID of the indexed item to compare
+            candidate_ids: IDs of the items to compare against
+            threshold: Similarity threshold (default 0.75)
+            n_results: Max number of duplicates to return
+            raise_on_error: Re-raise a failed call instead of returning None,
+                so the caller can tell "not indexed" from "lookup failed"
+
+        Returns:
+            Duplicate candidates with id, title, score, metadata (best score
+            first), [] if none match, or None if the item is not indexed or
+            (only with ``raise_on_error=False``) the call failed.
+        """
+        try:
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/find-duplicates-by-id",
+                json={
+                    "id": str(item_id),
+                    "candidate_ids": [str(c) for c in candidate_ids],
+                    "threshold": threshold,
+                    "n_results": n_results,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            if not result.get("indexed", False):
+                return None
+            duplicates = result.get("duplicates") or []
+            return sorted(duplicates, key=lambda d: d.get("score", 0.0), reverse=True)
+        except Exception as e:
+            logger.warning(f"Duplicate lookup by id failed for item {item_id}: {e}")
+            if raise_on_error:
+                raise
+            return None
+
     async def get_all_indexed_ids(self) -> list[str]:
         """
         Get all item IDs currently indexed in the vector store.

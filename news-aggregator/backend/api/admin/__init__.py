@@ -6,6 +6,7 @@ This package contains admin endpoints split by concern:
 - stats: Database and system statistics
 - logs: Application log viewing
 - workers: Scheduler and worker control
+- dedup: Rebuild of duplicate groups
 - housekeeping: Data retention and cleanup
 - gpu1: GPU1 power management status
 """
@@ -13,7 +14,7 @@ This package contains admin endpoints split by concern:
 from fastapi import APIRouter, Depends
 
 from api.auth import require_admin_key
-from . import gpu1, health, housekeeping, items, logs, stats, workers
+from . import dedup, gpu1, health, housekeeping, items, logs, stats, workers
 
 # Re-export commonly used items from submodules
 from .housekeeping import (
@@ -31,10 +32,12 @@ router.include_router(stats.router)
 router.include_router(logs.router)
 router.include_router(workers.router)
 router.include_router(housekeeping.router)
+router.include_router(dedup.router)
 router.include_router(gpu1.router)
 
 __all__ = [
     "router",
+    "dedup",
     "gpu1",
     "health",
     "housekeeping",

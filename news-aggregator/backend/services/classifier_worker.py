@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
+from services.dedup_groups import rebalance_groups_guarded
 
 logger = logging.getLogger(__name__)
 
@@ -504,6 +505,16 @@ class ClassifierWorker:
                         logger.warning(f"Failed to log classifier processing batch: {log_err}")
 
                     await db.commit()
+
+                    # A changed priority can change which member of a duplicate
+                    # group belongs on top (e.g. a copy that was promoted on its
+                    # rule priority and is now NONE must not keep hiding a
+                    # relevant item). Runs after the commit and never raises.
+                    changed_ids = [
+                        upd["id"] for upd in updates if upd["old_priority"] != upd["priority"]
+                    ]
+                    if changed_ids:
+                        await rebalance_groups_guarded(db, changed_ids, context="classifier")
             except Exception as e:
                 logger.error(f"Failed to commit classifier updates: {e}")
                 raise
