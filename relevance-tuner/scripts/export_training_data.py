@@ -135,8 +135,17 @@ def convert_to_training_format(
         if relevance_score < min_confidence:
             return None, "quality"
 
-    # Determine relevance from priority
-    priority = item.get("priority", "none")
+    # Label from the LLM's own verdict (metadata.llm_analysis.priority_suggestion), not
+    # items.priority: before 2026-09-02 items.priority sits 1-2 levels below the LLM verdict,
+    # which exported relevant items as irrelevant. A null/missing suggestion means irrelevant.
+    # Fall back to items.priority only when the item has no llm_analysis at all.
+    llm_analysis = (item.get("metadata") or {}).get("llm_analysis")
+    if llm_analysis:
+        priority = llm_analysis.get("priority_suggestion")
+        if priority == "critical":
+            priority = "high"  # the priority classifier only knows low/medium/high
+    else:
+        priority = item.get("priority", "none")
     is_relevant = priority in PRIORITY_LEVELS
 
     # Get source name
