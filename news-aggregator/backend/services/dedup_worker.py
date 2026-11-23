@@ -41,6 +41,11 @@ PHASE2_RETRY_SECONDS = 300.0
 # Matches fetched per lookup. A title-confirmed grey-band match can rank well
 # below the best-scoring ones, so the default of 5 loses real duplicates.
 LOOKUP_N_RESULTS = 20
+# Indexing: after this many passes in a row in which a batch with the same
+# lowest item id failed, the batch is indexed item by item.
+INDEX_ISOLATE_AFTER_FAILURES = 3
+# Item-by-item indexing gives up after this long without a single success.
+INDEX_ISOLATE_BUDGET_SECONDS = 120.0
 
 
 def _json_merge_bound(column, patch: dict):
@@ -96,6 +101,12 @@ class DedupWorker:
         # call failed) -> monotonic time of the next attempt. Keeps them from
         # blocking the head of the id-ordered queue.
         self._phase2_retry_at: dict[int, float] = {}
+
+        # Indexing: lowest item id of the last failed batch and how many
+        # passes in a row a batch headed by it has failed (see
+        # _index_items_one_by_one).
+        self._index_fail_head: int | None = None
+        self._index_fail_count = 0
 
     async def start(self):
         """Start the worker background task."""
@@ -735,42 +746,134 @@ class DedupWorker:
 
         logger.info(f"Indexing {len(items_to_index)} items in vector store")
 
+        # raise_on_error: a failed call (classifier/embeddings down, timeout,
+        # HTTP error) must not be mistaken for "0 new, all already indexed".
+        # The items keep no flag and are picked up again on the next pass.
         try:
-            indexed = await classifier.index_items_batch(items_to_index)
+            indexed = await classifier.index_items_batch(items_to_index, raise_on_error=True)
         except Exception as e:
-            logger.warning(f"Failed to index items: {e}")
+            logger.warning(
+                f"Vector indexing failed for {len(items_to_index)} items "
+                f"(ids {item_ids[0]}..{item_ids[-1]}), not flagged, will retry: "
+                f"{type(e).__name__}: {e}"
+            )
             async with self._stats_lock:
                 self._stats["errors"] += 1
-            return 0
+
+            # The queue is ordered by id, so a batch that keeps failing would
+            # block all indexing behind it. After INDEX_ISOLATE_AFTER_FAILURES
+            # passes with the same head, find out which items are to blame.
+            if self._index_fail_head == item_ids[0]:
+                self._index_fail_count += 1
+            else:
+                self._index_fail_head, self._index_fail_count = item_ids[0], 1
+            if self._index_fail_count < INDEX_ISOLATE_AFTER_FAILURES:
+                return 0
+            self._index_fail_head, self._index_fail_count = None, 0
+            return await self._index_items_one_by_one(classifier, items_to_index, item_ids)
+
+        self._index_fail_head, self._index_fail_count = None, 0
 
         if indexed == 0:
             logger.info(f"Batch index returned 0 new for {len(items_to_index)} items (already indexed), marking as indexed")
 
-        # Mark items as indexed
-        if item_ids:
-            try:
-                async with async_session_maker() as db:
-                    for item_id in item_ids:
-                        await db.execute(
-                            update(Item)
-                            .where(Item.id == item_id)
-                            .values(metadata_=json_merge(Item.metadata_, {
-                                "vectordb_indexed": True,
-                                "vectordb_indexed_at": utcnow().isoformat(),
-                            }))
-                        )
-                    await db.commit()
-            except Exception as e:
-                logger.error(f"Failed to update vectordb_indexed flags: {e}")
-                raise
+        await self._mark_indexed(item_ids)
+        return len(item_ids)
+
+    async def _write_index_metadata(self, item_ids: list[int], values: dict) -> None:
+        """Merge ``values`` into the metadata of the given items."""
+        if not item_ids:
+            return
+        try:
+            async with async_session_maker() as db:
+                for item_id in item_ids:
+                    await db.execute(
+                        update(Item)
+                        .where(Item.id == item_id)
+                        .values(metadata_=json_merge(Item.metadata_, values))
+                    )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to update vectordb_indexed flags: {e}")
+            raise
+
+    async def _mark_indexed(self, item_ids: list[int]) -> None:
+        """Flag items the classifier confirmed as stored."""
+        await self._write_index_metadata(item_ids, {
+            "vectordb_indexed": True,
+            "vectordb_indexed_at": utcnow().isoformat(),
+        })
 
         async with self._stats_lock:
             self._stats["vectordb_indexed"] += len(item_ids)
 
-        if len(item_ids) > 0:
+        if item_ids:
             logger.info(f"Indexed {len(item_ids)} items in vector store")
 
-        return len(item_ids)
+    async def _index_items_one_by_one(
+        self, classifier, items_to_index: list[dict], item_ids: list[int]
+    ) -> int:
+        """
+        Index a repeatedly failing batch item by item to isolate the items
+        that make it fail.
+
+        - Every item fails: the classifier is down. Nothing is flagged, the
+          batch is retried as before.
+        - Items that succeed are flagged as indexed.
+        - An item is given up on (``vectordb_indexed: false`` plus
+          ``vectordb_index_error_at``, so the queue skips it) only if it failed,
+          a later item succeeded, and it failed again right after. That rules
+          out a classifier that came back or went away during the pass; failed
+          items without a later success stay unflagged and are retried.
+
+        Returns:
+            Number of items indexed
+        """
+        started = time.monotonic()
+        indexed_ids: list[int] = []
+        failed: list[tuple[int, int, dict]] = []  # (position, item id, payload)
+        last_success_pos = -1
+
+        for pos, (item_id, payload) in enumerate(zip(item_ids, items_to_index)):
+            try:
+                await classifier.index_items_batch([payload], raise_on_error=True)
+                indexed_ids.append(item_id)
+                last_success_pos = pos
+            except Exception:
+                failed.append((pos, item_id, payload))
+                # A hanging classifier costs a full timeout per item: stop
+                # probing once it is clear that nothing gets through.
+                if not indexed_ids and time.monotonic() - started > INDEX_ISOLATE_BUDGET_SECONDS:
+                    break
+
+        if not indexed_ids:
+            logger.warning(
+                f"Vector indexing item by item: all {len(failed)} calls failed "
+                f"(ids {item_ids[0]}..{failed[-1][1]}), classifier looks down, nothing flagged"
+            )
+            return 0
+
+        unindexable: list[int] = []
+        for pos, item_id, payload in failed:
+            if pos > last_success_pos:
+                continue
+            try:
+                await classifier.index_items_batch([payload], raise_on_error=True)
+                indexed_ids.append(item_id)
+            except Exception as e:
+                unindexable.append(item_id)
+                logger.warning(
+                    f"Item {item_id} cannot be indexed in vector store while other items "
+                    f"can, skipping it from now on (vectordb_indexed=false): "
+                    f"{type(e).__name__}: {e}"
+                )
+
+        await self._mark_indexed(indexed_ids)
+        await self._write_index_metadata(unindexable, {
+            "vectordb_indexed": False,
+            "vectordb_index_error_at": utcnow().isoformat(),
+        })
+        return len(indexed_ids)
 
     # -------------------------------------------------------------------------
     # Daily vector store <-> DB sync check (moved from classifier_worker)

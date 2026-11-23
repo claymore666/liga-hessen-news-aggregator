@@ -149,3 +149,55 @@ class TestFindDuplicatesById:
         result = await relevance_filter.find_duplicates_by_id(42, [7, 9], raise_on_error=True)
 
         assert [d["id"] for d in result] == ["9", "7"]
+
+
+class TestIndexItemsBatch:
+    """index_items_batch: 0 means "nothing new" unless the call failed."""
+
+    ITEMS = [{"id": "1", "title": "T", "content": "C", "metadata": {}}]
+
+    async def test_returns_number_of_new_items(self):
+        relevance_filter, client = _filter_with_response({"indexed": 1, "total_in_store": 10})
+
+        assert await relevance_filter.index_items_batch(self.ITEMS) == 1
+
+        args, kwargs = client.post.call_args
+        assert args[0] == "http://classifier:8082/index/batch"
+        assert kwargs["json"] == {"items": self.ITEMS}
+
+    async def test_zero_new_on_success_does_not_raise(self):
+        relevance_filter, _ = _filter_with_response({"indexed": 0, "total_in_store": 10})
+
+        assert await relevance_filter.index_items_batch(self.ITEMS, raise_on_error=True) == 0
+
+    async def test_returns_zero_and_warns_on_failure_by_default(self, caplog):
+        relevance_filter, _ = _filter_with_response(error=httpx.ConnectError("classifier down"))
+
+        with caplog.at_level(logging.WARNING, logger="services.relevance_filter"):
+            assert await relevance_filter.index_items_batch(self.ITEMS) == 0
+
+        assert any("classifier down" in r.getMessage() for r in caplog.records)
+
+    async def test_raise_on_error_reraises_a_connection_error(self, caplog):
+        relevance_filter, _ = _filter_with_response(error=httpx.ConnectError("classifier down"))
+
+        with caplog.at_level(logging.WARNING, logger="services.relevance_filter"):
+            with pytest.raises(httpx.ConnectError):
+                await relevance_filter.index_items_batch(self.ITEMS, raise_on_error=True)
+
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    async def test_raise_on_error_reraises_a_timeout(self):
+        relevance_filter, _ = _filter_with_response(error=httpx.ReadTimeout(""))
+
+        with pytest.raises(httpx.ReadTimeout):
+            await relevance_filter.index_items_batch(self.ITEMS, raise_on_error=True)
+
+    async def test_raise_on_error_reraises_an_http_error(self):
+        relevance_filter, client = _filter_with_response({"detail": "boom"})
+        client.post.return_value.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=MagicMock()
+        )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await relevance_filter.index_items_batch(self.ITEMS, raise_on_error=True)

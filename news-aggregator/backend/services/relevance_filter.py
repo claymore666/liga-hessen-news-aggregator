@@ -179,15 +179,22 @@ class RelevanceFilter:
             logger.warning(f"Failed to index item {item_id}: {e}")
             return False
 
-    async def index_items_batch(self, items: list[dict]) -> int:
+    async def index_items_batch(self, items: list[dict], raise_on_error: bool = False) -> int:
         """
         Batch index multiple items.
 
+        The classifier embeds and stores a batch as a whole: a 2xx response
+        means every item of the batch is in the search index (newly added or
+        already there), any failure is a non-2xx response or a transport error.
+
         Args:
             items: List of dicts with keys: id, title, content, metadata (optional)
+            raise_on_error: Re-raise a failed call instead of returning 0, so
+                the caller can tell "all already indexed" from "indexing failed"
 
         Returns:
-            Number of items indexed
+            Number of newly indexed items (0 if all were already indexed or,
+            only with ``raise_on_error=False``, the call failed)
         """
         try:
             client = await self._get_client()
@@ -200,7 +207,11 @@ class RelevanceFilter:
             result = response.json()
             return result.get("indexed", 0)
         except Exception as e:
-            logger.warning(f"Failed to batch index items: {e}")
+            logger.warning(
+                f"Failed to batch index {len(items)} items: {type(e).__name__}: {e}"
+            )
+            if raise_on_error:
+                raise
             return 0
 
     async def search(

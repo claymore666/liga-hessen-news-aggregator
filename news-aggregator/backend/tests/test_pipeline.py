@@ -513,6 +513,59 @@ class TestPipelineCommitsBeforeIndexing:
         rf.index_items_batch.assert_awaited_once()
 
 
+class TestPipelineVectorIndexedFlag:
+    """vectordb_indexed is set only when the classifier confirmed the batch."""
+
+    @staticmethod
+    async def _run(db: AsyncSession, **index_mock) -> tuple[list[Item], AsyncMock]:
+        source = Source(name="IndexFlagTest")
+        db.add(source)
+        await db.flush()
+        channel = Channel(source_id=source.id, connector_type=ConnectorType.RSS, config={})
+        db.add(channel)
+        await db.flush()
+
+        rf = AsyncMock()
+        rf.find_duplicates = AsyncMock(return_value=[])
+        rf.should_process = AsyncMock(return_value=(True, {"relevance_confidence": 0.5}))
+        rf.index_items_batch = AsyncMock(**index_mock)
+
+        raw = [RawItem(external_id="f-1", title="T", content="B", url="https://example.com/f-1")]
+        with patch(
+            "services.embeddings_gate.embeddings_allowed",
+            new=AsyncMock(return_value=(True, "in_hours")),
+        ):
+            new_items = await Pipeline(db, relevance_filter=rf).process(raw, channel)
+        return new_items, rf
+
+    @pytest.mark.asyncio
+    async def test_failed_call_leaves_flag_unset(self, db_session: AsyncSession):
+        """A failed call must not flag: dedup_worker picks the item up later."""
+        import httpx
+
+        new_items, rf = await self._run(
+            db_session, side_effect=httpx.ConnectError("classifier down")
+        )
+
+        assert len(new_items) == 1
+        assert rf.index_items_batch.await_args.kwargs == {"raise_on_error": True}
+        assert "vectordb_indexed" not in (new_items[0].metadata_ or {})
+
+    @pytest.mark.asyncio
+    async def test_successful_call_flags_new_items(self, db_session: AsyncSession):
+        new_items, _ = await self._run(db_session, return_value=1)
+
+        assert new_items[0].metadata_["vectordb_indexed"] is True
+        assert "vectordb_indexed_at" in new_items[0].metadata_
+
+    @pytest.mark.asyncio
+    async def test_successful_call_with_zero_new_flags_items(self, db_session: AsyncSession):
+        """0 new on a successful call: the item is already in the index."""
+        new_items, _ = await self._run(db_session, return_value=0)
+
+        assert new_items[0].metadata_["vectordb_indexed"] is True
+
+
 class TestPipelineDuplicateLinking:
     """Duplicate linking rules: links always target the top item of a group, and
     a duplicate candidate alone never forces an item through the LLM."""

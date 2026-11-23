@@ -645,13 +645,22 @@ class Pipeline:
                         }
                         for item in new_items
                     ]
-                    indexed = await self.relevance_filter.index_items_batch(items_to_index)
-                    if indexed > 0:
-                        logger.info(f"Indexed {indexed} items in vector store")
-                        # Track which items were indexed (batch indexing is all-or-nothing)
-                        indexed_ids = [item.id for item in new_items]
+                    # raise_on_error: only a confirmed call may set the flag. A
+                    # failed call leaves the items unflagged for dedup_worker.
+                    indexed = await self.relevance_filter.index_items_batch(
+                        items_to_index, raise_on_error=True
+                    )
+                    logger.info(
+                        f"Vector store confirmed {len(items_to_index)} items ({indexed} new)"
+                    )
+                    # The batch is stored as a whole: success covers every item,
+                    # including ones already indexed (0 new).
+                    indexed_ids = [item.id for item in new_items]
                 except Exception as e:
-                    logger.warning(f"Failed to index items in vector store: {e}")
+                    logger.warning(
+                        f"Failed to index {len(new_items)} items in vector store, "
+                        f"left for dedup worker: {type(e).__name__}: {e}"
+                    )
 
                 # Update vectordb_indexed flag for successfully indexed items
                 if indexed_ids:

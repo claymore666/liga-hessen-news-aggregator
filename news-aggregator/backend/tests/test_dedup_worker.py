@@ -634,3 +634,252 @@ class TestPhase2:
             return_value=None,
         ):
             assert await running_worker._process_phase2_dedup() == 0
+
+
+class TestVectorIndexing:
+    """Vector indexing step: the flag is set only when the classifier confirmed the batch."""
+
+    @staticmethod
+    def _classifier(**kwargs) -> MagicMock:
+        classifier = MagicMock()
+        classifier.index_items_batch = AsyncMock(**kwargs)
+        return classifier
+
+    @pytest.mark.asyncio
+    async def test_failed_call_leaves_items_unflagged_and_is_retried(
+        self, running_worker, maker, channels, caplog
+    ):
+        """Classifier/embedding outage: no flag, an error is counted, the next pass retries."""
+        import logging
+
+        import httpx
+
+        first = await add_item(maker, channels[0], "Erste Meldung")
+        second = await add_item(maker, channels[1], "Zweite Meldung")
+        classifier = self._classifier(side_effect=httpx.ConnectError("classifier down"))
+        running_worker._classifier = classifier
+
+        with caplog.at_level(logging.WARNING, logger="services.dedup_worker"):
+            assert await running_worker._process_unindexed_items() == 0
+
+        # The worker must ask the client to raise, or a failure looks like "0 new"
+        assert classifier.index_items_batch.await_args.kwargs == {"raise_on_error": True}
+        for item_id in (first, second):
+            assert "vectordb_indexed" not in (await get_item(maker, item_id)).metadata_
+        assert running_worker._stats["errors"] == 1
+        assert running_worker._stats["vectordb_indexed"] == 0
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("classifier down" in r.getMessage() for r in warnings)
+
+        # Classifier is back: the same items are sent again and flagged
+        classifier.index_items_batch.side_effect = None
+        classifier.index_items_batch.return_value = 2
+        assert await running_worker._process_unindexed_items() == 2
+
+        sent = [i["id"] for i in classifier.index_items_batch.await_args.args[0]]
+        assert sent == [str(first), str(second)]
+        for item_id in (first, second):
+            metadata = (await get_item(maker, item_id)).metadata_
+            assert metadata["vectordb_indexed"] is True
+            assert "vectordb_indexed_at" in metadata
+        assert running_worker._stats["vectordb_indexed"] == 2
+        assert running_worker._stats["errors"] == 1
+
+    @pytest.mark.asyncio
+    async def test_http_error_leaves_items_unflagged(self, running_worker, maker, channels):
+        import httpx
+
+        item_id = await add_item(maker, channels[0], "Meldung")
+        running_worker._classifier = self._classifier(
+            side_effect=httpx.HTTPStatusError("500", request=MagicMock(), response=MagicMock())
+        )
+
+        assert await running_worker._process_unindexed_items() == 0
+
+        assert "vectordb_indexed" not in (await get_item(maker, item_id)).metadata_
+        assert running_worker._stats["errors"] == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_call_with_zero_new_flags_items(
+        self, running_worker, maker, channels
+    ):
+        """0 new on a successful call means "already in the index": flag, no error."""
+        item_id = await add_item(maker, channels[0], "Schon indexiert")
+        classifier = self._classifier(return_value=0)
+        running_worker._classifier = classifier
+
+        assert await running_worker._process_unindexed_items() == 1
+
+        assert (await get_item(maker, item_id)).metadata_["vectordb_indexed"] is True
+        assert running_worker._stats["errors"] == 0
+        assert running_worker._stats["vectordb_indexed"] == 1
+
+        # Flagged items are not sent again
+        assert await running_worker._process_unindexed_items() == 0
+        assert classifier.index_items_batch.await_count == 1
+
+
+class TestVectorIndexingIsolation:
+    """A batch that keeps failing is indexed item by item to find the items to blame."""
+
+    @staticmethod
+    def _classifier(bad_ids=(), down=False) -> MagicMock:
+        """Classifier that fails every call containing one of ``bad_ids`` (or all if down)."""
+        import httpx
+
+        classifier = MagicMock()
+        classifier.down = down
+        classifier.calls = []
+
+        async def index(items, raise_on_error=False):
+            assert raise_on_error is True
+            ids = [int(i["id"]) for i in items]
+            classifier.calls.append(ids)
+            if classifier.down:
+                raise httpx.ConnectError("classifier down")
+            if set(ids) & set(bad_ids):
+                raise httpx.HTTPStatusError("500", request=MagicMock(), response=MagicMock())
+            return len(ids)
+
+        classifier.index_items_batch = AsyncMock(side_effect=index)
+        return classifier
+
+    @pytest.mark.asyncio
+    async def test_unindexable_item_is_isolated_on_third_failing_pass(
+        self, running_worker, maker, channels, caplog
+    ):
+        import logging
+
+        good1 = await add_item(maker, channels[0], "Gut 1")
+        bad = await add_item(maker, channels[0], "Kaputt")
+        good2 = await add_item(maker, channels[1], "Gut 2")
+        classifier = self._classifier(bad_ids=[bad])
+        running_worker._classifier = classifier
+
+        # Two failing passes: whole batch only, nothing flagged
+        for _ in range(2):
+            assert await running_worker._process_unindexed_items() == 0
+        assert classifier.calls == [[good1, bad, good2]] * 2
+        for item_id in (good1, bad, good2):
+            assert "vectordb_indexed" not in (await get_item(maker, item_id)).metadata_
+
+        # Third pass with the same head: item by item
+        with caplog.at_level(logging.WARNING, logger="services.dedup_worker"):
+            assert await running_worker._process_unindexed_items() == 2
+
+        # batch, each item once, then the failed one again after a later success
+        assert classifier.calls[2:] == [[good1, bad, good2], [good1], [bad], [good2], [bad]]
+        for item_id in (good1, good2):
+            assert (await get_item(maker, item_id)).metadata_["vectordb_indexed"] is True
+        metadata = (await get_item(maker, bad)).metadata_
+        assert metadata["vectordb_indexed"] is False
+        assert metadata["vectordb_index_error_at"]
+        assert "vectordb_indexed_at" not in metadata
+        per_item = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and f"Item {bad} " in r.getMessage()
+        ]
+        assert len(per_item) == 1
+        assert running_worker._stats["vectordb_indexed"] == 2
+        assert running_worker._stats["errors"] == 3
+
+        # The queue skips the item from now on; later items are indexed again
+        later = await add_item(maker, channels[1], "Später")
+        assert await running_worker._process_unindexed_items() == 1
+        assert classifier.calls[-1] == [later]
+
+    @pytest.mark.asyncio
+    async def test_classifier_down_flags_nothing_and_keeps_retrying(
+        self, running_worker, maker, channels
+    ):
+        ids = [await add_item(maker, channels[0], f"Meldung {n}") for n in range(3)]
+        classifier = self._classifier(down=True)
+        running_worker._classifier = classifier
+
+        for _ in range(3):
+            assert await running_worker._process_unindexed_items() == 0
+
+        # Third pass tried every item on its own, all failed
+        assert classifier.calls == [ids] * 3 + [[i] for i in ids]
+        for item_id in ids:
+            assert "vectordb_indexed" not in (await get_item(maker, item_id)).metadata_
+        assert running_worker._stats["vectordb_indexed"] == 0
+
+        # Still retried as a batch, and indexed once the classifier is back
+        assert await running_worker._process_unindexed_items() == 0
+        assert classifier.calls[-1] == ids
+        classifier.down = False
+        assert await running_worker._process_unindexed_items() == 3
+        for item_id in ids:
+            assert (await get_item(maker, item_id)).metadata_["vectordb_indexed"] is True
+
+    @pytest.mark.asyncio
+    async def test_failure_without_later_success_is_not_given_up(
+        self, running_worker, maker, channels
+    ):
+        """The classifier may have gone down mid-pass: trailing failures stay queued."""
+        good = await add_item(maker, channels[0], "Gut")
+        last = await add_item(maker, channels[0], "Letzte")
+        classifier = self._classifier(bad_ids=[last])
+        running_worker._classifier = classifier
+
+        for _ in range(2):
+            assert await running_worker._process_unindexed_items() == 0
+        assert await running_worker._process_unindexed_items() == 1
+
+        assert (await get_item(maker, good)).metadata_["vectordb_indexed"] is True
+        assert "vectordb_indexed" not in (await get_item(maker, last)).metadata_
+
+    @pytest.mark.asyncio
+    async def test_item_that_succeeds_on_recheck_is_indexed(
+        self, running_worker, maker, channels
+    ):
+        """Classifier came back during the pass: early failures are not given up."""
+        import httpx
+
+        first = await add_item(maker, channels[0], "Erste")
+        second = await add_item(maker, channels[0], "Zweite")
+        classifier = MagicMock()
+        # 3 failed batches, then: first fails, second succeeds, first succeeds on recheck
+        classifier.index_items_batch = AsyncMock(
+            side_effect=[httpx.ReadTimeout("")] * 4 + [1, 1]
+        )
+        running_worker._classifier = classifier
+
+        for _ in range(2):
+            assert await running_worker._process_unindexed_items() == 0
+        assert await running_worker._process_unindexed_items() == 2
+
+        for item_id in (first, second):
+            assert (await get_item(maker, item_id)).metadata_["vectordb_indexed"] is True
+
+    @pytest.mark.asyncio
+    async def test_isolation_stops_when_nothing_gets_through_in_time(
+        self, running_worker, maker, channels
+    ):
+        """A hanging classifier must not cost one timeout per item of the batch."""
+        ids = [await add_item(maker, channels[0], f"Meldung {n}") for n in range(4)]
+        classifier = self._classifier(down=True)
+        running_worker._classifier = classifier
+
+        with patch("services.dedup_worker.INDEX_ISOLATE_BUDGET_SECONDS", -1.0):
+            for _ in range(3):
+                assert await running_worker._process_unindexed_items() == 0
+
+        assert classifier.calls == [ids] * 3 + [[ids[0]]]
+
+    @pytest.mark.asyncio
+    async def test_successful_batch_resets_the_failure_count(
+        self, running_worker, maker, channels
+    ):
+        first = await add_item(maker, channels[0], "Erste")
+        classifier = self._classifier(down=True)
+        running_worker._classifier = classifier
+
+        for _ in range(2):
+            assert await running_worker._process_unindexed_items() == 0
+        classifier.down = False
+        assert await running_worker._process_unindexed_items() == 1
+        assert (await get_item(maker, first)).metadata_["vectordb_indexed"] is True
+        assert running_worker._index_fail_count == 0
+        assert running_worker._index_fail_head is None
