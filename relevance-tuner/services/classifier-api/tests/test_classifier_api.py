@@ -121,6 +121,25 @@ class TestReadOnlyEndpoints:
         assert data["has_duplicates"] is False
         assert len(data["duplicates"]) == 0
 
+    def test_find_duplicates_by_id_not_indexed(self, client: httpx.Client):
+        """An unknown id is reported as not indexed, not as an error."""
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": f"{TEST_ID_PREFIX}missing-{uuid.uuid4().hex}",
+            "candidate_ids": ["1", "2"],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexed"] is False
+        assert data["has_duplicates"] is False
+        assert data["duplicates"] == []
+
+    def test_find_duplicates_by_id_too_many_candidates(self, client: httpx.Client):
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": "1",
+            "candidate_ids": [str(i) for i in range(50001)],
+        })
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Write tests: index → verify → search → delete
@@ -201,6 +220,62 @@ class TestWriteEndpoints:
         assert data["has_duplicates"] is True
         matched_ids = [d["id"] for d in data["duplicates"]]
         assert item["id"] in matched_ids
+
+    def test_05b_find_duplicates_by_id_match(self, client: httpx.Client):
+        """Stored embeddings of the test items are compared exactly, best first."""
+        ids = [item["id"] for item in self.TEST_ITEMS]
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": ids[0],
+            # The item itself is passed as a candidate and must be excluded.
+            "candidate_ids": ids,
+            "threshold": 0.0,
+            "n_results": 5,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexed"] is True
+        assert data["has_duplicates"] is True
+        matched_ids = [d["id"] for d in data["duplicates"]]
+        assert set(matched_ids) == set(ids[1:])
+        scores = [d["score"] for d in data["duplicates"]]
+        assert scores == sorted(scores, reverse=True)
+        for d in data["duplicates"]:
+            assert "title" in d
+            assert "snippet" in d
+            assert "metadata" in d
+
+    def test_05c_find_duplicates_by_id_threshold_and_limit(self, client: httpx.Client):
+        """Threshold filters candidates, n_results caps them."""
+        ids = [item["id"] for item in self.TEST_ITEMS]
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": ids[0],
+            "candidate_ids": ids[1:],
+            "threshold": 1.0,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexed"] is True
+        assert data["has_duplicates"] is False
+
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": ids[0],
+            "candidate_ids": ids[1:],
+            "threshold": 0.0,
+            "n_results": 1,
+        })
+        assert resp.status_code == 200
+        assert len(resp.json()["duplicates"]) == 1
+
+    def test_05d_find_duplicates_by_id_no_candidates(self, client: httpx.Client):
+        """An indexed item with an empty candidate list yields no duplicates."""
+        resp = client.post("/find-duplicates-by-id", json={
+            "id": self.TEST_ITEMS[0]["id"],
+            "candidate_ids": [],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexed"] is True
+        assert data["duplicates"] == []
 
     def test_06_similar(self, client: httpx.Client):
         """Find items similar to our indexed test item."""

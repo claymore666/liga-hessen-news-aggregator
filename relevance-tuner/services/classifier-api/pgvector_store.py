@@ -3,8 +3,10 @@ pgvector-backed vector store replacing ChromaDB.
 
 Uses asyncpg for async PostgreSQL access with pgvector extension
 for cosine similarity search. Two instances are created:
-- vector_search table: nomic embeddings for semantic search + classification
-- vector_duplicates table: paraphrase embeddings for duplicate detection
+- vector_search table: nomic embeddings for semantic search, classification
+  and (default) duplicate detection
+- vector_duplicates table: paraphrase embeddings, legacy duplicate index
+  (still written, only queried when DUPLICATE_INDEX=paraphrase)
 """
 
 import json
@@ -373,6 +375,73 @@ class PgVectorStore:
                     "metadata": meta,
                     "snippet": (r["document"] or "")[:300],
                 })
+
+        return results
+
+    async def find_duplicates_by_id(
+        self,
+        item_id: str,
+        candidate_ids: list[str],
+        threshold: float = 0.75,
+        n_results: int = 5,
+    ) -> list[dict] | None:
+        """
+        Find duplicates of an already-indexed item among a set of candidates.
+
+        Reuses the stored embeddings (no embedder call) and computes the exact
+        cosine similarity, bypassing the approximate IVFFlat index: candidates
+        are fetched via the primary key and ordered by similarity DESC, which
+        the vector index cannot serve.
+
+        Args:
+            item_id: ID of the indexed item to compare
+            candidate_ids: IDs to compare against (item_id itself is ignored)
+            threshold: Similarity threshold (default 0.75)
+            n_results: Max results to return
+
+        Returns:
+            None if item_id is not in the store, otherwise the candidates with
+            similarity >= threshold, best first (same shape as find_duplicates).
+        """
+        async with self.pool.acquire() as conn:
+            exists = await conn.fetchval(
+                f"SELECT EXISTS(SELECT 1 FROM {self.table_name} WHERE item_id = $1)",
+                item_id,
+            )
+            if not exists:
+                return None
+            if not candidate_ids:
+                return []
+
+            rows = await conn.fetch(
+                f"""
+                SELECT c.item_id, c.document, c.metadata,
+                       1 - (c.embedding <=> q.embedding) AS similarity
+                FROM {self.table_name} q
+                JOIN {self.table_name} c
+                  ON c.item_id = ANY($2::text[])
+                WHERE q.item_id = $1
+                  AND c.item_id <> $1
+                  AND 1 - (c.embedding <=> q.embedding) >= $3
+                ORDER BY similarity DESC
+                LIMIT $4
+                """,
+                item_id,
+                candidate_ids,
+                threshold,
+                n_results,
+            )
+
+        results = []
+        for r in rows:
+            meta = json.loads(r["metadata"]) if r["metadata"] else {}
+            results.append({
+                "id": r["item_id"],
+                "title": meta.get("title", ""),
+                "score": float(r["similarity"]),
+                "metadata": meta,
+                "snippet": (r["document"] or "")[:300],
+            })
 
         return results
 

@@ -30,10 +30,25 @@ DATABASE_URL = os.environ.get(
     "postgresql://liga:liga@db:5432/liga_news",
 )
 
+# Which index answers duplicate *lookups* (indexing always writes both):
+#   "search"     - vector_search table (nomic embeddings), default
+#   "paraphrase" - vector_duplicates table (paraphrase embeddings), rollback
+DUPLICATE_INDEX = os.environ.get("DUPLICATE_INDEX", "search").strip().lower()
+if DUPLICATE_INDEX not in ("search", "paraphrase"):
+    logger.warning(f"Unknown DUPLICATE_INDEX={DUPLICATE_INDEX!r}, using 'search'")
+    DUPLICATE_INDEX = "search"
+
 # Global instances
 classifier: EmbeddingClassifier | None = None
 vector_store: PgVectorStore | None = None
 duplicate_store: PgVectorStore | None = None
+
+
+def get_duplicate_lookup_store() -> PgVectorStore | None:
+    """Return the store used for duplicate lookups (see DUPLICATE_INDEX)."""
+    if DUPLICATE_INDEX == "paraphrase":
+        return duplicate_store
+    return vector_store
 
 
 @asynccontextmanager
@@ -190,6 +205,21 @@ class DuplicateRequest(BaseModel):
 
 class DuplicateResponse(BaseModel):
     """Response model for duplicate detection."""
+    duplicates: list[SearchResult]
+    has_duplicates: bool
+
+
+class DuplicateByIdRequest(BaseModel):
+    """Request model for id-based duplicate lookup using stored embeddings."""
+    id: str
+    candidate_ids: list[str] = Field(max_length=50000)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    n_results: int = 5
+
+
+class DuplicateByIdResponse(BaseModel):
+    """Response model for id-based duplicate lookup."""
+    indexed: bool  # False if `id` has no stored embedding
     duplicates: list[SearchResult]
     has_duplicates: bool
 
@@ -360,11 +390,12 @@ async def similar(request: SimilarRequest):
 @app.post("/find-duplicates", response_model=DuplicateResponse)
 async def find_duplicates(request: DuplicateRequest):
     """Find semantically similar items that may be duplicates."""
-    if duplicate_store is None:
+    store = get_duplicate_lookup_store()
+    if store is None:
         raise HTTPException(status_code=503, detail="Duplicate store not initialized")
 
     try:
-        duplicates = await duplicate_store.find_duplicates(
+        duplicates = await store.find_duplicates(
             title=request.title,
             content=request.content,
             threshold=request.threshold,
@@ -378,6 +409,33 @@ async def find_duplicates(request: DuplicateRequest):
         )
     except Exception as e:
         logger.error(f"Duplicate search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/find-duplicates-by-id", response_model=DuplicateByIdResponse)
+async def find_duplicates_by_id(request: DuplicateByIdRequest):
+    """Find duplicates of an indexed item among candidate IDs (exact, no embedding call)."""
+    store = get_duplicate_lookup_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="Duplicate store not initialized")
+
+    try:
+        duplicates = await store.find_duplicates_by_id(
+            item_id=request.id,
+            candidate_ids=request.candidate_ids,
+            threshold=request.threshold,
+            n_results=request.n_results,
+        )
+        if duplicates is None:
+            return DuplicateByIdResponse(indexed=False, duplicates=[], has_duplicates=False)
+
+        return DuplicateByIdResponse(
+            indexed=True,
+            duplicates=[SearchResult(**r) for r in duplicates],
+            has_duplicates=len(duplicates) > 0,
+        )
+    except Exception as e:
+        logger.error(f"Duplicate lookup by id failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -477,13 +535,15 @@ async def root():
             "/classify": "Classify article relevance (POST)",
             "/search": "Semantic search in search index (POST)",
             "/similar": "Find similar articles (POST)",
-            "/find-duplicates": "Find duplicate articles using paraphrase embeddings (POST)",
+            "/find-duplicates": "Find duplicate articles by text in the duplicate lookup index, see DUPLICATE_INDEX (POST)",
+            "/find-duplicates-by-id": "Find duplicates of an indexed article among candidate IDs, exact similarity on stored embeddings (POST)",
             "/index": "Index single article to both indexes (POST)",
             "/index/batch": "Batch index articles to both indexes (POST)",
         },
         "indexes": {
-            "search_index": "pgvector with nomic embeddings for semantic search",
-            "duplicate_index": "pgvector with paraphrase embeddings for duplicate detection",
+            "search_index": "pgvector with nomic embeddings for semantic search and (default) duplicate detection",
+            "duplicate_index": "pgvector with paraphrase embeddings, legacy duplicate index (rollback via DUPLICATE_INDEX=paraphrase)",
+            "duplicate_lookup_index": DUPLICATE_INDEX,
         },
     }
 

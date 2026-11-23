@@ -33,7 +33,8 @@ Both embedding models run on gpu1's Ollama, accessed via the Ollama proxy on doc
 |-----------|-------------|---------|------------|
 | **Classifier** | `nomic-embed-text-v2-moe` | Relevance/Priority/AK classification | 768 |
 | **Semantic Search** | `nomic-embed-text-v2-moe` | Vector search in classifier-api | 768 |
-| **Duplicate Detection** | `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | Same-story detection | 768 |
+| **Duplicate Detection** | `nomic-embed-text-v2-moe` | Same-story detection on the search index (`vector_search`) | 768 |
+| **Legacy duplicate index** | `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | `vector_duplicates`, still written; only queried with `DUPLICATE_INDEX=paraphrase` | 768 |
 
 ### Available Embedding Backends (utils/embeddings.py)
 
@@ -239,16 +240,23 @@ Runs on both docker-ai (prod) and gpu1 (dev). No GPU or PyTorch required.
 
 | Ollama Model | Purpose |
 |-------------|---------|
-| `nomic-embed-text-v2-moe` | Classification & semantic search (768d) |
-| `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | Duplicate detection (better same-story detection) |
+| `nomic-embed-text-v2-moe` | Classification, semantic search & duplicate detection (768d) |
+| `paraphrase-multilingual:278m-mpnet-base-v2-fp16` | Legacy duplicate index (rollback only, see below) |
 
 ### Duplicate Detection
 
-Uses a separate duplicate index with paraphrase embeddings for better semantic similarity:
-- **Threshold**: 0.75 (catches same-story articles with different wording)
-- True duplicates (same article, different source): ~0.97 similarity
-- Same story, different angles: 0.75-0.90 similarity
-- Unrelated articles: <0.50 similarity
+Duplicate lookups run against the **search index** (`vector_search`, nomic embeddings).
+The paraphrase index (`vector_duplicates`) turned out to be degenerate (unrelated
+articles score ~0.95) and is no longer queried by default.
+
+- **`DUPLICATE_INDEX`** (classifier env): `search` (default) or `paraphrase` (rollback).
+  Only selects the store used for lookups; indexing still writes both stores.
+- **`POST /find-duplicates`**: embeds title + content (needs Ollama), approximate
+  nearest-neighbour search, default threshold 0.75.
+- **`POST /find-duplicates-by-id`**: compares the *stored* embedding of `id` with the
+  stored embeddings of `candidate_ids` (max 50000). Exact cosine similarity, no
+  embedding call. Returns `{indexed, duplicates, has_duplicates}`; `indexed=false`
+  means `id` has no stored embedding.
 
 ```bash
 # Check classifier health (shows search_index_items and duplicate_index_items)
@@ -259,7 +267,12 @@ curl -s -X POST http://localhost:8082/find-duplicates \
   -H "Content-Type: application/json" \
   -d '{"title": "Article title", "content": "Article content", "threshold": 0.75}'
 
-# Sync search index to duplicate index (backfill after adding duplicate detection)
+# Duplicate lookup for an already indexed item among candidate IDs
+curl -s -X POST http://localhost:8082/find-duplicates-by-id \
+  -H "Content-Type: application/json" \
+  -d '{"id": "123", "candidate_ids": ["456", "789"], "threshold": 0.75, "n_results": 5}'
+
+# Sync search index to the legacy paraphrase index
 curl -s -X POST http://localhost:8082/sync-duplicate-store | jq '.'
 ```
 
