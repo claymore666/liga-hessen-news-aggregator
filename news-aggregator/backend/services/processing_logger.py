@@ -397,6 +397,34 @@ class ProcessingLogger:
             output_data=analysis,
         )
 
+    async def log_stage2_filter(
+        self,
+        item_id: int,
+        result: dict[str, Any],
+        priority_input: Any,
+        priority_output: Any,
+    ) -> ItemProcessingLog:
+        """Log a stage-2 junk filter decision (skip, keep or fail_open).
+
+        The score is a logit / z-score sum, not a 0-1 confidence, so it is kept
+        in output_data only (confidence_score stays empty).
+        """
+        skipped = result.get("decision") == "skip"
+        return await self.log_step(
+            step_type=ProcessingStepType.STAGE2_FILTER,
+            item_id=item_id,
+            model_name=result.get("model") or "stage2-filter",
+            model_provider="stage2",
+            priority_input=priority_input,
+            priority_output=priority_output,
+            relevant=None if result.get("decision") == "fail_open" else not skipped,
+            success=result.get("decision") != "fail_open",
+            skipped=skipped,
+            skip_reason=result.get("skip_reason") if skipped else None,
+            error_message=result.get("error"),
+            output_data=result,
+        )
+
     async def log_classifier_worker(
         self,
         item_id: int,

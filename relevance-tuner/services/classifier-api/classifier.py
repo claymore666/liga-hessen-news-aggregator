@@ -17,6 +17,12 @@ import httpx
 import numpy as np
 
 from feature_extraction import extract_features
+from m1_gate import M1Gate
+
+# Relevance gate selection: "m1" (MLP head, default) or "lr" (logistic regression
+# from the pkl, the pre-2026-11-26 gate; rollback). Priority/AK always come from the pkl.
+RELEVANCE_GATE = os.environ.get("RELEVANCE_GATE", "m1").strip().lower()
+M1_MODEL_PATH = os.environ.get("M1_MODEL_PATH", "models/relevance_mlp_m1.npz")
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +238,7 @@ class EmbeddingClassifier:
         self.feature_scaler = None  # StandardScaler for geographic features
         self.feature_version = None
         self.relevance_threshold = 0.5  # Configurable threshold (from pkl or default)
+        self.m1: M1Gate | None = None  # Set when RELEVANCE_GATE=m1
 
     @classmethod
     def load(cls, model_path: str = "models/embedding_classifier_nomic-v2.pkl"):
@@ -268,6 +275,15 @@ class EmbeddingClassifier:
             if instance.multilabel:
                 instance.AK_LABELS = data.ak_classes
 
+        gate = os.environ.get("RELEVANCE_GATE", RELEVANCE_GATE).strip().lower()
+        if gate == "m1":
+            instance.m1 = M1Gate.load(os.environ.get("M1_MODEL_PATH", M1_MODEL_PATH))
+            logger.info(f"Relevance gate: {instance.m1.model_id} (t1={instance.m1.t1:.3f} -> 0.25, t2={instance.m1.t2:.3f} -> 0.5)")
+        elif gate != "lr":
+            raise ValueError(f"Unknown RELEVANCE_GATE={gate!r} (use 'm1' or 'lr')")
+        else:
+            logger.info("Relevance gate: logistic regression from pkl (RELEVANCE_GATE=lr)")
+
         features_info = ""
         if instance.feature_scaler is not None:
             features_info = f", features=v{instance.feature_version}"
@@ -297,22 +313,35 @@ class EmbeddingClassifier:
         X_emb = np.array(await self.embedder.encode([text], show_progress_bar=False))
 
         # Build full feature matrix (embeddings + geographic features)
-        if self.feature_scaler is not None:
+        features = None
+        if self.feature_scaler is not None or self.m1 is not None:
             features = extract_features(title, content, source).reshape(1, -1)
+        if self.feature_scaler is not None:
             features_scaled = self.feature_scaler.transform(features)
             X_full = np.hstack([X_emb, features_scaled])
         else:
             X_full = X_emb
 
-        # Predict relevance (uses features for geographic rules)
-        relevance_proba = self.relevance_clf.predict_proba(X_full)[0]
-        relevant_idx = list(self.relevance_clf.classes_).index(1)
-        relevance_confidence = relevance_proba[relevant_idx]
-        is_relevant = relevance_confidence > self.relevance_threshold
+        raw_score = None
+        if self.m1 is not None:
+            # M1 gate: own feature standardisation, monotone map onto the 0.25/0.5 levels
+            raw_score = float(self.m1.score(X_emb, features)[0])
+            relevance_confidence = self.m1.confidence(raw_score)
+            is_relevant = relevance_confidence > self.m1.relevant_threshold
+            gate_model = self.m1.model_id
+        else:
+            # Predict relevance (uses features for geographic rules)
+            relevance_proba = self.relevance_clf.predict_proba(X_full)[0]
+            relevant_idx = list(self.relevance_clf.classes_).index(1)
+            relevance_confidence = relevance_proba[relevant_idx]
+            is_relevant = relevance_confidence > self.relevance_threshold
+            gate_model = "lr"
 
         result = {
-            "relevant": is_relevant,
+            "relevant": bool(is_relevant),
             "relevance_confidence": float(relevance_confidence),
+            "relevance_raw_score": raw_score,
+            "gate_model": gate_model,
             "priority": None,
             "priority_confidence": None,
             "ak": None,
@@ -382,6 +411,9 @@ class EmbeddingClassifier:
             "multilabel": self.multilabel,
         }
         info["relevance_threshold"] = self.relevance_threshold
+        info["relevance_gate"] = self.m1.model_id if self.m1 is not None else "lr"
+        if self.m1 is not None:
+            info["relevance_threshold"] = self.m1.relevant_threshold
         if self.feature_scaler is not None:
             info["feature_version"] = self.feature_version
             info["num_features"] = self.feature_scaler.n_features_in_

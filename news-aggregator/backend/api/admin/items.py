@@ -365,6 +365,8 @@ async def classify_items_for_confidence(
                 "ak_confidence": classification.get("ak_confidence"),
                 "priority_suggestion": classification.get("priority"),
                 "priority_confidence": classification.get("priority_confidence"),
+                "relevance_raw_score": classification.get("relevance_raw_score"),
+                "gate_model": classification.get("gate_model"),
                 "classified_at": utcnow().isoformat(),
             }
 

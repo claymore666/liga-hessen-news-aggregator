@@ -125,6 +125,8 @@ services:
       - CLASSIFIER_ENABLED=${CLASSIFIER_ENABLED:-true}
       - CLASSIFIER_USE_PRIORITY=${CLASSIFIER_USE_PRIORITY:-false}
       - CLASSIFIER_USE_AK=${CLASSIFIER_USE_AK:-false}
+      # Stage-2 junk filter on gpu1 (relevance-tuner/services/stage2-filter); empty = off, fails open
+      - STAGE2_FILTER_URL=${STAGE2_FILTER_URL:-}
       # GPU1 Power Management (Wake-on-LAN)
       - GPU1_WOL_ENABLED=${GPU1_WOL_ENABLED:-true}
       - GPU1_MAC_ADDRESS=${GPU1_MAC_ADDRESS:-58:47:ca:7c:18:cc}

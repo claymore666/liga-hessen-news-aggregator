@@ -1,0 +1,32 @@
+# Stage-2 junk filter on gpu1 (RTX 3090). Standalone: do NOT add to news-aggregator compose files.
+#   cd relevance-tuner/services/stage2-filter && docker compose up -d --build
+# Weights live outside git on gpu1 (see STAGE2_MODEL_DIR below, default /home/kamienc/liga-models/stage2).
+services:
+  stage2-filter:
+    build: .
+    image: liga-stage2-filter:latest
+    container_name: liga-stage2-filter
+    ports:
+      - "8083:8083"
+    environment:
+      - MODEL_DIR=/models/gbert512_s0
+      - DEVICE=${STAGE2_DEVICE:-cuda}
+      - PRECISION=${STAGE2_PRECISION:-autocast}
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ${STAGE2_MODEL_DIR:-/home/kamienc/liga-models/stage2}:/models:ro
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

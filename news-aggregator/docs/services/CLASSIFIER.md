@@ -59,6 +59,23 @@ Trained on labeled data:
 - **priority_clf** - Priority level (high/medium/low/none)
 - **ak_clf** - Multi-label AK assignment
 
+### Relevance Gate (stage 1) and Stage-2 Junk Filter
+
+- **Stage 1 (classifier, `RELEVANCE_GATE`)**: `m1` (default) = 3-seed MLP 805-256-1 on the
+  nomic embedding + 37 features, numpy only (`m1_gate.py`, weights `models/relevance_mlp_m1.npz/.json`).
+  Its score is mapped monotonically so its own threshold lands at confidence 0.25 and the
+  medium/edge split at 0.5; the 0.25 / 0.5 semantics are unchanged. `lr` = old logistic
+  regression (rollback: set `RELEVANCE_GATE=lr`, recreate the classifier container).
+  `/classify` additionally returns `relevance_raw_score` and `gate_model`; the backend stores
+  both in `metadata.pre_filter`.
+- **Stage 2 (gpu1, `relevance-tuner/services/stage2-filter`)**: gbert-base student, called by the
+  LLM worker right before the LLM when `STAGE2_FILTER_URL` is set (empty = off). Ensemble mode
+  (z(M1) + z(student)) when `pre_filter.gate_model` matches, otherwise student only. Items below
+  the threshold get priority NONE, skip the LLM, and are recorded in `metadata.stage2_filter`,
+  an item event `stage2_filtered` and a processing log `stage2_filter` with
+  `skip_reason=stage2_below_threshold`. Any error or timeout (`STAGE2_FILTER_TIMEOUT`, 20 s)
+  **fails open**. The reprocess endpoint does not use stage 2.
+
 ## API Endpoints
 
 ### Health Check

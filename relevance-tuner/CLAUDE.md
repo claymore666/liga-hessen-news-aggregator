@@ -231,6 +231,19 @@ curl -s "http://localhost:8000/api/llm/status" | jq '.model'
 curl -X PUT "http://localhost:8000/api/llm/model" -H "Content-Type: application/json" -d '{"model": "qwen3:14b-q8_0"}'
 ```
 
+## Relevance Gate + Stage-2 Junk Filter (2026-11-26)
+
+- **Stage 1 (classifier-api)**: `RELEVANCE_GATE=m1` (default) serves the M1 MLP (`m1_gate.py`,
+  `models/relevance_mlp_m1.npz/.json`, exported by `experiments/retrain_2026_11_23/m1_export.py`);
+  `RELEVANCE_GATE=lr` rolls back to the logistic regression. Unit tests (no service needed):
+  `pytest -m "not integration" tests/test_m1_gate.py`.
+- **Stage 2 (`services/stage2-filter`, gpu1 only, port 8083)**: gbert student, own Dockerfile/compose,
+  not part of the dev stack. Weights are NOT in git: volume `STAGE2_MODEL_DIR`
+  (default `/home/kamienc/liga-models/stage2`, containing `gbert512_s0/`). Thresholds in
+  `thresholds.json` (from `cascade_eval.py`). ~0.5 GB VRAM, ~10 ms/item. Start:
+  `cd services/stage2-filter && docker compose up -d --build`. Backend enables it with
+  `STAGE2_FILTER_URL=http://gpu1.fritz.box:8083`; it fails open when the service is down.
+
 ## Classifier API (Embedding Service)
 
 Lightweight container on port 8082. Embeddings generated via Ollama HTTP API.

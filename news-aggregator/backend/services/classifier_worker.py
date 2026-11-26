@@ -399,6 +399,9 @@ class ClassifierWorker:
                     "ak_confidence": result.get("ak_confidence"),
                     "priority_suggestion": result.get("priority"),
                     "priority_confidence": result.get("priority_confidence"),
+                    # Stage-1 raw score + gate id, used by the stage-2 filter (ensemble mode)
+                    "relevance_raw_score": result.get("relevance_raw_score"),
+                    "gate_model": result.get("gate_model"),
                     "classified_at": utcnow().isoformat(),
                 }
 

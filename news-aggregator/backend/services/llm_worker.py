@@ -20,6 +20,12 @@ from database import async_session_maker, utcnow
 from models import Channel, Item, Priority
 from services.dedup_groups import rebalance_group, resolve_primary
 from services.llm.base import LLMUnavailableError, RateLimitError
+from services.stage2_filter import (
+    EVENT_STAGE2_FILTERED,
+    SKIP_REASON as STAGE2_SKIP_REASON,
+    Stage2Result,
+    get_stage2_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +90,8 @@ class LLMWorker:
             "last_processed_at": None,
             "total_processing_time": 0.0,  # Total seconds spent processing
             "items_timed": 0,  # Number of items with timing data
+            "stage2_skipped": 0,  # Items the stage-2 junk filter kept away from the LLM
+            "stage2_fail_open": 0,  # Stage-2 errors/timeouts (item went to the LLM)
         }
         self._stats_lock = asyncio.Lock()
         self._stopped_due_to_errors = False
@@ -593,6 +601,7 @@ class LLMWorker:
                     if not is_fresh and not item.needs_llm_processing:
                         continue
 
+                    old_priority = item.priority
                     # Extract all data needed for LLM processing
                     source_name = item.channel.source.name if item.channel and item.channel.source else "Unbekannt"
                     item_data = {
@@ -624,6 +633,30 @@ class LLMWorker:
                                 }
                             else:
                                 logger.warning(f"Duplicate candidate {candidate_id} not found, skipping confirmation")
+
+                # Phase 1b: stage-2 junk filter (gbert student on gpu1), right
+                # before the LLM. Fails open: only an explicit "skip" answer keeps
+                # the item away from the LLM; errors/timeouts send it on as before.
+                stage2 = await get_stage2_filter().check(
+                    item_data["title"],
+                    item_data["content"],
+                    item_data["metadata_"].get("pre_filter"),
+                )
+                if stage2 is not None and stage2.decision == "fail_open":
+                    async with self._stats_lock:
+                        self._stats["stage2_fail_open"] += 1
+                if stage2 is not None and not stage2.keep:
+                    await self._apply_stage2_skip(item_id, item_data, old_priority, stage2)
+                    processed += 1
+                    async with self._stats_lock:
+                        self._stats["stage2_skipped"] += 1
+                        self._stats["last_processed_at"] = utcnow().isoformat()
+                    logger.info(
+                        f"Stage-2 filter skipped {item_type} item {item_id} "
+                        f"({stage2.mode} score {stage2.score:.3f} < {stage2.threshold:.3f}): "
+                        f"{item_data['title'][:40]}..."
+                    )
+                    continue
 
                 # Phase 2: LLM processing - NO connection held
                 # This can take 10-60 seconds per item
@@ -754,6 +787,8 @@ class LLMWorker:
                         "source": "llm_worker",
                     },
                 }
+                if stage2 is not None:
+                    metadata_patch["stage2_filter"] = stage2.as_metadata(utcnow().isoformat())
                 remove_keys = []
 
                 # The candidate is settled either way: confirmed/rejected by the
@@ -864,6 +899,13 @@ class LLMWorker:
                         pre_filter = item_data["metadata_"].get("pre_filter", {})
                         priority_input = pre_filter.get("priority_suggestion") or "unknown"
 
+                        if stage2 is not None:
+                            await plogger.log_stage2_filter(
+                                item_id=item_id,
+                                result=metadata_patch["stage2_filter"],
+                                priority_input=old_priority,
+                                priority_output=old_priority,
+                            )
                         await plogger.log_llm_analysis(
                             item_id=item_id,
                             analysis=analysis,
@@ -934,6 +976,66 @@ class LLMWorker:
             )
 
         return processed
+
+    async def _apply_stage2_skip(
+        self,
+        item_id: int,
+        item_data: dict,
+        old_priority,
+        stage2: Stage2Result,
+    ) -> None:
+        """Mark an item as filtered junk (like a classifier skip): priority NONE,
+        no LLM, score + reason in metadata, event and processing log."""
+        from sqlalchemy import update as sql_update
+        from database import json_merge, json_merge_remove
+        from services.item_events import record_event
+
+        result = stage2.as_metadata(utcnow().isoformat())
+        result["skip_reason"] = STAGE2_SKIP_REASON
+        metadata_patch = {"stage2_filter": result}
+        has_candidate = bool(item_data["metadata_"].get("duplicate_candidate"))
+
+        async with async_session_maker() as db:
+            await db.execute(
+                sql_update(Item)
+                .where(Item.id == item_id)
+                .values(
+                    priority=Priority.NONE,
+                    priority_score=min(item_data["priority_score"] or 100, 20),
+                    needs_llm_processing=False,
+                    metadata_=(
+                        json_merge_remove(Item.metadata_, metadata_patch, ["duplicate_candidate"])
+                        if has_candidate
+                        else json_merge(Item.metadata_, metadata_patch)
+                    ),
+                )
+            )
+            await db.commit()
+
+            await record_event(db, item_id, EVENT_STAGE2_FILTERED, data=result)
+            try:
+                from services.processing_logger import ProcessingLogger
+
+                await ProcessingLogger(db).log_stage2_filter(
+                    item_id=item_id,
+                    result=result,
+                    priority_input=old_priority,
+                    priority_output=Priority.NONE,
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log stage-2 skip for item {item_id}: {log_err}")
+            await db.commit()
+
+            # Priority dropped to NONE: re-rank its duplicate group (never raises).
+            try:
+                await rebalance_group(db, item_id)
+                await db.commit()
+            except Exception as rebalance_err:
+                logger.warning(f"Failed to rebalance duplicate group of item {item_id}: {rebalance_err}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
 
 
 # Global worker instance

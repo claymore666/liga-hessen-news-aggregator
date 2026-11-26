@@ -1,0 +1,12 @@
+{
+ "student_model": "gbert-base L512 seed 0 (tune_student.py, distilled from v2 ensemble)",
+ "m1_model_id": "m1-mlp256-3seed-v1",
+ "m1_t1": -3.3031805356343584,
+ "m1_oof_mean": -4.157856585235142,
+ "m1_oof_std": 2.4466091145471953,
+ "student_oof_mean": -4.002973250719288,
+ "student_oof_std": 2.225879427928649,
+ "ensemble_threshold": 0.7478403209666142,
+ "student_threshold": -3.4609375,
+ "rule": "block if z(m1)+z(student) < ensemble_threshold (M1 score present and model id matches), else block if student < student_threshold; thresholds = 98% recall on 17,009 labelled rows (OOF)"
+}

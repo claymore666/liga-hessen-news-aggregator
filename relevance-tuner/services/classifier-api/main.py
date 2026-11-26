@@ -162,6 +162,8 @@ class ClassifyResponse(BaseModel):
     aks: list[str] = []  # Multi-label: all predicted AKs
     ak_confidences: dict[str, float] = {}  # Confidence per AK
     classifier_version: str | None = None  # Version for tracking
+    relevance_raw_score: float | None = None  # M1 gate mean logit (None for the LR gate)
+    gate_model: str | None = None  # "m1-..." or "lr"
 
 
 class SearchRequest(BaseModel):

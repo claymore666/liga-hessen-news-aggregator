@@ -499,6 +499,9 @@ class Pipeline:
                     "ak_confidence": pre_filter_result.get("ak_confidence"),
                     "priority_suggestion": pre_filter_result.get("priority"),
                     "priority_confidence": pre_filter_result.get("priority_confidence"),
+                    # Stage-1 raw score + gate id, used by the stage-2 filter (ensemble mode)
+                    "relevance_raw_score": pre_filter_result.get("relevance_raw_score"),
+                    "gate_model": pre_filter_result.get("gate_model"),
                 }
 
                 # 7a. Optionally use classifier priority instead of LLM

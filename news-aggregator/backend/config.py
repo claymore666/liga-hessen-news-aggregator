@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # exceeded and aborted whole batches.
     classifier_timeout: int = 120
 
+    # Stage-2 junk filter (gbert student on gpu1, relevance-tuner/services/stage2-filter).
+    # Called by the LLM worker right before the LLM; items below its threshold skip
+    # the LLM. Empty URL = disabled. Any error or timeout fails open (item goes to the LLM).
+    stage2_filter_url: str = ""
+    stage2_filter_timeout: float = 20.0
+
     # Title Pre-filter (small LLM for quick title-based relevance check)
     # Disabled: title-only checks can't achieve 0 false negatives.
     # See docs/services/TITLE_PREFILTER_EVALUATION.md

@@ -1,0 +1,18 @@
+{
+ "model_id": "m1-mlp256-3seed-v1",
+ "trained": "2026-11-26",
+ "recipe": "experiments/retrain_2026_11_23/tune_mlp.py M1 (refit m1_export.py)",
+ "input": "nomic-embed-text-v2-moe (768) + 37 features (feature_version 4), features standardised with feature_mean/feature_scale",
+ "score": "mean logit of 3 MLP 805-256-1 (ReLU) seeds",
+ "t1": -3.3031805356343584,
+ "t2": -1.711936593055725,
+ "k": 0.6904109792793888,
+ "conf_at_t1": 0.25,
+ "conf_at_t2": 0.5,
+ "mapping": "conf = sigmoid(logit(0.25) + k * (score - t1))",
+ "t1_rule": "98% recall on 17,009 labelled rows, 5-fold group CV OOF",
+ "t2_rule": "share(score>=t2 | score>=t1) on v1 test split = live gate share(conf>=0.5 | conf>=0.25)",
+ "relevant_threshold": 0.5,
+ "oof_mean": -4.157856585235142,
+ "oof_std": 2.4466091145471953
+}

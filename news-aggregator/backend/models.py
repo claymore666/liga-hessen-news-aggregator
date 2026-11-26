@@ -353,6 +353,7 @@ class ProcessingStepType(str, Enum):
     DUPLICATE_CHECK = "duplicate_check"
     RULE_MATCH = "rule_match"
     CLASSIFIER_OVERRIDE = "classifier_override"
+    STAGE2_FILTER = "stage2_filter"  # gbert junk filter on gpu1, right before the LLM
     LLM_ANALYSIS = "llm_analysis"
     REPROCESS = "reprocess"
 
